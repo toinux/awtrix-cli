@@ -3,20 +3,21 @@ use serde_json::{json, Map, Value};
 use std::{process::ExitCode, time::Duration};
 
 mod profiles;
+mod scripts;
 
 #[derive(Parser)]
 #[command(name = "awtrix", version, about = "AWTRIX NG device CLI")]
-struct Cli {
+pub(crate) struct Cli {
     #[arg(long, global = true, env = "AWTRIX_URL")]
-    target: Option<String>,
+    pub(crate) target: Option<String>,
     #[arg(long, global = true, env = "AWTRIX_USERNAME")]
-    username: Option<String>,
+    pub(crate) username: Option<String>,
     #[arg(long, global = true, env = "AWTRIX_PASSWORD")]
-    password: Option<String>,
+    pub(crate) password: Option<String>,
     #[arg(long, global = true, default_value_t = 3000)]
-    timeout: u64,
+    pub(crate) timeout: u64,
     #[arg(long, global = true)]
-    json: bool,
+    pub(crate) json: bool,
     #[arg(long, global = true, value_delimiter = ',')]
     fields: Vec<String>,
     #[arg(long, global = true, env = "AWTRIX_PROFILE")]
@@ -39,6 +40,10 @@ enum Command {
         #[command(subcommand)]
         action: profiles::ProfileCommand,
     },
+    Script {
+        #[command(subcommand)]
+        action: scripts::Command,
+    },
 }
 
 #[derive(Subcommand)]
@@ -49,9 +54,9 @@ enum DeviceCommand {
     Diagnose,
 }
 
-type CliResult<T> = Result<T, (&'static str, String)>;
+pub(crate) type CliResult<T> = Result<T, (&'static str, String)>;
 
-struct ApiClient {
+pub(crate) struct ApiClient {
     base: String,
     client: reqwest::blocking::Client,
     username: Option<String>,
@@ -91,7 +96,7 @@ impl ApiClient {
         })
     }
 
-    fn get(&self, path: &str) -> CliResult<Value> {
+    pub(crate) fn get(&self, path: &str) -> CliResult<Value> {
         let mut request = self.client.get(format!("{}{path}", self.base));
         if let Some(username) = &self.username {
             request = request.basic_auth(username, self.password.as_deref());
@@ -117,6 +122,120 @@ impl ApiClient {
         }
         response
             .json::<Value>()
+            .map_err(|_| ("INVALID_RESPONSE", "device returned invalid JSON".into()))
+    }
+
+    pub(crate) fn raw_get(&self, path: &str) -> CliResult<String> {
+        let response = self
+            .authorized(self.client.get(format!("{}{path}", self.base)))
+            .send()
+            .map_err(|e| {
+                if e.is_timeout() {
+                    ("TIMEOUT", "request timed out".into())
+                } else {
+                    ("TRANSPORT", "could not reach the HTTP target".into())
+                }
+            })?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err((
+                "AUTHENTICATION",
+                "device rejected HTTP Basic credentials".into(),
+            ));
+        }
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(("HTTP", "script not found".into()));
+        }
+        if !response.status().is_success() {
+            return Err((
+                "HTTP",
+                format!("device returned HTTP {}", response.status().as_u16()),
+            ));
+        }
+        String::from_utf8(
+            response
+                .bytes()
+                .map_err(|_| ("INVALID_RESPONSE", "could not read script source".into()))?
+                .to_vec(),
+        )
+        .map_err(|_| ("INVALID_RESPONSE", "script source is not UTF-8".into()))
+    }
+    pub(crate) fn raw_put(&self, path: &str, source: &str) -> CliResult<Value> {
+        let response = self
+            .authorized(
+                self.client
+                    .put(format!("{}{path}", self.base))
+                    .header(reqwest::header::CONTENT_TYPE, "text/plain")
+                    .body(source.to_owned()),
+            )
+            .send()
+            .map_err(|e| {
+                if e.is_timeout() {
+                    ("TIMEOUT", "request timed out".into())
+                } else {
+                    (
+                        "TRANSPORT",
+                        "write result is unknown after transport failure".into(),
+                    )
+                }
+            })?;
+        self.script_response(response)
+    }
+    pub(crate) fn conditional_put(
+        &self,
+        name: &str,
+        expected: &Value,
+        source: &str,
+    ) -> CliResult<Value> {
+        let response = self
+            .authorized(
+                self.client
+                    .put(format!("{}/api/v1/apps/script-update/{name}", self.base))
+                    .json(&json!({"expected_source":expected,"source":source})),
+            )
+            .send()
+            .map_err(|e| {
+                if e.is_timeout() {
+                    ("TIMEOUT", "write result is unknown after timeout".into())
+                } else {
+                    (
+                        "TRANSPORT",
+                        "write result is unknown after transport failure".into(),
+                    )
+                }
+            })?;
+        if response.status() == reqwest::StatusCode::CONFLICT {
+            return Err((
+                "CONFLICT",
+                "remote source differs from the supplied reference; no overwrite performed".into(),
+            ));
+        }
+        self.script_response(response)
+    }
+    fn authorized(
+        &self,
+        request: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
+        if let Some(username) = &self.username {
+            request.basic_auth(username, self.password.as_deref())
+        } else {
+            request
+        }
+    }
+    fn script_response(&self, response: reqwest::blocking::Response) -> CliResult<Value> {
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err((
+                "AUTHENTICATION",
+                "device rejected HTTP Basic credentials".into(),
+            ));
+        }
+        if !response.status().is_success() {
+            return Err((
+                "HTTP",
+                format!("device returned HTTP {}", response.status().as_u16()),
+            ));
+        }
+        response
+            .json()
             .map_err(|_| ("INVALID_RESPONSE", "device returned invalid JSON".into()))
     }
 }
@@ -148,6 +267,10 @@ fn main() -> ExitCode {
         }
     };
     match run(&cli) {
+        Ok(value) if value.get("source").is_some() && cli.fields.is_empty() && !cli.json => {
+            print!("{}", value["source"].as_str().unwrap_or_default());
+            ExitCode::SUCCESS
+        }
         Ok(value) => match render(value, &cli.fields, cli.json) {
             Ok(value) => {
                 println!("{value}");
@@ -171,7 +294,7 @@ fn exit_code(code: &str) -> u8 {
         "AUTHENTICATION" => 3,
         "TIMEOUT" => 4,
         "HTTP" => 5,
-        "INCOMPATIBLE" => 6,
+        "INCOMPATIBLE" | "PROTECTION_UNAVAILABLE" => 6,
         _ => 1,
     }
 }
@@ -241,6 +364,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
         }
         Command::Describe { .. } => unreachable!(),
         Command::Profile { .. } => unreachable!(),
+        Command::Script { action } => scripts::run(action, &api),
     }
 }
 
@@ -281,6 +405,9 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
             "reachability, variant, version, state, capabilities",
             "awtrix --target http://awtrix.local device diagnose",
         ),
+        "script" | "scripts" => {
+            json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no conflict protection"},"inputs":["raw Berry source"],"outputs":["get: raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; otherwise execution_state unknown"],"examples":["awtrix script get demo","awtrix --json script get demo","awtrix script deploy demo --file main.be --expected-source OLD","awtrix script deploy demo --file main.be --create","awtrix script deploy demo --file main.be --force"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; start confirmation requires system/app state"],"offline_reference_variant":"ESP32"})
+        }
         _ => return Err(("ARGUMENT", format!("unknown description topic '{topic}'"))),
     };
     if let Some(target) = &cli.target {
