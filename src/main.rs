@@ -3,6 +3,7 @@ use serde_json::{json, Map, Value};
 use std::{process::ExitCode, time::Duration};
 
 mod profiles;
+mod screen;
 mod scripts;
 
 #[derive(Parser)]
@@ -43,6 +44,10 @@ enum Command {
     Script {
         #[command(subcommand)]
         action: scripts::Command,
+    },
+    Screen {
+        #[command(subcommand)]
+        action: screen::Command,
     },
 }
 
@@ -158,6 +163,36 @@ impl ApiClient {
                 .to_vec(),
         )
         .map_err(|_| ("INVALID_RESPONSE", "script source is not UTF-8".into()))
+    }
+    pub(crate) fn raw_bytes_get(&self, path: &str) -> CliResult<Vec<u8>> {
+        let response = self
+            .authorized(self.client.get(format!("{}{path}", self.base)))
+            .send()
+            .map_err(|error| {
+                if error.is_timeout() {
+                    ("TIMEOUT", "request timed out".into())
+                } else {
+                    ("TRANSPORT", "could not reach the HTTP target".into())
+                }
+            })?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err((
+                "AUTHENTICATION",
+                "device rejected HTTP Basic credentials".into(),
+            ));
+        }
+        if !response.status().is_success() {
+            return Err((
+                "HTTP",
+                format!("device returned HTTP {}", response.status().as_u16()),
+            ));
+        }
+        response.bytes().map(|bytes| bytes.to_vec()).map_err(|_| {
+            (
+                "INVALID_RESPONSE",
+                "could not read framebuffer response".into(),
+            )
+        })
     }
     pub(crate) fn raw_put(&self, path: &str, source: &str) -> CliResult<Value> {
         let response = self
@@ -365,6 +400,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
         Command::Describe { .. } => unreachable!(),
         Command::Profile { .. } => unreachable!(),
         Command::Script { action } => scripts::run(action, &api),
+        Command::Screen { action } => screen::run(action, &api),
     }
 }
 
@@ -408,6 +444,7 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
         "script" | "scripts" => {
             json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no conflict protection"},"inputs":["raw Berry source"],"outputs":["get: raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; otherwise execution_state unknown"],"examples":["awtrix script get demo","awtrix --json script get demo","awtrix script deploy demo --file main.be --expected-source OLD","awtrix script deploy demo --file main.be --create","awtrix script deploy demo --file main.be --force"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; start confirmation requires system/app state"],"offline_reference_variant":"ESP32"})
         }
+        "screen" => screen::describe(),
         _ => return Err(("ARGUMENT", format!("unknown description topic '{topic}'"))),
     };
     if let Some(target) = &cli.target {

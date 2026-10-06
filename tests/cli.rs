@@ -1044,3 +1044,133 @@ fn force_cannot_be_combined_with_create_or_expected_source() {
         assert!(!String::from_utf8_lossy(&output.stderr).contains("could not reach"));
     }
 }
+
+#[test]
+fn screen_capture_writes_rgb_png_and_reports_only_location_and_dimensions() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/screen");
+        request
+            .respond(Response::from_string(
+                r#"{"width":2,"height":1,"pixels":[[255,0,1],[2,3,4]]}"#,
+            ))
+            .unwrap();
+    });
+    let path = std::env::temp_dir().join(format!("awtrix-screen-{}.png", std::process::id()));
+    let path_arg = path.to_string_lossy().into_owned();
+    let output = run(&[
+        "--target", &url, "--json", "screen", "capture", "--output", &path_arg,
+    ]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["format"], "png");
+    assert_eq!(result["width"], 2);
+    assert_eq!(result["height"], 1);
+    assert!(result.get("pixels").is_none());
+    let decoder = png::Decoder::new(std::fs::File::open(&path).unwrap());
+    let mut reader = decoder.read_info().unwrap();
+    assert_eq!((reader.info().width, reader.info().height), (2, 1));
+    let mut decoded = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut decoded).unwrap();
+    assert_eq!(info.color_type, png::ColorType::Rgb);
+    assert_eq!(&decoded[..info.buffer_size()], &[255, 0, 1, 2, 3, 4]);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn screen_capture_accepts_dynamic_dimensions_and_rejects_inconsistent_or_oversized_frames() {
+    for (frame, code) in [
+        (
+            r#"{"width":3,"height":2,"pixels":[[0,0,0],[1,1,1],[2,2,2],[3,3,3],[4,4,4],[5,5,5]]}"#,
+            None,
+        ),
+        (
+            r#"{"width":2,"height":2,"pixels":[[0,0,0]]}"#,
+            Some("INVALID_RESPONSE"),
+        ),
+        (
+            r#"{"width":18446744073709551615,"height":2,"pixels":[]}"#,
+            Some("INVALID_RESPONSE"),
+        ),
+        (
+            r#"{"width":1,"height":1,"pixels":[[256,0,0]]}"#,
+            Some("INVALID_RESPONSE"),
+        ),
+    ] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let frame = frame.to_owned();
+        let worker = thread::spawn(move || {
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_string(frame))
+                .unwrap()
+        });
+        let path =
+            std::env::temp_dir().join(format!("awtrix-screen-variant-{}.png", std::process::id()));
+        let path_arg = path.to_string_lossy().into_owned();
+        let output = run(&[
+            "--target", &url, "--json", "screen", "capture", "--output", &path_arg,
+        ]);
+        worker.join().unwrap();
+        if let Some(code) = code {
+            assert_eq!(output.status.code(), Some(1));
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]
+                    ["code"],
+                code
+            );
+        } else {
+            assert!(output.status.success());
+            let decoder = png::Decoder::new(std::fs::File::open(&path).unwrap());
+            let reader = decoder.read_info().unwrap();
+            assert_eq!((reader.info().width, reader.info().height), (3, 2));
+            std::fs::remove_file(&path).unwrap();
+        }
+    }
+}
+
+#[test]
+fn screen_descriptions_and_file_failures_are_machine_readable() {
+    let described = run(&["--json", "describe", "screen"]);
+    let schema: serde_json::Value = serde_json::from_slice(&described.stdout).unwrap();
+    assert!(schema["parameters"]["--output"].is_string());
+    assert_eq!(schema["outputs"][0], "path, format, width, height");
+    let help = run(&["screen", "capture", "--help"]);
+    assert!(String::from_utf8_lossy(&help.stdout).contains("physical brightness"));
+
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"{"width":1,"height":1,"pixels":[[0,0,0]]}"#,
+            ))
+            .unwrap()
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "screen",
+        "capture",
+        "--output",
+        "/no/such/awtrix/capture.png",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "FILE_WRITE"
+    );
+}
