@@ -18,13 +18,17 @@ Verified unique IDs, existing references, acyclic graph (Luna preflight).
 
 | Ticket | State | Branch/worktree | Dispatch base | Commit/review/integration evidence |
 |---|---|---|---|---|
-| 01 | in-progress | ticket/01-diagnostic / .worktrees/ticket-01 | pending assignment | implementation pending |
-| 02–19 | ready-for-agent, dependencies enforced | unassigned | — | — |
+| 01 | done | ticket/01-diagnostic / .worktrees/ticket-01 | 6991a3b | 0bc68a6 + 5220578; Luna review four blockers corrected; re-review clear; merged; fmt/clippy/test13 passed |
+| 02,07 | in-progress | ticket/02-profils, ticket/07-scripts | assigned after journal commit | implementation pending |
+| 03–06,08–19 | ready-for-agent, dependencies enforced | unassigned | — | — |
 
 ## Shared contracts
 
-To be established by ticket 01. CLI boundary tests; compact JSON and human output;
-stdout results/stderr auxiliary diagnostics; stable error/exit codes; capability-aware HTTP.
+Established by ticket01; authoritative detail in docs/cli-contract.md. Domain sibling
+commands; --target/AWTRIX_URL; auth options/environment; timeout default3000ms.
+Compact JSON errors/results stdout, concise auxiliary diagnostics stderr; fields selects
+top-level keys. Exit0 success,1 transport/general,2 arguments,3 auth,4 timeout,5 HTTP,6 incompatible.
+Identity uses /device boardType+soc, not arbitrary strings. Describe offline and connected.
 
 ## External prerequisites and blockers
 
@@ -36,3 +40,4 @@ stdout results/stderr auxiliary diagnostics; stable error/exit codes; capability
 ## Progress log
 
 - Run initialized from clean committed main baseline. No implementation completed yet.
+- Ticket01 integrated after independent review and corrections; 13 CLI tests pass on integration.
