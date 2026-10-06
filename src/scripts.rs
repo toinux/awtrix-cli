@@ -39,8 +39,8 @@ pub fn run(command: &Command, cli: &crate::Cli) -> crate::CliResult<Value> {
         Command::Get { name } => {
             validate(name)?;
             let response = api.raw_get(&format!("/api/v1/apps/script/{name}"))?;
-            // Preserve text/plain bytes exactly; the CLI prints them without JSON wrapping.
-            Ok(json!({"__raw_script_source":response}))
+            // The output layer emits this raw unless --json was explicitly requested.
+            Ok(json!({"source":response}))
         }
         Command::Deploy {
             name,
@@ -67,7 +67,7 @@ pub fn run(command: &Command, cli: &crate::Cli) -> crate::CliResult<Value> {
             }
             if *force {
                 let result = api.raw_put(&format!("/api/v1/apps/script/{name}"), &source)?;
-                operational_result(result, false)
+                operational_result(result, false, None)
             } else {
                 let capabilities = api.get("/api/v1/capabilities")?;
                 if capabilities.get("scriptUpdates").and_then(Value::as_bool) != Some(true) {
@@ -81,7 +81,10 @@ pub fn run(command: &Command, cli: &crate::Cli) -> crate::CliResult<Value> {
                 match api.conditional_put(name, &expected, &source) {
                     Err(("CONFLICT", message)) => Err(("CONFLICT", message)),
                     Err(e) => Err(e),
-                    Ok(result) => operational_result(result, true),
+                    Ok(result) => {
+                        let verification = verify_start(&api, name);
+                        operational_result(result, true, verification)
+                    }
                 }
             }
         }
@@ -97,14 +100,36 @@ fn validate(name: &str) -> crate::CliResult<()> {
         ))
     }
 }
-fn operational_result(result: Value, atomic: bool) -> crate::CliResult<Value> {
+fn verify_start(api: &crate::ApiClient, name: &str) -> Option<bool> {
+    let system = api.get("/api/v1/system").ok()?;
+    if system.get("scriptingEnabled").and_then(Value::as_bool) != Some(true) {
+        return Some(false);
+    }
+    let apps = api.get("/api/v1/apps").ok()?;
+    let app = apps
+        .as_array()?
+        .iter()
+        .find(|app| app.get("name").and_then(Value::as_str) == Some(name))?;
+    Some(
+        app.get("origin").and_then(Value::as_str) == Some("script")
+            && app.get("enabled").and_then(Value::as_bool) == Some(true)
+            && app.get("error").is_some_and(Value::is_null),
+    )
+}
+
+fn operational_result(
+    result: Value,
+    atomic: bool,
+    verified: Option<bool>,
+) -> crate::CliResult<Value> {
     if result.get("error").is_some_and(|e| !e.is_null()) {
         return Err((
             "BERRY_ERROR",
             "source saved, but Berry compilation/setup returned an error".into(),
         ));
     }
+    let start_verified = atomic && verified == Some(true);
     Ok(
-        json!({"source_saved":true,"start_verified":atomic,"execution_state":if atomic {"verified"} else {"unknown"},"guarantee":if atomic {"atomic conditional update; restore on compile/setup failure only"} else {"unconditional raw PUT; compile/start behavior is not verified"},"device_result":result}),
+        json!({"source_saved":true,"start_verified":start_verified,"execution_state":if start_verified {"verified"} else {"unknown"},"guarantee":if atomic {"atomic conditional update; restore on compile/setup failure only; no runtime guarantee"} else {"unconditional raw PUT; compile/start behavior is not verified"},"device_result":result}),
     )
 }

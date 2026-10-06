@@ -251,11 +251,8 @@ fn main() -> ExitCode {
         }
     };
     match run(&cli) {
-        Ok(value) if value.get("__raw_script_source").is_some() && cli.fields.is_empty() => {
-            print!(
-                "{}",
-                value["__raw_script_source"].as_str().unwrap_or_default()
-            );
+        Ok(value) if value.get("source").is_some() && cli.fields.is_empty() && !cli.json => {
+            print!("{}", value["source"].as_str().unwrap_or_default());
             ExitCode::SUCCESS
         }
         Ok(value) => match render(value, &cli.fields, cli.json) {
@@ -364,7 +361,7 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
             "awtrix --target http://awtrix.local device diagnose",
         ),
         "script" | "scripts" => {
-            json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no conflict protection"},"inputs":["raw Berry source"],"outputs":["source bytes on stdout for get","source_saved, start_verified and execution_state for deploy"],"examples":["awtrix script get demo","awtrix script deploy demo --file main.be --expected-source OLD","awtrix script deploy demo --file main.be --create","awtrix script deploy demo --file main.be --force"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present"],"offline_reference_variant":"ESP32"})
+            json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no conflict protection"},"inputs":["raw Berry source"],"outputs":["get: raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; otherwise execution_state unknown"],"examples":["awtrix script get demo","awtrix --json script get demo","awtrix script deploy demo --file main.be --expected-source OLD","awtrix script deploy demo --file main.be --create","awtrix script deploy demo --file main.be --force"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; start confirmation requires system/app state"],"offline_reference_variant":"ESP32"})
         }
         _ => return Err(("ARGUMENT", format!("unknown description topic '{topic}'"))),
     };

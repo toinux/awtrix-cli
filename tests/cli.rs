@@ -305,10 +305,8 @@ fn script_get_preserves_raw_source_and_script_put_reports_berry_error() {
     });
     let get = run(&["--target", &url, "--json", "script", "get", "demo"]);
     assert!(get.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&get.stdout),
-        "# @name demo\nprint('hi')\n"
-    );
+    let source_json: serde_json::Value = serde_json::from_slice(&get.stdout).unwrap();
+    assert_eq!(source_json["source"], "# @name demo\nprint('hi')\n");
     let put = run(&[
         "--target",
         &url,
@@ -345,6 +343,18 @@ fn script_deploy_uses_atomic_expected_source_route_and_does_not_pre_read() {
         assert_eq!(payload["source"], "new source");
         request
             .respond(Response::from_string(r#"{"ok":true,"error":null}"#))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/system");
+        request
+            .respond(Response::from_string(r#"{"scriptingEnabled":true}"#))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps");
+        request
+            .respond(Response::from_string(
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ))
             .unwrap();
     });
     let output = run(&[
@@ -429,4 +439,164 @@ fn script_deploy_without_update_capability_does_not_write() {
     assert_eq!(output.status.code(), Some(6));
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["error"]["code"], "PROTECTION_UNAVAILABLE");
+}
+
+#[test]
+fn script_create_sends_null_reference_and_verifies_state_only_after_inspection() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        request
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()["expected_source"],
+            serde_json::Value::Null
+        );
+        request
+            .respond(Response::from_string(r#"{"ok":true,"error":null}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":false}"#))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target", &url, "--json", "script", "deploy", "demo", "--source", "new", "--create",
+    ]);
+    worker.join().unwrap();
+    assert!(output.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["source_saved"], true);
+    assert_eq!(result["start_verified"], false);
+    assert_eq!(result["execution_state"], "unknown");
+}
+
+#[test]
+fn forced_script_deploy_stays_raw_and_reports_weak_guarantee_for_large_source() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let expected = "x".repeat(9000);
+    let observed = expected.clone();
+    let worker = thread::spawn(move || {
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/script/demo");
+        assert!(request
+            .headers()
+            .iter()
+            .any(|header| header.field.equiv("Content-Type")
+                && header.value.as_str().starts_with("text/plain")));
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(body, observed);
+        request
+            .respond(Response::from_string(r#"{"ok":true,"error":null}"#))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target", &url, "--json", "script", "deploy", "demo", "--source", &expected, "--force",
+    ]);
+    worker.join().unwrap();
+    assert!(output.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["start_verified"], false);
+    assert_eq!(result["execution_state"], "unknown");
+}
+
+#[test]
+fn script_get_non_json_is_exact_raw_source() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string("raw\nsource\n"))
+            .unwrap()
+    });
+    let output = run(&["--target", &url, "script", "get", "demo"]);
+    worker.join().unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"raw\nsource\n");
+}
+
+#[test]
+fn successful_conditional_response_with_setup_error_is_operational_failure() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(
+                Response::from_string(r#"{"expected_source":"old","source":"new"}"#)
+                    .with_status_code(422),
+            )
+            .unwrap();
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "new",
+        "--expected-source",
+        "old",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "HTTP");
+}
+
+#[test]
+fn script_deploy_reads_utf8_source_file_verbatim() {
+    let path = std::env::temp_dir().join(format!("awtrix-source-{}.be", std::process::id()));
+    std::fs::write(&path, "# café\nprint('ok')\n").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/script/demo");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(body, "# café\nprint('ok')\n");
+        request
+            .respond(Response::from_string(r#"{"ok":true,"error":null}"#))
+            .unwrap();
+    });
+    let path_string = path.to_string_lossy().into_owned();
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "deploy",
+        "demo",
+        "--file",
+        &path_string,
+        "--force",
+    ]);
+    worker.join().unwrap();
+    let _ = std::fs::remove_file(path);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["execution_state"], "unknown");
 }
