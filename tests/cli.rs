@@ -600,3 +600,29 @@ fn script_deploy_reads_utf8_source_file_verbatim() {
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["execution_state"], "unknown");
 }
+
+#[test]
+fn force_cannot_be_combined_with_create_or_expected_source() {
+    for conditional in ["--create", "--expected-source"] {
+        let mut args = vec![
+            "--target",
+            "http://127.0.0.1:1",
+            "--json",
+            "script",
+            "deploy",
+            "demo",
+            "--source",
+            "new source",
+            "--force",
+        ];
+        args.push(conditional);
+        if conditional == "--expected-source" {
+            args.push("original source");
+        }
+        let output = run(&args);
+        assert_eq!(output.status.code(), Some(2));
+        let error: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(error["error"]["code"], "ARGUMENT");
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("could not reach"));
+    }
+}

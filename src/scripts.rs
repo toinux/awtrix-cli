@@ -15,13 +15,13 @@ pub enum Command {
         #[arg(long)]
         file: Option<PathBuf>,
         /// The original remote source used for an atomic update; null only via --create.
-        #[arg(long, conflicts_with = "create")]
+        #[arg(long, conflicts_with_all = ["create", "force"])]
         expected_source: Option<String>,
         /// Create only if the script name is absent.
-        #[arg(long, conflicts_with = "expected_source")]
+        #[arg(long, conflicts_with_all = ["expected_source", "force"])]
         create: bool,
         /// Replace unconditionally using raw PUT; no concurrency guarantee.
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["create", "expected_source"])]
         force: bool,
     },
 }
