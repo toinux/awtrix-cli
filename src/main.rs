@@ -245,13 +245,18 @@ fn run(cli: &Cli) -> CliResult<Value> {
 }
 
 fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
+    if topic == "profile" || topic.starts_with("profile ") {
+        return profiles::describe(
+            topic
+                .strip_prefix("profile ")
+                .filter(|_| topic != "profile"),
+        );
+    }
     let mut result = match topic {
         "device" => {
             json!({"command":"device","parameters":{"--target":"HTTP base URL; required for device commands, optional for describe","--username":"HTTP Basic username","--password":"HTTP Basic password","--timeout":"bounded request timeout in milliseconds (default 3000)","--json":"emit compact JSON independent of terminal","--fields":"comma-separated top-level result fields"},"inputs":["AWTRIX NG HTTP device"],"outputs":["identity: variant, version, identity, state","state: /api/v1/device JSON","capabilities: /api/v1/capabilities JSON","diagnose: reachability, variant, version, state and capabilities"],"examples":["awtrix --target http://awtrix.local device diagnose","awtrix --json --target http://awtrix.local device identity"],"prerequisites":["HTTP(S) AWTRIX NG endpoint; Basic credentials when configured"],"offline_reference_variant":"ESP32"})
         }
-        "profiles" | "profile" => {
-            json!({"command":"profile","parameters":{"--profile":"named device profile (or AWTRIX_PROFILE)","--target":"explicit HTTP base URL (or AWTRIX_URL)","--username":"Basic username (or AWTRIX_USERNAME)","--password":"Basic password (or AWTRIX_PASSWORD)","AWTRIX_CONFIG":"personal config file override"},"inputs":["personal profile configuration"],"outputs":["profile add/update/list/show/set-default/delete results; credential values are never returned"],"examples":["awtrix profile add desk --target http://awtrix.local","awtrix profile update desk --target http://awtrix.local","awtrix profile list"],"prerequisites":["HTTP(S) URL without embedded credentials"]})
-        }
+        "profiles" => profiles::describe(None)?,
         "identity" | "device identity" => command_description(
             "device identity",
             "GET /api/v1/device and /api/v1/version",
