@@ -1,0 +1,4 @@
+/target/
+/.worktrees/
+/.automation-runtime/
+*.log
