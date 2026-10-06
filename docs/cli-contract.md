@@ -12,4 +12,12 @@ Verified OpenAPI sources (retrieved 2026-10-07):
 - https://blueforcer.github.io/awtrix-ng/esp32-s3/api/openapi.yaml
 - https://blueforcer.github.io/awtrix-ng/tc002/api/openapi.yaml
 
+## Berry script source (ticket 07)
+
+`script get NAME` sends `GET /api/v1/apps/script/{name}` and writes the `text/plain` source to stdout without JSON wrapping or an imposed JSON-body limit. `NAME` matches `[A-Za-z0-9_-]{1,32}`. `script deploy NAME (--source TEXT | --file PATH)` reads a non-empty UTF-8 source.
+
+By default deploy requires `GET /api/v1/capabilities` to advertise `scriptUpdates: true`, and requires the caller's original `--expected-source TEXT` or explicit `--create`. The CLI does not refresh that reference immediately before writing. It uses atomic `PUT /api/v1/apps/script-update/{name}` with JSON `{ "expected_source": <string|null>, "source": <string> }`; null means create-only. HTTP 409 is `CONFLICT` (exit 1) and leaves remote source unchanged. Missing capability aborts before write (`PROTECTION_UNAVAILABLE`, exit 6); it never emulates atomicity with GET-then-PUT. `--force` explicitly selects raw `PUT /api/v1/apps/script/{name}` and reports the weaker guarantee; it is not a fallback.
+
+Both routes are confirmed in official ESP32, ESP32-S3 and TC002 OpenAPI 3.1.0 definitions (retrieved 2026-10-07). Conditional update restores old source on compile/setup failure, not later runtime errors. HTTP 200 with non-null `error` is `BERRY_ERROR` (exit 1): saved source is not equivalent to successful execution. Conditional success reports `source_saved:true`, `start_verified:true`, `execution_state:"verified"`; forced raw PUT reports source saved with execution unknown because that route does not establish a start guarantee. A timeout/transport interruption of a write has unknown outcome. Script global disable is not described as compilation/start success; AWTRIX rejects unavailable operations with 503. Source uses the dedicated raw/text route and is never bounded by JSON request limits.
+
 All three sources identify themselves as AWTRIX NG HTTP API OpenAPI 3.1.0 and define `DeviceState` identity constants: ESP32 has `boardType: awtrixng` / `soc: esp32`, ESP32-S3 has `boardType: awtrixng` / `soc: esp32s3`, and TC002 has `boardType: tc002`. They document the routes above and HTTP 401 for authenticated operations. Firmware versions and platform identity come from the live target, not a hardcoded compatibility claim. Unknown/unidentifiable hardware is reported as `unknown`.

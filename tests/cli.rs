@@ -281,3 +281,152 @@ fn invalid_json_response_is_classified() {
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("INVALID_RESPONSE"));
 }
+
+#[test]
+fn script_get_preserves_raw_source_and_script_put_reports_berry_error() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/script/demo");
+        request
+            .respond(Response::from_string("# @name demo\nprint('hi')\n"))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Put);
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(body, "print('hi')\n");
+        request
+            .respond(Response::from_string(
+                r#"{"ok":true,"name":"demo","error":{"message":"compile failed","line":2}}"#,
+            ))
+            .unwrap();
+    });
+    let get = run(&["--target", &url, "--json", "script", "get", "demo"]);
+    assert!(get.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&get.stdout),
+        "# @name demo\nprint('hi')\n"
+    );
+    let put = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "print('hi')\n",
+        "--force",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(put.status.code(), Some(1));
+    let result: serde_json::Value = serde_json::from_slice(&put.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "BERRY_ERROR");
+}
+
+#[test]
+fn script_deploy_uses_atomic_expected_source_route_and_does_not_pre_read() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/capabilities");
+        request
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/script-update/demo");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(payload["expected_source"], "old source");
+        assert_eq!(payload["source"], "new source");
+        request
+            .respond(Response::from_string(r#"{"ok":true,"error":null}"#))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "new source",
+        "--expected-source",
+        "old source",
+    ]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["source_saved"], true);
+    assert_eq!(result["start_verified"], true);
+}
+
+#[test]
+fn script_deploy_surfaces_conflict_without_fallback_or_overwrite() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        request
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/script-update/demo");
+        request
+            .respond(Response::from_string(r#"{"code":"scriptChanged"}"#).with_status_code(409))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "new",
+        "--expected-source",
+        "original",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "CONFLICT");
+}
+
+#[test]
+fn script_deploy_without_update_capability_does_not_write() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        request
+            .respond(Response::from_string(r#"{"other":true}"#))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "new",
+        "--expected-source",
+        "original",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(6));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "PROTECTION_UNAVAILABLE");
+}
