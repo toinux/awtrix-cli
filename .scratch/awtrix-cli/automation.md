@@ -19,8 +19,10 @@ Verified unique IDs, existing references, acyclic graph (Luna preflight).
 | Ticket | State | Branch/worktree | Dispatch base | Commit/review/integration evidence |
 |---|---|---|---|---|
 | 01 | done | ticket/01-diagnostic / .worktrees/ticket-01 | 6991a3b | 0bc68a6 + 5220578; Luna review four blockers corrected; re-review clear; merged; fmt/clippy/test13 passed |
-| 02,07 | in-progress | ticket/02-profils, ticket/07-scripts | assigned after journal commit | implementation pending |
-| 03–06,08–19 | ready-for-agent, dependencies enforced | unassigned | — | — |
+| 02 | done | ticket/02-profils / .worktrees/ticket-02 | 70cb068 | 60d8ed5+907418d; review clear; integrated |
+| 07 | done | ticket/07-scripts / .worktrees/ticket-07 | 70cb068 | 3b2a76c+1cc3a28+f4ed0bc; review clear; merge fe5cda1 |
+| 09,10 | in-progress | ticket/09-logs, ticket/10-screen | next journal commit | pending |
+| 03–06,08,11–19 | ready-for-agent, dependencies enforced | unassigned | — | — |
 
 ## Shared contracts
 
@@ -41,3 +43,6 @@ Identity uses /device boardType+soc, not arbitrary strings. Describe offline and
 
 - Run initialized from clean committed main baseline. No implementation completed yet.
 - Ticket01 integrated after independent review and corrections; 13 CLI tests pass on integration.
+- Tickets02/07 integrated after review fixes. Main command registration conflict resolved;
+  scripts receive the same resolved/authenticated ApiClient as device commands.
+  Integration fe5cda1: fmt/clippy pass; 2 unit +31 CLI tests pass. Combined Luna review clear.
