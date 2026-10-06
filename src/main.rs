@@ -2,6 +2,8 @@ use clap::{error::ErrorKind, Parser, Subcommand};
 use serde_json::{json, Map, Value};
 use std::{process::ExitCode, time::Duration};
 
+mod profiles;
+
 #[derive(Parser)]
 #[command(name = "awtrix", version, about = "AWTRIX NG device CLI")]
 struct Cli {
@@ -17,6 +19,8 @@ struct Cli {
     json: bool,
     #[arg(long, global = true, value_delimiter = ',')]
     fields: Vec<String>,
+    #[arg(long, global = true, env = "AWTRIX_PROFILE")]
+    profile: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -30,6 +34,10 @@ enum Command {
     Describe {
         #[arg(default_value = "device")]
         topic: String,
+    },
+    Profile {
+        #[command(subcommand)]
+        action: profiles::ProfileCommand,
     },
 }
 
@@ -51,14 +59,23 @@ struct ApiClient {
 }
 
 impl ApiClient {
-    fn new(cli: &Cli) -> CliResult<Self> {
-        let target = cli.target.as_deref().ok_or((
+    fn new(
+        cli: &Cli,
+        selected_target: Option<&str>,
+        username: Option<String>,
+        password: Option<String>,
+    ) -> CliResult<Self> {
+        let target = selected_target.ok_or((
             "TARGET_REQUIRED",
             "provide --target URL or AWTRIX_URL".into(),
         ))?;
         let parsed = reqwest::Url::parse(target)
             .map_err(|_| ("ARGUMENT", "target must be an absolute HTTP URL".into()))?;
-        if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        if !matches!(parsed.scheme(), "http" | "https")
+            || parsed.host_str().is_none()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
             return Err(("ARGUMENT", "target must be an absolute HTTP URL".into()));
         }
         let base = target.trim_end_matches('/').to_string();
@@ -69,8 +86,8 @@ impl ApiClient {
         Ok(Self {
             base,
             client,
-            username: cli.username.clone(),
-            password: cli.password.clone(),
+            username,
+            password,
         })
     }
 
@@ -169,10 +186,30 @@ fn emit_error(code: &str, message: &str, machine: bool) {
 }
 
 fn run(cli: &Cli) -> CliResult<Value> {
+    if let Command::Profile { action } = &cli.command {
+        return profiles::run(action);
+    }
     if let Command::Describe { topic } = &cli.command {
         return describe(cli, topic);
     }
-    let api = ApiClient::new(cli)?;
+    let explicit_target =
+        std::env::args().any(|arg| arg == "--target" || arg.starts_with("--target="));
+    let resolved = profiles::resolve(
+        if explicit_target {
+            cli.target.as_deref()
+        } else {
+            None
+        },
+        cli.profile.as_deref(),
+        cli.username.as_deref(),
+        cli.password.as_deref(),
+    )?;
+    let api = ApiClient::new(
+        cli,
+        resolved.target.as_deref(),
+        resolved.username.clone(),
+        resolved.password.clone(),
+    )?;
     match &cli.command {
         Command::Device {
             action: DeviceCommand::State,
@@ -199,10 +236,11 @@ fn run(cli: &Cli) -> CliResult<Value> {
             let version = api.get("/api/v1/version")?;
             let capabilities = api.get("/api/v1/capabilities")?;
             Ok(
-                json!({"reachable":true,"variant":variant,"version":version.get("version").cloned().unwrap_or(Value::Null),"state":state,"capabilities":capabilities}),
+                json!({"reachable":true,"variant":variant,"version":version.get("version").cloned().unwrap_or(Value::Null),"state":state,"capabilities":capabilities,"target":resolved.target,"target_origin":resolved.origin}),
             )
         }
         Command::Describe { .. } => unreachable!(),
+        Command::Profile { .. } => unreachable!(),
     }
 }
 
@@ -210,6 +248,9 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
     let mut result = match topic {
         "device" => {
             json!({"command":"device","parameters":{"--target":"HTTP base URL; required for device commands, optional for describe","--username":"HTTP Basic username","--password":"HTTP Basic password","--timeout":"bounded request timeout in milliseconds (default 3000)","--json":"emit compact JSON independent of terminal","--fields":"comma-separated top-level result fields"},"inputs":["AWTRIX NG HTTP device"],"outputs":["identity: variant, version, identity, state","state: /api/v1/device JSON","capabilities: /api/v1/capabilities JSON","diagnose: reachability, variant, version, state and capabilities"],"examples":["awtrix --target http://awtrix.local device diagnose","awtrix --json --target http://awtrix.local device identity"],"prerequisites":["HTTP(S) AWTRIX NG endpoint; Basic credentials when configured"],"offline_reference_variant":"ESP32"})
+        }
+        "profiles" | "profile" => {
+            json!({"command":"profile","parameters":{"--profile":"named device profile (or AWTRIX_PROFILE)","--target":"explicit HTTP base URL (or AWTRIX_URL)","--username":"Basic username (or AWTRIX_USERNAME)","--password":"Basic password (or AWTRIX_PASSWORD)","AWTRIX_CONFIG":"personal config file override"},"inputs":["personal profile configuration"],"outputs":["profile add/update/list/show/set-default/delete results; credential values are never returned"],"examples":["awtrix profile add desk --target http://awtrix.local","awtrix profile update desk --target http://awtrix.local","awtrix profile list"],"prerequisites":["HTTP(S) URL without embedded credentials"]})
         }
         "identity" | "device identity" => command_description(
             "device identity",
@@ -239,7 +280,14 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
     };
     if let Some(target) = &cli.target {
         // Descriptions are usable offline; a supplied target explicitly requests live capability refinement.
-        let capabilities = ApiClient::new(cli)?.get("/api/v1/capabilities")?;
+        let resolved = profiles::resolve(
+            Some(target),
+            cli.profile.as_deref(),
+            cli.username.as_deref(),
+            cli.password.as_deref(),
+        )?;
+        let capabilities = ApiClient::new(cli, Some(target), resolved.username, resolved.password)?
+            .get("/api/v1/capabilities")?;
         result["target"] = json!(target);
         result["connected_capabilities"] = capabilities;
         result["capability_source"] = json!("connected-device");

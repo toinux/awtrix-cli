@@ -20,6 +20,195 @@ fn run_with_url_env(args: &[&str], url: &str) -> Output {
         .unwrap()
 }
 
+fn run_with_config(args: &[&str], config: &std::path::Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args(args)
+        .env("AWTRIX_CONFIG", config)
+        .env_remove("AWTRIX_URL")
+        .env_remove("AWTRIX_PROFILE")
+        .env_remove("AWTRIX_USERNAME")
+        .env_remove("AWTRIX_PASSWORD")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn profile_crud_persists_isolated_config_and_never_displays_secrets() {
+    let dir = std::env::temp_dir().join(format!("awtrix-profile-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let config = dir.join("config.json");
+    let added = run_with_config(
+        &[
+            "--json",
+            "profile",
+            "add",
+            "desk",
+            "--target",
+            "http://127.0.0.1:1234",
+            "--username",
+            "private-user",
+            "--password",
+            "private-password",
+        ],
+        &config,
+    );
+    assert!(added.status.success());
+    assert!(run_with_config(
+        &[
+            "--json",
+            "profile",
+            "update",
+            "desk",
+            "--target",
+            "http://127.0.0.1:1235",
+            "--username",
+            "private-user",
+            "--password",
+            "private-password"
+        ],
+        &config
+    )
+    .status
+    .success());
+    assert!(
+        run_with_config(&["--json", "profile", "set-default", "desk"], &config)
+            .status
+            .success()
+    );
+    for args in [
+        &["--json", "profile", "list"][..],
+        &["--json", "profile", "show", "desk"][..],
+    ] {
+        let output = run_with_config(args, &config);
+        assert!(output.status.success());
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(!text.contains("private-user"));
+        assert!(!text.contains("private-password"));
+    }
+    let other = dir.join("other.json");
+    assert!(serde_json::from_slice::<serde_json::Value>(
+        &run_with_config(&["--json", "profile", "list"], &other).stdout
+    )
+    .unwrap()["profiles"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    assert!(
+        run_with_config(&["--json", "profile", "delete", "desk"], &config)
+            .status
+            .success()
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn invalid_saved_profile_configuration_fails_explicitly() {
+    let path = std::env::temp_dir().join(format!("awtrix-invalid-{}.json", std::process::id()));
+    std::fs::write(
+        &path,
+        br#"{"profiles":{"broken":{"target":"file:///etc/passwd"}},"default":"broken"}"#,
+    )
+    .unwrap();
+    let out = run_with_config(&["--json", "profile", "list"], &path);
+    let _ = std::fs::remove_file(path);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()["error"]["code"],
+        "CONFIG_INVALID"
+    );
+}
+
+#[test]
+fn selected_profile_credentials_are_sent_and_explicit_credentials_override_them() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for expected in [
+            "Basic cHJvZmlsZS11c2VyOnByb2ZpbGUtcGFzc3dvcmQ=",
+            "Basic Y2xpLXVzZXI6Y2xpLXBhc3N3b3Jk",
+        ] {
+            let request = server.recv().unwrap();
+            let auth = request
+                .headers()
+                .iter()
+                .find(|h| h.field.equiv("Authorization"))
+                .unwrap()
+                .value
+                .as_str();
+            assert_eq!(auth, expected);
+            request.respond(Response::from_string("{}")).unwrap();
+        }
+    });
+    let path = std::env::temp_dir().join(format!("awtrix-auth-{}.json", std::process::id()));
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args([
+            "profile",
+            "add",
+            "auth",
+            "--target",
+            &url,
+            "--username",
+            "profile-user",
+            "--password",
+            "profile-password",
+        ])
+        .env("AWTRIX_CONFIG", &path)
+        .env_remove("AWTRIX_URL")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let _ = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args(["--profile", "auth", "device", "state"])
+        .env("AWTRIX_CONFIG", &path)
+        .env_remove("AWTRIX_URL")
+        .output()
+        .unwrap();
+    let _ = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args([
+            "--profile",
+            "auth",
+            "--username",
+            "cli-user",
+            "--password",
+            "cli-password",
+            "device",
+            "state",
+        ])
+        .env("AWTRIX_CONFIG", &path)
+        .env_remove("AWTRIX_URL")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn diagnose_reports_target_origin_for_environment_selection() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for _ in 0..3 {
+            let request = server.recv().unwrap();
+            let body = match request.url() {
+                "/api/v1/device" => r#"{"boardType":"awtrixng","soc":"esp32"}"#,
+                "/api/v1/version" => r#"{"version":"x"}"#,
+                _ => r#"{"effects":[]}"#,
+            };
+            request.respond(Response::from_string(body)).unwrap();
+        }
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args(["--json", "device", "diagnose"])
+        .env("AWTRIX_URL", url)
+        .env_remove("AWTRIX_CONFIG")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["target_origin"], "environment");
+}
+
 #[test]
 fn help_version_and_offline_description_are_available() {
     assert!(run(&["--help"]).status.success());
