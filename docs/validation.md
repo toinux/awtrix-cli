@@ -3,7 +3,8 @@
 This document is the reproducible acceptance record for the agent workflow. The
 executable is `awtrix-cli`; replace example URLs and paths with values available
 to the operator. Do not run mutating steps against a shared/physical display
-without the owner's explicit approval. The physical checks below were not run.
+without the owner's explicit approval. On 2026-10-07 the approved main workflow
+was run on the recorded ESP32; ESP32-S3 and TC002 physical checks remain unrun.
 
 ## Discover, exercise and clean up
 
@@ -16,10 +17,15 @@ awtrix-cli --json describe 'project deploy'
 awtrix-cli --json describe 'test project'
 awtrix-cli --target "$AWTRIX_URL" --json device diagnose
 awtrix-cli --target "$AWTRIX_URL" --json apps list
-awtrix-cli --target "$AWTRIX_URL" apps create agent-progress \
-  --payload '{"text":"Preparing project"}'
 awtrix-cli --target "$AWTRIX_URL" --json project validate \
   --manifest examples/project/awtrix.toml
+```
+
+After the read-only ownership preflight below passes, run the mutating workflow:
+
+```sh
+awtrix-cli --target "$AWTRIX_URL" apps create agent-progress \
+  --payload '{"text":"Preparing project","lifetimeMs":600000}'
 awtrix-cli --target "$AWTRIX_URL" --json project deploy \
   --manifest examples/project/awtrix.toml
 awtrix-cli --target "$AWTRIX_URL" --json script verify main \
@@ -132,20 +138,28 @@ real headless Berry/runtime behavior; neither is physical-device evidence.
 | --- | --- | --- |
 | HTTP simulation | CLI integration fixtures cover ESP32, ESP32-S3 and TC002 response/capability contracts, Berry errors, conflicts and failures. | Deterministic client contract only; not firmware execution. |
 | Actual AWTRIX headless | Upstream 1.2.2 Linux binary; isolated declarative project test and its success/failure/Berry-error/isolation/cleanup scenarios passed. | Linux runtime behavior; not ESP32 memory/instruction budgets, audio, sensors, or physical rendering. |
-| Physical ESP32 | Read-only diagnosis on `http://192.168.1.202`: AWTRIX NG 1.2.2, boardType `awtrixng`, soc `esp32`, 32x8, `scriptUpdates:true`. Earlier smoke: read state and submit a five-second notification (acceptance only; visibility unknown). | Identity and limited smoke only. Full workflow NOT EXECUTED. Existing Update-Checker, Anothertime and Tesla scripts were observed and must be preserved. No persistent/visible acceptance was performed for this ticket. |
+| Physical ESP32 | On 2026-10-07, AWTRIX NG 1.2.2, boardType `awtrixng`, soc `esp32`, 32x8, `scriptUpdates:true`. Full workflow ran against `http://192.168.1.202` using disposable project `ticket20-physical-20261007`: progress pushed app accepted (visibility unknown); module `ticket20_helpers`, `/ICONS/ticket20-validation.gif`, and script `ticket20-check` deployed; bounded 5-second verification reported `start_verified:true`, active/in-loop, `runtime_error:null`, complete window, logs and 32x8 capture; final 5-second notification accepted (visibility unknown). After cleanup, the test app/script/module/resource were absent; original Update-Checker, Anothertime, Tesla, and pushed app `hello-world` remained. Brightness stayed 4 and matrix power stayed on; no setting command or settings mutation was used. | Full script/project/deploy/verify/log/capture/notification/cleanup path observed on this ESP32 and firmware. Not a minimum-version guarantee or a hardware resource-budget certification. Test-generated diagnostic log lines remain in the device's bounded log history; they were not cleared to avoid erasing user logs. Captures: `/tmp/opencode/ticket20-esp32-during.png` and `/tmp/opencode/ticket20-esp32-after.png` (32x8). |
 | Physical ESP32-S3 | NOT EXECUTED; no target available. | No compatibility claim. |
 | Physical TC002 | NOT EXECUTED; no target available. | No compatibility claim. |
 | Host distribution | Native CI run 37663709425 passed host and package jobs for Linux x86_64 GNU, macOS arm64, and Windows x86_64 MSVC after the `awtrix-cli` rename. | CLI artifact/help/version/HTTP checks per ticket 18; not full CLI or physical firmware coverage on those hosts. |
 
 Minimum verified firmware is **1.2.2 for the actual Linux headless runtime**.
-The only known physical firmware is ESP32 1.2.2, with read-only identity and
-limited smoke evidence above. No minimum firmware version for any physical
-variant is established. Official OpenAPI contracts (checked 2026-10-07) include
+The physical ESP32 workflow was tested on firmware 1.2.2; this single observation
+does not establish a minimum supported physical firmware version. ESP32-S3 and
+TC002 physical checks remain unexecuted. Official OpenAPI contracts (checked 2026-10-07) include
 the script conditional-update, resource, logs, screen and core device routes
 for all three variants, but contract presence is not execution evidence.
 Capabilities must be read from the target: e.g. `scriptUpdates` is required
 for protected deployment; unsupported/missing capabilities fail explicitly.
 No variant-level claim beyond these contract definitions is inferred.
+
+During the physical run, the first module upload was rejected with Berry error
+`module must end with 'return <value>'`. The CLI reported the module as uncertain;
+read-only inspection showed the exact temporary module and its error. It was
+deleted after confirming the name was absent before this run, local uncertain
+tracking was reconciled, and a final `return true` was added before retrying. The
+corrected module, resource, and script then deployed successfully. The failed
+temporary module was not left installed.
 
 ### Physical resumption protocol
 

@@ -294,7 +294,7 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
 - Ticket18 remains accepted with fresh post-rename native evidence. Ticket19 still
   ready, not started. Use awtrix-cli for its scenario and documentation.
 
-## Ticket #20 / historical ticket 19 — partial implementation, physical blocker — 2026-10-07
+## Ticket #20 / historical ticket 19 — acceptance verified; tracker closeout pending — 2026-10-07
 
 - Reconciled live GitHub dependencies: #4, #5, #6, #7, #15, #18 and #19 are closed
   as completed. Claimed #20 and posted progress; no implementation or acceptance
@@ -309,18 +309,32 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
   criterion. Review corrections fixed the link, added exact fixture/headless commands,
   and documented safe ownership preflight/backup/abort steps for physical runs.
 - Integrated as merge `ab508bda5103c35d349ff91cd3b6a6501e1cea76`; complete diff reviewed
-  against ticket #20. Local full checks passed: `cargo fmt --check`, `cargo clippy --all-targets --all-features
-  --locked -- -D warnings`, `cargo test --locked` (6 unit, 135 CLI, 2 distribution;
-  1 headless test ignored by default), and explicit real headless test with the
-  recorded AWTRIX NG 1.2.2 binary/UI (1 passed, 21.47s). The four focused fixture
-  tests also passed in the worker; native distribution evidence remains CI run
-  37663709425. No physical mutation was performed.
-- `docs/validation.md` records the main physical workflow NOT EXECUTED on the known
-  ESP32 `192.168.1.202`; ESP32-S3 and TC002 are unavailable and marked NOT EXECUTED.
-  Prior ESP32 diagnosis and notification acceptance remain limited smoke evidence;
-  existing Update-Checker, Anothertime and Tesla scripts must be preserved.
-- Ticket #20 remains OPEN and not accepted: the full physical workflow on the
-  available ESP32 is still required. Visible/persistent device changes require the
-  owner's explicit agreement. Do not close or claim physical compatibility until
-  that run is authorized and its evidence recorded. Integration checkpoint after
-  ticket merge: `ab508bda5103c35d349ff91cd3b6a6501e1cea76`.
+  against ticket #20. Local full checks passed: `cargo fmt --check`,
+  `cargo clippy --all-targets --all-features --locked -- -D warnings`,
+  `cargo test --locked` (6 unit, 135 CLI, 2 distribution; one headless test ignored
+  by default), and explicit real headless test with the recorded AWTRIX NG 1.2.2
+  binary/UI (1 passed, 21.47s). Four focused mock-HTTP fixture tests also passed.
+  Native distribution evidence remains CI run 37663709425.
+- After the user's explicit approval, ran the physical end-to-end project on
+  `http://192.168.1.202`, observed ESP32/AWTRIX NG 1.2.2, boardType `awtrixng`,
+  32x8, `scriptUpdates:true`. The first temporary module upload returned Berry error
+  (`module must end with 'return <value>'`); inspected the exact remote source,
+  deleted that uniquely owned failed upload, reconciled its uncertain tracking,
+  added `return true`, then successfully deployed the module, GIF resource and
+  unique `ticket20-check` script. Five-second script verification completed with
+  `start_verified:true`, active/in-loop, no runtime error, logs and 32x8 capture.
+  Sent and removed a unique progress app; final five-second notification was
+  accepted, but visibility is unknown.
+- Cleanup verified the test script/module/resource/progress app absent. The original
+  Update-Checker, Anothertime, Tesla scripts and pushed app `hello-world` remained.
+  Brightness remained 4 and matrix power remained on before/after; no device setting
+  was modified, so no settings restoration was necessary. Test-generated entries
+  remain in bounded logs (not cleared to avoid deleting user logs). Physical screen
+  captures retained at `/tmp/opencode/ticket20-esp32-during.png` and
+  `/tmp/opencode/ticket20-esp32-after.png`.
+- ESP32-S3 and TC002 hardware were unavailable; their physical checks remain
+  explicitly NOT EXECUTED and have a resumption protocol in `docs/validation.md`.
+  Ticket #20 acceptance is verified after integration and final independent review;
+  no minimum physical firmware version or cross-variant hardware compatibility
+  beyond observed ESP32 1.2.2 behavior is claimed. Merge checkpoint remains
+  `ab508bda5103c35d349ff91cd3b6a6501e1cea76`.

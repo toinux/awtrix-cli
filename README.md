@@ -255,14 +255,13 @@ device's advertised capabilities. The client-host distribution matrix is Linux
 x86_64 (GNU/glibc), macOS arm64, and Windows x86_64 (MSVC); headless lifecycle and
 isolated headless testing are Linux-only.
 
-Tickets 01–18 are complete. See [end-to-end workflow and compatibility
+Tickets 01–19 are complete. See [end-to-end workflow and compatibility
 evidence](docs/validation.md) for the reproducible agent scenario and the
 separate HTTP simulation, actual headless, host distribution, and physical
-evidence. The physical main path is not yet validated on any variant: only
-read-only diagnosis and limited smoke checks exist for one ESP32. ESP32-S3 and
-TC002 physical checks were not executed. Linux checks, HTTP fixtures, and
-headless runs are not physical-device validation. Headless tests do not validate
-sensors, audio, or hardware memory/instruction budgets.
+evidence. The physical main path was executed on one ESP32 running AWTRIX NG
+1.2.2; ESP32-S3 and TC002 physical checks were not executed. Linux checks, HTTP
+fixtures, and headless runs are not physical-device validation. Headless tests do
+not validate sensors, audio, or hardware memory/instruction budgets.
 
 HTTP acceptance alone does not prove that content is visible, and a bounded
 verification window does not prove future script correctness. Device logs retain
@@ -270,7 +269,7 @@ only the latest 34 lines, so log collection is not exhaustive.
 
 The [distribution documentation](docs/distribution.md) and
 [physical validation ticket](https://github.com/toinux/awtrix-cli/issues/20)
-record the remaining acceptance gates.
+record the observed compatibility scope and explicitly unavailable hardware checks.
 
 ## Documentation
 
