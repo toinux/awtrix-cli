@@ -5,6 +5,7 @@ use std::{process::ExitCode, time::Duration};
 mod apps;
 mod headless;
 mod logs;
+mod minify;
 mod notifications;
 mod profiles;
 mod project;
@@ -54,6 +55,20 @@ enum Command {
     Script {
         #[command(subcommand)]
         action: scripts::Command,
+    },
+    /// Minify a local Berry source file into a sibling .min.ax file.
+    Minify {
+        file: std::path::PathBuf,
+        #[arg(long, conflicts_with = "no_classes")]
+        classes: bool,
+        #[arg(long = "no-classes", conflicts_with = "classes")]
+        no_classes: bool,
+        #[arg(long, conflicts_with = "no_variables")]
+        variables: bool,
+        #[arg(long = "no-variables", conflicts_with = "variables")]
+        no_variables: bool,
+        #[arg(long)]
+        force: bool,
     },
     Logs {
         #[command(subcommand)]
@@ -658,6 +673,21 @@ fn emit_error(code: &str, message: &str, machine: bool) {
 fn run(cli: &Cli) -> CliResult<Value> {
     if matches!(cli.command, Command::Update) {
         updater::run().map(|message| json!({"updated":true,"message":message}))
+    } else if let Command::Minify {
+        file,
+        classes,
+        no_classes,
+        variables,
+        no_variables,
+        force,
+    } = &cli.command
+    {
+        minify::run(
+            file,
+            *classes || !*no_classes,
+            *variables || !*no_variables,
+            *force,
+        )
     } else {
         run_command(cli)
     }
@@ -754,6 +784,7 @@ fn run_command(cli: &Cli) -> CliResult<Value> {
         Command::Describe { .. } => unreachable!(),
         Command::Profile { .. } => unreachable!(),
         Command::Script { action } => scripts::run(action, &api),
+        Command::Minify { .. } => unreachable!(),
         Command::Logs { action } => logs::run(action, &api, cli.json),
         Command::Screen { action } => screen::run(action, &api),
         Command::Resources { action } => resources::run(action, &api),
@@ -819,6 +850,9 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
                 _ => ("GET /api/v1/apps/{name}/data", "persisted store values", "awtrix-cli script data demo"),
             };
             command_description(&format!("script {action}"), route, output, example)
+        }
+        "minify" => {
+            json!({"command":"minify","parameters":{"<file>":"UTF-8 Berry source file","--classes":"rename top-level classes/functions (enabled by default)","--no-classes":"disable class/function renaming","--variables":"rename locals, parameters, import aliases and supported self fields (enabled by default)","--no-variables":"disable variable renaming","--force":"overwrite an existing .min.ax output"},"inputs":["local Berry source"],"outputs":["sibling .min.ax file; original source is unchanged"],"examples":["awtrix-cli minify main.ax","awtrix-cli minify main.ax --no-classes","awtrix-cli minify main.ax --force"],"prerequisites":["UTF-8 Berry source file"]})
         }
         "logs" | "logs follow" | "logs read" => logs::describe(topic)?,
         "screen" => screen::describe(),
