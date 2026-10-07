@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-**Blocker:** Ticket 18 is not accepted: native macOS/Windows pipeline checks unavailable. Do not start final compatibility acceptance until those prerequisite checks pass. Physical target checks also require explicitly supplied hardware; unavailable physical results must remain marked not executed.
+**Prerequisites:** Ticket 18 accepted after native CI run 37660685612. All software prerequisites are done; this ticket is ready for dispatch. Physical ESP32 target recorded at http://192.168.1.202 (firmware 1.2.2), with read-only diagnosis and prior smoke checks only. Visible/persistent validation requires agreement; unavailable physical results must remain marked not executed. Preserve existing scripts.
 
 ## Acceptance criteria
 

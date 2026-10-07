@@ -28,7 +28,7 @@ Verified unique IDs, existing references, acyclic graph (Luna preflight).
 | 11 | done | ticket/11-verify / .worktrees/ticket-11 | 6d26718 | ed3f70c+95a61ee+f005294+d63840b; review clear; integrated5463ee7 |
 | 15 | done | ticket/15-headless / .worktrees/ticket-15 | 6d26718 | a7f43ae+67d3bb7+c3491b4; review clear; integrated5463ee7; realheadless passed |
 | 13 | done | ticket/13-project / .worktrees/ticket-13 | 445270f | 8380053+fcea5b1+e36b6b4; preflight review clear; real protected example create/update/conflict passed; integrated |
-| 18 | in-progress (external blocker) | ticket/18-dist / .worktrees/ticket-18 | 445270f | 41af415; software review clear; Linux release/HTTP checks pass; integratedf27aa33; native macOS/Windows pending |
+| 18 | done | ticket/18-native-ci-fix / .worktrees/ticket-18-resume | 7ab4ffd (resume) | 41af415 initial + 72f75b5 correction; Luna review clear; integrated c48dfe6; native CI 37660685612 all six jobs pass, three artifacts available |
 | 03 | done | ticket/03-pushed / .worktrees/ticket-03 | 6ac6db5 | 98ba2df+519ce6c; review clear; realheadless pushed create/update/delete; integrated |
 | 14 | done | ticket/14-tracking / .worktrees/ticket-14 | 6ac6db5 | c97c366+1ba7e44+e9a36c1; review clear; integratedffff1a5 |
 | 04 | done | ticket/04-notify / .worktrees/ticket-04 | 3292b9d | 6c4af32+22f1293; reviewedclear integrated41ecc638 |
@@ -36,7 +36,7 @@ Verified unique IDs, existing references, acyclic graph (Luna preflight).
 | 05 | done | ticket/05-rotation / .worktrees/ticket-05 | c3ccad8 | 8e8f136+f07565a; finalreview clear; integratedad44a83 |
 | 17 | done | ticket/17-visual / .worktrees/ticket-17 | c3ccad8 | 0b27e36+b4ba2d3; finalreview clear; integratedad44a83; actualrealvisualtest passed |
 | 06 | done | ticket/06-settings / .worktrees/ticket-06 | 8ed1bb2 | c2f6ac5+ccea906+07c9311; secretredactionfixed; finalreview clear; integrated670d0ee |
-| 19 | ready-for-agent, blocked by incomplete18 | unassigned | — | native runners unavailable |
+| 19 | ready-for-agent | unassigned | — | all software prerequisites done; native CI 37660685612 unlocks acceptance work |
 
 ## Shared contracts
 
@@ -236,3 +236,37 @@ and rebuild from the recorded official source/commands if necessary.
   Permission clarification is not a claimed fix of the database failure.
 - Restart OpenCode to reload agent configuration, then retry dispatch in the prepared
   ticket18 worktree. Actual worker creation and corrected native CI remain unverified.
+
+## Ticket 18 accepted after Luna correction — 2026-10-07
+
+This checkpoint supersedes earlier ticket18/native-runner/session blockers.
+
+- Luna session ses_ee892ba9dffe65pyIzsnY6HtHc launched successfully after restart;
+  delivered 72f75b5 in ticket/18-native-ci-fix from dispatch7ab4ffd. Permissions were
+  clarified, but no root cause of the prior database session failures is established.
+- Independent Luna reviewer ses_ee88fce9affeN47IeFryFzSbvu reviewed fixed-base diff
+  and the explicit ticket18 criteria; no blocking Standards or Spec findings.
+- Integrated correction as c48dfe66479bb2fd8544e31c39868b3823bc5dcd and pushed the
+  authorized integration branch. Linux fmt/clippy/default tests pass (6unit+134CLI;
+  packaged tests skip without explicit artifact variable). Built target-specific Linux
+  release and explicitly ran both distribution tests with AWTRIX_DISTRIBUTION_BINARY:
+  help/version without Rust environment and local HTTP diagnosis passed.
+- Explicit real AWTRIX1.2.2 integration test passed21.48s with recorded Linux binary/UI;
+  Linux headless lifecycle behavior remains checked. No physical mutations performed.
+- Native CI https://github.com/toinux/awtrix-cli/actions/runs/37660685612 is success
+  at c48dfe6: all three host-test jobs and all three package jobs passed. Every host
+  runs format, Clippy, release build, and two tests of the actual release binary;
+  only Linux runs the full CLI suite. macOS/Windows full CLI/headless tests are not claimed.
+- Nonexpired uploaded artifacts, observed through GitHub API:
+  - awtrix-aarch64-apple-darwin: ID11500801642, 2749330 bytes,
+    sha256:86d6a91200eefdc855afa02f250d6cd5449a83c368f7a73a874941bc62fa9b4e.
+  - awtrix-x86_64-pc-windows-msvc: ID11500424304, 2608256 bytes,
+    sha256:4c6a68f39325f872da4e86615a91551ac3635ab035354a1659a8c2eeca433e3d.
+  - awtrix-x86_64-unknown-linux-gnu: ID11500409243, 3024751 bytes,
+    sha256:682be79bb14aef44112e9582b495e3f37b48c31ede6f415834591692d2e1d0da.
+- Acceptance mapping: docs/distribution.md defines hosts/build/install/runtime/personal
+  paths and separates Linux-only headless support; existing profile path unit tests
+  cover Unix/Windows conventions; native CLI/HTTP tests and artifact uploads establish
+  release execution/generation on all announced hosts. No release auto-published.
+- Ticket18 is done. Ticket19 is available, not yet implemented or accepted. Preserve
+  installed physical scripts; full ESP32/ESP32-S3/TC002 compatibility is not claimed.
