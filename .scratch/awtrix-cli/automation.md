@@ -34,7 +34,8 @@ Verified unique IDs, existing references, acyclic graph (Luna preflight).
 | 04 | done | ticket/04-notify / .worktrees/ticket-04 | 3292b9d | 6c4af32+22f1293; reviewedclear integrated41ecc638 |
 | 16 | done | ticket/16-tests / .worktrees/ticket-16 | 3292b9d | f554231; reviewedclear integrated41ecc638; realignoredtest explicitlyrun passed |
 | 05,17 | in-progress | ticket/05-rotation, ticket/17-visual | next journal commit | pending |
-| 06,19 | ready-for-agent, dependencies enforced | unassigned | — | — |
+| 06 | in-progress | ticket/06-settings | next journal commit | pending |
+| 19 | ready-for-agent, blocked by incomplete18 | unassigned | — | native runners unavailable |
 
 ## Shared contracts
 
