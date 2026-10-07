@@ -1051,10 +1051,10 @@ fn screen_capture_writes_rgb_png_and_reports_only_location_and_dimensions() {
     let url = format!("http://{}", server.server_addr());
     let worker = thread::spawn(move || {
         let request = server.recv().unwrap();
-        assert_eq!(request.url(), "/api/v1/screen");
+        assert_eq!(request.url(), "/api/v1/display/screen");
         request
             .respond(Response::from_string(
-                r#"{"width":2,"height":1,"pixels":[[255,0,1],[2,3,4]]}"#,
+                r#"{"width":2,"height":1,"pixels":[16711681,131844]}"#,
             ))
             .unwrap();
     });
@@ -1088,11 +1088,11 @@ fn screen_capture_writes_rgb_png_and_reports_only_location_and_dimensions() {
 fn screen_capture_accepts_dynamic_dimensions_and_rejects_inconsistent_or_oversized_frames() {
     for (frame, code) in [
         (
-            r#"{"width":3,"height":2,"pixels":[[0,0,0],[1,1,1],[2,2,2],[3,3,3],[4,4,4],[5,5,5]]}"#,
+            r#"{"width":3,"height":2,"pixels":[0,65793,131586,197379,263172,328965]}"#,
             None,
         ),
         (
-            r#"{"width":2,"height":2,"pixels":[[0,0,0]]}"#,
+            r#"{"width":2,"height":2,"pixels":[0]}"#,
             Some("INVALID_RESPONSE"),
         ),
         (
@@ -1100,7 +1100,7 @@ fn screen_capture_accepts_dynamic_dimensions_and_rejects_inconsistent_or_oversiz
             Some("INVALID_RESPONSE"),
         ),
         (
-            r#"{"width":1,"height":1,"pixels":[[256,0,0]]}"#,
+            r#"{"width":1,"height":1,"pixels":[16777216]}"#,
             Some("INVALID_RESPONSE"),
         ),
     ] {
@@ -1154,7 +1154,7 @@ fn screen_descriptions_and_file_failures_are_machine_readable() {
             .recv()
             .unwrap()
             .respond(Response::from_string(
-                r#"{"width":1,"height":1,"pixels":[[0,0,0]]}"#,
+                r#"{"width":1,"height":1,"pixels":[0]}"#,
             ))
             .unwrap()
     });
@@ -1173,4 +1173,50 @@ fn screen_descriptions_and_file_failures_are_machine_readable() {
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
         "FILE_WRITE"
     );
+}
+
+#[test]
+fn screen_capture_handles_representative_awtrix_matrix_sizes() {
+    for (width, height) in [(32, 8), (52, 16)] {
+        let pixels = vec![0x12_34_56u32; width * height];
+        let body = serde_json::json!({"width":width,"height":height,"pixels":pixels}).to_string();
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_string(body))
+                .unwrap()
+        });
+        let path = std::env::temp_dir().join(format!(
+            "awtrix-screen-{}x{}-{}.png",
+            width,
+            height,
+            std::process::id()
+        ));
+        let path_arg = path.to_string_lossy().into_owned();
+        let output = run(&[
+            "--target", &url, "--json", "screen", "capture", "--output", &path_arg,
+        ]);
+        worker.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut reader = png::Decoder::new(std::fs::File::open(&path).unwrap())
+            .read_info()
+            .unwrap();
+        assert_eq!(
+            (reader.info().width, reader.info().height),
+            (width as u32, height as u32)
+        );
+        let mut decoded = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut decoded).unwrap();
+        assert!(decoded[..info.buffer_size()]
+            .chunks(3)
+            .all(|rgb| rgb == [0x12, 0x34, 0x56]));
+        std::fs::remove_file(path).unwrap();
+    }
 }

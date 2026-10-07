@@ -21,7 +21,7 @@ pub enum Command {
 pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value> {
     match command {
         Command::Capture { output } => {
-            let bytes = api.raw_bytes_get("/api/v1/screen")?;
+            let bytes = api.raw_bytes_get("/api/v1/display/screen")?;
             let frame: Value = serde_json::from_slice(&bytes)
                 .map_err(|_| ("INVALID_RESPONSE", "invalid framebuffer JSON".into()))?;
             let width = frame
@@ -51,23 +51,21 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                 ))?;
             let mut rgb = Vec::with_capacity(count as usize * 3);
             for pixel in pixels {
-                let channels = pixel
-                    .as_array()
-                    .filter(|channels| channels.len() == 3)
+                let packed = pixel
+                    .as_u64()
+                    .filter(|value| *value <= 0x00ff_ffff)
                     .ok_or((
                         "INVALID_RESPONSE",
-                        "framebuffer pixel must contain three RGB channels".into(),
-                    ))?;
-                for channel in channels {
-                    let value = channel.as_u64().filter(|v| *v <= 255).ok_or((
-                        "INVALID_RESPONSE",
-                        "RGB channels must be decimal integers from 0 to 255".into(),
-                    ))?;
-                    rgb.push(value as u8);
-                }
+                        "packed RGB pixels must be unsigned decimal integers from 0 to 16777215"
+                            .into(),
+                    ))? as u32;
+                rgb.extend_from_slice(&[
+                    ((packed >> 16) & 0xff) as u8,
+                    ((packed >> 8) & 0xff) as u8,
+                    (packed & 0xff) as u8,
+                ]);
             }
-            // API contract for this CLI slice: /api/v1/screen returns width, height and
-            // row-major pixels as [red, green, blue] decimal integer triplets.
+            // Official API pixels are unsigned decimal encodings of packed 0xRRGGBB.
             let file = File::create(output).map_err(|_| {
                 (
                     "FILE_WRITE",
@@ -89,5 +87,5 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
 }
 
 pub fn describe() -> Value {
-    json!({"command":"screen capture","parameters":{"--output":"required PNG destination path"},"inputs":["GET /api/v1/screen framebuffer JSON"],"outputs":["path, format, width, height"],"examples":["awtrix screen capture --output capture.png","awtrix --json screen capture --output capture.png"],"prerequisites":["AWTRIX NG framebuffer route"],"limitations":["Framebuffer does not reproduce physical brightness or LED corrections and is not synchronized deterministically to a frame"]})
+    json!({"command":"screen capture","parameters":{"--output":"required PNG destination path"},"inputs":["GET /api/v1/display/screen; row-major pixels are unsigned decimal packed 0xRRGGBB"],"outputs":["path, format, width, height"],"examples":["awtrix screen capture --output capture.png","awtrix --json screen capture --output capture.png"],"prerequisites":["AWTRIX NG framebuffer route"],"limitations":["Framebuffer does not reproduce physical brightness or LED corrections and is not synchronized deterministically to a frame"]})
 }
