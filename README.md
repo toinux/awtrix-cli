@@ -255,9 +255,12 @@ device's advertised capabilities. The client-host distribution matrix is Linux
 x86_64 (GNU/glibc), macOS arm64, and Windows x86_64 (MSVC); headless lifecycle and
 isolated headless testing are Linux-only.
 
-Core implementation tickets 01–17 are complete in this checkout. Native
-macOS/Windows distribution acceptance (ticket 18) and the physical-device
-compatibility matrix (ticket 19) remain pending. Linux checks, HTTP fixtures, and
+Tickets 01–18 are complete. See [end-to-end workflow and compatibility
+evidence](docs/validation.md) for the reproducible agent scenario and the
+separate HTTP simulation, actual headless, host distribution, and physical
+evidence. The physical main path is not yet validated on any variant: only
+read-only diagnosis and limited smoke checks exist for one ESP32. ESP32-S3 and
+TC002 physical checks were not executed. Linux checks, HTTP fixtures, and
 headless runs are not physical-device validation. Headless tests do not validate
 sensors, audio, or hardware memory/instruction budgets.
 
@@ -277,6 +280,8 @@ record the remaining acceptance gates.
   request limits, and device acceptance semantics.
 - [Distribution](docs/distribution.md) — build targets, standalone artifacts,
   native validation, and headless prerequisites.
+- [Validation evidence](docs/validation.md) — agent workflow, correction path,
+  evidence classes, compatibility limits, and physical resumption protocol.
 - [Example project](examples/project/awtrix.toml) — scripts, module, resource,
   and declarative assertions ready to inspect and test.
 - [AWTRIX NG](https://github.com/Blueforcer/awtrix-ng) — the upstream firmware
