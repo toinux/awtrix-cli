@@ -71,6 +71,202 @@ fn test_http_server(runtime_error: bool) -> (String, thread::JoinHandle<()>) {
     (url, worker)
 }
 
+fn write_rgb_png(path: &std::path::Path, width: u32, height: u32, pixels: &[u8]) {
+    let file = std::fs::File::create(path).unwrap();
+    let mut encoder = png::Encoder::new(file, width, height);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(pixels)
+        .unwrap();
+}
+
+fn visual_server(width: u32, height: u32, pixel: u32) -> (String, thread::JoinHandle<()>) {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let started = std::time::Instant::now();
+        while started.elapsed() < Duration::from_secs(2) {
+            let Some(mut request) = server.recv_timeout(Duration::from_millis(250)).unwrap() else {
+                break;
+            };
+            let route = request.url().split('?').next().unwrap().to_owned();
+            let body = match route.as_str() {
+                "/api/v1/device" => r#"{"uid":"visual-device"}"#.to_owned(),
+                "/api/v1/capabilities" => r#"{"scriptUpdates":true}"#.to_owned(),
+                "/api/v1/apps/script-update/main" => r#"{}"#.to_owned(),
+                "/api/v1/system" => r#"{"scriptingEnabled":true}"#.to_owned(),
+                "/api/v1/apps" => {
+                    r#"[{"name":"main","origin":"script","enabled":true,"error":null}]"#.to_owned()
+                }
+                "/api/v1/apps/active" => {
+                    let mut data = String::new();
+                    request.as_reader().read_to_string(&mut data).unwrap();
+                    assert_eq!(
+                        serde_json::from_str::<serde_json::Value>(&data).unwrap(),
+                        serde_json::json!({"name":"main","fast":true})
+                    );
+                    r#"{"ok":true}"#.to_owned()
+                }
+                "/api/v1/display/screen" => {
+                    let mut pixels = vec![0_u32; (width * height) as usize];
+                    pixels[0] = pixel;
+                    serde_json::json!({"width":width,"height":height,"pixels":pixels}).to_string()
+                }
+                other => panic!("unexpected visual test route: {other}"),
+            };
+            request.respond(Response::from_string(body)).unwrap();
+        }
+    });
+    (url, worker)
+}
+
+fn run_visual_case(
+    reference_size: (u32, u32),
+    capture_size: (u32, u32),
+    capture_pixel: u32,
+    max_channel_diff: u8,
+    max_different_pixels: u64,
+) -> (Output, tempfile::TempDir) {
+    let root = tempfile::tempdir().unwrap();
+    let visual_dir = root.path().join("visual");
+    std::fs::create_dir_all(&visual_dir).unwrap();
+    let mut expected = vec![0; (reference_size.0 * reference_size.1 * 3) as usize];
+    expected[0] = 255;
+    write_rgb_png(
+        &visual_dir.join("reference.png"),
+        reference_size.0,
+        reference_size.1,
+        &expected,
+    );
+    std::fs::create_dir_all(root.path().join("src")).unwrap();
+    std::fs::write(
+        root.path().join("src/main.be"),
+        "# @name main\nclass Main\n  def draw()\n    clear()\n  end\nend\nreturn Main()\n",
+    )
+    .unwrap();
+    std::fs::write(root.path().join("awtrix.toml"), format!("[project]\nname='visual-test'\nversion='1'\n[[scripts]]\nname='main'\nfile='src/main.be'\ncreate=true\n[tests]\nwindow_secs=1\n[[tests.assertion]]\nname='frame'\nreference='visual/reference.png'\nmax_channel_diff={max_channel_diff}\nmax_different_pixels={max_different_pixels}\nselect_app='main'\n")).unwrap();
+    let (url, worker) = visual_server(capture_size.0, capture_size.1, capture_pixel);
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "test",
+        "project",
+        "--manifest",
+        root.path().join("awtrix.toml").to_str().unwrap(),
+    ]);
+    worker.join().unwrap();
+    (output, root)
+}
+
+#[test]
+fn visual_cli_reports_exact_and_tolerated_pixels_and_persists_capture_without_pixel_arrays() {
+    for (pixel, channel_tolerance, pixel_tolerance) in [(0xFF0000, 0, 0), (0xFE0000, 2, 0)] {
+        let (output, root) =
+            run_visual_case((32, 8), (32, 8), pixel, channel_tolerance, pixel_tolerance);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["assertions"][0]["observed"]["different_pixels"], 0);
+        let capture = root.path().join("visual/reference.frame.capture.png");
+        assert!(capture.is_file());
+        assert!(root
+            .path()
+            .join("visual/reference.frame.capture.diff.png")
+            .is_file());
+        let decoder = png::Decoder::new(std::fs::File::open(capture).unwrap());
+        let mut reader = decoder.read_info().unwrap();
+        let mut bytes = vec![0; reader.output_buffer_size()];
+        let info = reader.next_frame(&mut bytes).unwrap();
+        assert_eq!(
+            &bytes[..info.buffer_size()][..3],
+            &[
+                ((pixel >> 16) & 0xff) as u8,
+                ((pixel >> 8) & 0xff) as u8,
+                (pixel & 0xff) as u8,
+            ]
+        );
+        assert!(report["assertions"][0]["observed"].get("pixels").is_none());
+    }
+}
+
+#[test]
+fn visual_cli_fails_for_excessive_difference_and_incompatible_dimensions() {
+    let (different, different_root) = run_visual_case((32, 8), (32, 8), 0, 0, 0);
+    assert_eq!(different.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&different.stdout).unwrap();
+    assert_eq!(report["assertions"][0]["passed"], false);
+    assert_eq!(report["assertions"][0]["observed"]["different_pixels"], 1);
+    let diff_path = different_root
+        .path()
+        .join("visual/reference.frame.capture.diff.png");
+    let decoder = png::Decoder::new(std::fs::File::open(diff_path).unwrap());
+    let mut reader = decoder.read_info().unwrap();
+    let mut bytes = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut bytes).unwrap();
+    assert_eq!(&bytes[..info.buffer_size()][..3], &[255, 0, 0]);
+    let (dimensions, _) = run_visual_case((32, 8), (16, 8), 0xFF0000, 0, 0);
+    assert_eq!(dimensions.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&dimensions.stdout).unwrap();
+    assert_eq!(
+        report["assertions"][0]["observed"]["collection_error"],
+        "IMAGE_DIMENSIONS"
+    );
+}
+
+#[test]
+fn invalid_visual_reference_fails_before_any_device_request() {
+    let root = tempfile::tempdir().unwrap();
+    declarative_project(
+        root.path(),
+        "[[tests.assertion]]\nname='image'\nreference='missing.png'",
+    );
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "test",
+        "project",
+        "--manifest",
+        root.path().join("awtrix.toml").to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["error"]["code"], "IMAGE_INVALID");
+    assert!(server
+        .recv_timeout(Duration::from_millis(50))
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn structured_test_description_publishes_visual_schema_and_limits() {
+    let output = run(&["--json", "describe", "test project"]);
+    assert_eq!(output.status.code(), Some(0));
+    let description: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let schema = description["schema"]["[[tests.assertion]] visual"]
+        .as_object()
+        .unwrap();
+    assert!(schema.contains_key("reference"));
+    assert!(schema.contains_key("max_channel_diff"));
+    assert!(schema.contains_key("max_different_pixels"));
+    assert!(schema.contains_key("select_app"));
+    assert!(description["limitations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|limit| limit.as_str().unwrap().contains("No exact-frame")));
+}
+
 #[test]
 fn declarative_project_tests_deploy_and_report_assertions_over_the_requested_window() {
     let root = tempfile::tempdir().unwrap();

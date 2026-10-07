@@ -111,7 +111,7 @@ pub(crate) fn capture_png(
 }
 
 /// Persist a fully encoded PNG through tempfile's cross-platform atomic replacement operation.
-fn persist_sibling(path: &PathBuf, bytes: &[u8]) -> crate::CliResult<()> {
+pub(crate) fn persist_sibling(path: &PathBuf, bytes: &[u8]) -> crate::CliResult<()> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
