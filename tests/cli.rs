@@ -160,10 +160,13 @@ fn project_deployment_orders_dependencies_and_reports_partial_failure_additively
     let url = format!("http://{}", server.server_addr());
     let worker = thread::spawn(move || {
         let mut routes = Vec::new();
-        for _ in 0..6 {
+        for _ in 0..7 {
             let mut r = server.recv().unwrap();
             routes.push((r.method().to_string(), r.url().to_owned()));
             match routes.last().unwrap().1.as_str() {
+                "/api/v1/device" => {
+                    let _ = r.respond(Response::from_string(r#"{"uid":"device-a"}"#));
+                }
                 "/api/v1/apps/script/helpers" => {
                     let _ = r.respond(Response::from_string("{}"));
                 }
@@ -212,6 +215,7 @@ fn project_deployment_orders_dependencies_and_reports_partial_failure_additively
     assert_eq!(
         routes.iter().map(|(_, u)| u.as_str()).collect::<Vec<_>>(),
         vec![
+            "/api/v1/device",
             "/api/v1/apps/script/helpers",
             "/api/v1/files?dir=/FILES",
             "/api/v1/capabilities",
@@ -223,11 +227,22 @@ fn project_deployment_orders_dependencies_and_reports_partial_failure_additively
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["additive"], true);
     assert_eq!(report["target_origin"], "command-line");
+    let tracking_path = std::fs::read_dir(&root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".awtrix-tracking-")
+        })
+        .unwrap();
     let tracking: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(root.join(".awtrix-tracking.json")).unwrap())
-            .unwrap();
+        serde_json::from_slice(&std::fs::read(tracking_path).unwrap()).unwrap();
     assert_eq!(tracking["project"], "sample");
     assert_eq!(tracking["target"], url);
+    assert_eq!(tracking["device_id"], "device-a");
     assert_eq!(tracking["entries"].as_array().unwrap().len(), 3);
     let _ = std::fs::remove_dir_all(root);
 }
@@ -245,7 +260,13 @@ fn project_prune_refuses_tracking_for_another_endpoint_before_http_or_deletion()
         "[project]\nname='sample'\nversion='1'\n",
     )
     .unwrap();
-    std::fs::write(root.join(".awtrix-tracking.json"), r#"{"version":1,"project":"sample","target":"http://127.0.0.1:1/","entries":["script:foreign"]}"#).unwrap();
+    let target = "http://127.0.0.1:2";
+    let hash = format!("sample\0{target}")
+        .bytes()
+        .fold(0xcbf29ce484222325u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+        });
+    std::fs::write(root.join(format!(".awtrix-tracking-{hash:016x}.json")), r#"{"version":2,"project":"sample","target":"http://127.0.0.1:1","device_id":null,"entries":["script:foreign"]}"#).unwrap();
     let out = run(&[
         "--target",
         "http://127.0.0.1:2",
@@ -262,6 +283,218 @@ fn project_prune_refuses_tracking_for_another_endpoint_before_http_or_deletion()
 }
 
 #[test]
+fn project_prune_refuses_changed_device_identity_at_same_endpoint() {
+    let root = std::env::temp_dir().join(format!("awtrix-device-identity-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("awtrix.toml"),
+        "[project]\nname='identity'\nversion='1'\n",
+    )
+    .unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let key = format!("identity\0{url}")
+        .bytes()
+        .fold(0xcbf29ce484222325u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+        });
+    std::fs::write(root.join(format!(".awtrix-tracking-{key:016x}.json")), format!(r#"{{"version":2,"project":"identity","target":"{url}","device_id":"old-unit","entries":["script:old"] ,"uncertain":[]}}"#)).unwrap();
+    let worker = thread::spawn(move || {
+        let request = server
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request
+            .respond(Response::from_string(r#"{"uid":"new-unit"}"#))
+            .unwrap();
+    });
+    let out = run(&[
+        "--target",
+        &url,
+        "--json",
+        "project",
+        "prune",
+        "--manifest",
+        root.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    worker.join().unwrap();
+    assert!(!out.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()["error"]["code"],
+        "TRACKING_INVALID"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn project_tracking_isolated_for_two_projects_and_two_targets() {
+    let root = std::env::temp_dir().join(format!("awtrix-two-projects-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let one = root.join("one");
+    let two = root.join("two");
+    std::fs::create_dir_all(&one).unwrap();
+    std::fs::create_dir_all(&two).unwrap();
+    std::fs::write(one.join("a.be"), "# @module a\n").unwrap();
+    std::fs::write(two.join("b.be"), "# @module b\n").unwrap();
+    std::fs::write(
+        one.join("awtrix.toml"),
+        "[project]\nname='project-one'\nversion='1'\n[[modules]]\nname='a'\nfile='a.be'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        two.join("awtrix.toml"),
+        "[project]\nname='project-two'\nversion='1'\n[[modules]]\nname='b'\nfile='b.be'\n",
+    )
+    .unwrap();
+    let device_one = Server::http("127.0.0.1:0").unwrap();
+    let target_one = format!("http://{}", device_one.server_addr());
+    let worker_one = thread::spawn(move || {
+        for (route, response) in [
+            ("/api/v1/device", r#"{"uid":"one"}"#),
+            ("/api/v1/apps/script/a", "{}"),
+        ] {
+            let request = device_one.recv().unwrap();
+            assert_eq!(request.url(), route);
+            request.respond(Response::from_string(response)).unwrap();
+        }
+        let request = device_one.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request
+            .respond(Response::from_string(r#"{"uid":"one"}"#))
+            .unwrap();
+        let request = device_one.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Delete);
+        assert_eq!(request.url(), "/api/v1/apps/a");
+        request.respond(Response::from_string("{}")).unwrap();
+    });
+    let device_two = Server::http("127.0.0.1:0").unwrap();
+    let target_two = format!("http://{}", device_two.server_addr());
+    let worker_two = thread::spawn(move || {
+        for (route, response) in [
+            ("/api/v1/device", r#"{"uid":"two"}"#),
+            ("/api/v1/apps/script/b", "{}"),
+        ] {
+            let request = device_two.recv().unwrap();
+            assert_eq!(request.url(), route);
+            request.respond(Response::from_string(response)).unwrap();
+        }
+    });
+    let out_one = run(&[
+        "--target",
+        &target_one,
+        "--json",
+        "project",
+        "deploy",
+        "--manifest",
+        one.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    assert!(
+        out_one.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out_one.stdout)
+    );
+    let out_two = run(&[
+        "--target",
+        &target_two,
+        "--json",
+        "project",
+        "deploy",
+        "--manifest",
+        two.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    assert!(
+        out_two.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out_two.stdout)
+    );
+    std::fs::write(
+        one.join("awtrix.toml"),
+        "[project]\nname='project-one'\nversion='1'\n",
+    )
+    .unwrap();
+    let prune = run(&[
+        "--target",
+        &target_one,
+        "--json",
+        "project",
+        "prune",
+        "--manifest",
+        one.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    assert!(
+        prune.status.success(),
+        "{}",
+        String::from_utf8_lossy(&prune.stdout)
+    );
+    worker_one.join().unwrap();
+    worker_two.join().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&prune.stdout).unwrap()["deleted"],
+        serde_json::json!(["module:a"])
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn project_reports_known_remote_success_when_tracking_persistence_fails() {
+    let root = std::env::temp_dir().join(format!(
+        "awtrix-tracking-write-failure-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("module.be"), "# @module known\n").unwrap();
+    std::fs::write(root.join("awtrix.toml"), "[project]\nname='known-success'\nversion='1'\n[[modules]]\nname='known'\nfile='module.be'\n").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let target = format!("http://{}", server.server_addr());
+    let key = format!("known-success\0{target}")
+        .bytes()
+        .fold(0xcbf29ce484222325u64, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+        });
+    let tracking_path = root.join(format!(".awtrix-tracking-{key:016x}.json"));
+    std::fs::write(&tracking_path, format!(r#"{{"version":2,"project":"known-success","target":"{target}","device_id":null,"entries":[],"uncertain":[]}}"#)).unwrap();
+    let state_path_for_server = tracking_path.clone();
+    let worker = thread::spawn(move || {
+        let request = server
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request.respond(Response::from_string("{}")).unwrap();
+        let request = server
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/script/known");
+        std::fs::remove_file(&state_path_for_server).unwrap();
+        std::fs::create_dir(&state_path_for_server).unwrap();
+        request.respond(Response::from_string("{}")).unwrap();
+    });
+    let out = run(&[
+        "--target",
+        &target,
+        "--json",
+        "project",
+        "deploy",
+        "--manifest",
+        root.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    worker.join().unwrap();
+    assert!(!out.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        report["report"]["succeeded"],
+        serde_json::json!(["module:known"])
+    );
+    assert_eq!(report["report"]["tracking_error"], true);
+    assert_eq!(report["report"]["failed"], serde_json::Value::Null);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn project_stops_on_first_remote_error_and_reports_unrun_work_without_deleting_foreign_items() {
     let root = std::env::temp_dir().join(format!("awtrix-project-partial-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -274,8 +507,15 @@ fn project_stops_on_first_remote_error_and_reports_unrun_work_without_deleting_f
     let url = format!("http://{}", server.server_addr());
     let worker = thread::spawn(move || {
         let r = server.recv().unwrap();
+        assert_eq!(r.url(), "/api/v1/device");
+        r.respond(Response::from_string(r#"{"uid":"device-partial"}"#))
+            .unwrap();
+        let r = server.recv().unwrap();
         assert_eq!(r.url(), "/api/v1/apps/script/helpers");
-        r.respond(Response::from_string("{}").with_status_code(500))
+        r.respond(Response::from_string("{}")).unwrap();
+        let r = server.recv().unwrap();
+        assert_eq!(r.url(), "/api/v1/files?dir=/FILES");
+        r.respond(Response::from_string("failure").with_status_code(500))
             .unwrap();
     });
     let out = run(&[
@@ -291,13 +531,153 @@ fn project_stops_on_first_remote_error_and_reports_unrun_work_without_deleting_f
     assert_eq!(out.status.code(), Some(1));
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["error"]["code"], "PROJECT_DEPLOY_FAILED");
-    assert_eq!(report["report"]["succeeded"], serde_json::json!([]));
-    assert_eq!(report["report"]["failed_operation"], "module:helpers");
+    assert_eq!(
+        report["report"]["succeeded"],
+        serde_json::json!(["module:helpers"])
+    );
+    assert_eq!(
+        report["report"]["failed_operation"],
+        "resource:/FILES/a.bin"
+    );
     assert_eq!(
         report["report"]["not_run"],
-        serde_json::json!(["resource:/FILES/a.bin", "script:main"])
+        serde_json::json!(["script:main"])
+    );
+    let tracking_path = std::fs::read_dir(&root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".awtrix-tracking-")
+        })
+        .unwrap();
+    let tracking: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(tracking_path).unwrap()).unwrap();
+    assert_eq!(tracking["entries"], serde_json::json!(["module:helpers"]));
+    assert_eq!(
+        tracking["uncertain"],
+        serde_json::json!(["resource:/FILES/a.bin"])
     );
     assert_eq!(report["report"]["transactional"], false);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn project_prune_deletes_only_tracked_entries_and_retains_failed_entry_in_state() {
+    let root = std::env::temp_dir().join(format!("awtrix-prune-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.be"), "# @module a\n").unwrap();
+    std::fs::write(root.join("b.be"), "# @module b\n").unwrap();
+    std::fs::write(root.join("awtrix.toml"), "[project]\nname='prune-test'\nversion='1'\n[[modules]]\nname='a'\nfile='a.be'\n[[modules]]\nname='b'\nfile='b.be'\n").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let deploy_worker = thread::spawn(move || {
+        for expected in [
+            "/api/v1/device",
+            "/api/v1/apps/script/a",
+            "/api/v1/apps/script/b",
+        ] {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), expected);
+            request
+                .respond(Response::from_string(if expected == "/api/v1/device" {
+                    r#"{"uid":"prune-unit"}"#
+                } else {
+                    "{}"
+                }))
+                .unwrap();
+        }
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request
+            .respond(Response::from_string(r#"{"uid":"prune-unit"}"#))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Delete);
+        assert_eq!(request.url(), "/api/v1/apps/a");
+        request.respond(Response::from_string("{}")).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Delete);
+        assert_eq!(request.url(), "/api/v1/apps/b");
+        request
+            .respond(Response::from_string("private body omitted").with_status_code(500))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request
+            .respond(Response::from_string(r#"{"uid":"prune-unit"}"#))
+            .unwrap();
+    });
+    let deploy = run(&[
+        "--target",
+        &url,
+        "--json",
+        "project",
+        "deploy",
+        "--manifest",
+        root.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    // Keep the HTTP worker alive for the explicit prune invocation below.
+    assert!(
+        deploy.status.success(),
+        "{}",
+        String::from_utf8_lossy(&deploy.stdout)
+    );
+    std::fs::write(
+        root.join("awtrix.toml"),
+        "[project]\nname='prune-test'\nversion='1'\n",
+    )
+    .unwrap();
+    let prune = run(&[
+        "--target",
+        &url,
+        "--json",
+        "project",
+        "prune",
+        "--manifest",
+        root.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    let retry = run(&[
+        "--target",
+        &url,
+        "--json",
+        "project",
+        "prune",
+        "--manifest",
+        root.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    deploy_worker.join().unwrap();
+    assert!(!prune.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&prune.stdout).unwrap();
+    assert_eq!(
+        report["report"]["succeeded"],
+        serde_json::json!(["module:a"])
+    );
+    assert_eq!(report["report"]["failed"], "module:b");
+    assert!(!String::from_utf8_lossy(&prune.stdout).contains("private body omitted"));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&retry.stdout).unwrap()["error"]["code"],
+        "TRACKING_UNCERTAIN"
+    );
+    let tracking_path = std::fs::read_dir(&root)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".awtrix-tracking-")
+        })
+        .unwrap();
+    let tracking: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(tracking_path).unwrap()).unwrap();
+    assert_eq!(tracking["entries"], serde_json::json!(["module:b"]));
+    assert_eq!(tracking["uncertain"], serde_json::json!(["module:b"]));
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -318,6 +698,9 @@ fn project_profile_is_used_below_explicit_and_environment_targets() {
     std::fs::write(root.join("module.be"), "# @module helper\n").unwrap();
     std::fs::write(root.join("awtrix.toml"), "[project]\nname='targets'\nversion='1'\n[target]\nprofile='project-device'\n[[modules]]\nname='helper'\nfile='module.be'\n").unwrap();
     let project_worker = thread::spawn(move || {
+        let r = project_server.recv().unwrap();
+        assert_eq!(r.url(), "/api/v1/device");
+        r.respond(Response::from_string("{}")).unwrap();
         let r = project_server.recv().unwrap();
         assert_eq!(r.url(), "/api/v1/apps/script/helper");
         r.respond(Response::from_string("{}")).unwrap();
@@ -343,6 +726,9 @@ fn project_profile_is_used_below_explicit_and_environment_targets() {
     let env_url = format!("http://{}", env_server.server_addr());
     let env_worker = thread::spawn(move || {
         let r = env_server.recv().unwrap();
+        assert_eq!(r.url(), "/api/v1/device");
+        r.respond(Response::from_string("{}")).unwrap();
+        let r = env_server.recv().unwrap();
         r.respond(Response::from_string("{}")).unwrap();
     });
     let env_out = Command::new(env!("CARGO_BIN_EXE_awtrix"))
@@ -365,6 +751,9 @@ fn project_profile_is_used_below_explicit_and_environment_targets() {
     let explicit_server = Server::http("127.0.0.1:0").unwrap();
     let explicit_url = format!("http://{}", explicit_server.server_addr());
     let explicit_worker = thread::spawn(move || {
+        let r = explicit_server.recv().unwrap();
+        assert_eq!(r.url(), "/api/v1/device");
+        r.respond(Response::from_string("{}")).unwrap();
         let r = explicit_server.recv().unwrap();
         r.respond(Response::from_string("{}")).unwrap();
     });

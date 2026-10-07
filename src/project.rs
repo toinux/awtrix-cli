@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use std::{
     collections::HashSet,
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -111,14 +112,29 @@ struct Tracking {
     version: u32,
     project: String,
     target: String,
+    #[serde(default)]
+    device_id: Option<String>,
     entries: Vec<String>,
+    #[serde(default)]
+    uncertain: Vec<String>,
 }
 
-fn tracking_path(manifest: &Path) -> PathBuf {
-    manifest.with_file_name(".awtrix-tracking.json")
+fn tracking_path(manifest: &Path, project: &str, target: &str) -> PathBuf {
+    // FNV is only a filename discriminator, not a security primitive; the full identity
+    // is independently checked inside the state file, so collisions fail closed.
+    let key = format!("{project}\0{target}");
+    let hash = key.bytes().fold(0xcbf29ce484222325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+    });
+    manifest.with_file_name(format!(".awtrix-tracking-{hash:016x}.json"))
 }
 
-fn read_tracking(path: &Path, project: &str, target: &str) -> Result<Tracking> {
+fn read_tracking(
+    path: &Path,
+    project: &str,
+    target: &str,
+    device_id: Option<&str>,
+) -> Result<Tracking> {
     let bytes = fs::read(path).map_err(|_| {
         (
             "TRACKING_INVALID",
@@ -131,10 +147,12 @@ fn read_tracking(path: &Path, project: &str, target: &str) -> Result<Tracking> {
             "tracking state is corrupt; refusing deletion".into(),
         )
     })?;
-    if state.version != 1
+    if state.version != 2
         || state.project != project
         || state.target != target
+        || device_id.is_some_and(|expected| state.device_id.as_deref() != Some(expected))
         || state.entries.iter().any(|e| !valid_tracked_entry(e))
+        || state.uncertain.iter().any(|e| !valid_uncertain_entry(e))
     {
         return Err((
             "TRACKING_INVALID",
@@ -158,23 +176,48 @@ fn valid_tracked_entry(entry: &str) -> bool {
     })
 }
 
+fn valid_uncertain_entry(entry: &str) -> bool {
+    valid_tracked_entry(entry)
+        || entry
+            .strip_prefix("config:")
+            .is_some_and(|name| valid_name(name).is_ok())
+}
+
 fn save_tracking(path: &Path, state: &Tracking) -> Result<()> {
     let bytes = serde_json::to_vec(state)
         .map_err(|_| ("TRACKING_WRITE", "cannot encode tracking state".into()))?;
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, bytes).map_err(|_| ("TRACKING_WRITE", "cannot write tracking state".into()))?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|_| {
+        (
+            "TRACKING_WRITE",
+            "cannot create private tracking state temporary file".into(),
+        )
+    })?;
+    tmp.write_all(&bytes)
+        .map_err(|_| ("TRACKING_WRITE", "cannot write tracking state".into()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
+        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o600))
             .map_err(|_| ("TRACKING_WRITE", "cannot secure tracking state".into()))?;
     }
-    fs::rename(tmp, path).map_err(|_| {
+    tmp.persist(path).map(|_| ()).map_err(|_| {
         (
             "TRACKING_WRITE",
             "cannot atomically replace tracking state".into(),
         )
     })
+}
+
+fn device_id(api: &crate::ApiClient) -> Result<Option<String>> {
+    let value = api.get("/api/v1/device")?;
+    Ok(["uid", "deviceId", "serial"].iter().find_map(|key| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+    }))
 }
 
 fn load(path: &Path) -> Result<Loaded> {
@@ -391,6 +434,25 @@ fn deploy(p: Loaded, manifest_path: &Path, cli: &crate::Cli, force: bool) -> Res
         .to_string()
         .trim_end_matches('/')
         .to_owned();
+    let device_id = device_id(&api)?;
+    let state_path = tracking_path(manifest_path, &p.manifest.project.name, &target);
+    let mut entries = match fs::read(&state_path) {
+        Ok(_) => {
+            read_tracking(
+                &state_path,
+                &p.manifest.project.name,
+                &target,
+                device_id.as_deref(),
+            )?
+            .entries
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(_) => return Err((
+            "TRACKING_INVALID",
+            "tracking state is unreadable; refusing deployment that could desynchronize tracking"
+                .into(),
+        )),
+    };
     let mut operations = Vec::new();
     for m in &p.manifest.modules {
         operations.push(format!("module:{}", m.name));
@@ -416,7 +478,16 @@ fn deploy(p: Loaded, manifest_path: &Path, cli: &crate::Cli, force: bool) -> Res
                     "module deployment returned a Berry error".into(),
                 ));
             }
-            succeeded.push(operations[index - 1].clone());
+            let operation = operations[index - 1].clone();
+            succeeded.push(operation.clone());
+            persist_success(
+                &state_path,
+                &p.manifest.project.name,
+                &target,
+                device_id.as_deref(),
+                &mut entries,
+                &operation,
+            )?;
         }
         for (i, r) in p.manifest.resources.iter().enumerate() {
             index += 1;
@@ -437,7 +508,16 @@ fn deploy(p: Loaded, manifest_path: &Path, cli: &crate::Cli, force: bool) -> Res
                     .file_name(filename.to_owned()),
             );
             api.multipart_post(&format!("/api/v1/files?dir={}", encode(dir)), form)?;
-            succeeded.push(operations[index - 1].clone());
+            let operation = operations[index - 1].clone();
+            succeeded.push(operation.clone());
+            persist_success(
+                &state_path,
+                &p.manifest.project.name,
+                &target,
+                device_id.as_deref(),
+                &mut entries,
+                &operation,
+            )?;
         }
         for (i, s) in p.manifest.scripts.iter().enumerate() {
             index += 1;
@@ -449,7 +529,16 @@ fn deploy(p: Loaded, manifest_path: &Path, cli: &crate::Cli, force: bool) -> Res
                 s.create,
                 force,
             )?;
-            succeeded.push(operations[index - 1].clone());
+            let operation = operations[index - 1].clone();
+            succeeded.push(operation.clone());
+            persist_success(
+                &state_path,
+                &p.manifest.project.name,
+                &target,
+                device_id.as_deref(),
+                &mut entries,
+                &operation,
+            )?;
         }
         for (i, c) in p.manifest.config.iter().enumerate() {
             index += 1;
@@ -463,63 +552,107 @@ fn deploy(p: Loaded, manifest_path: &Path, cli: &crate::Cli, force: bool) -> Res
         Ok(())
     })();
     if let Err((code, message)) = execution {
-        let failed = operations.get(index.saturating_sub(1)).cloned();
+        let tracking_error = code == "TRACKING_WRITE";
+        let failed = (!tracking_error)
+            .then(|| operations.get(index.saturating_sub(1)).cloned())
+            .flatten();
         let not_run: Vec<_> = operations.iter().skip(index).cloned().collect();
-        // Only confirmed successes are tracked. A failed mutation is marked uncertain because
-        // the device may have applied it before the response was lost.
-        let prior = fs::read(tracking_path(manifest_path))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Tracking>(&b).ok())
-            .filter(|s| {
-                s.version == 1 && s.project == p.manifest.project.name && s.target == target
-            })
-            .map(|s| s.entries)
-            .unwrap_or_default();
-        let mut entries = prior;
-        for entry in &succeeded {
-            if valid_tracked_entry(entry) && !entries.contains(entry) {
-                entries.push(entry.clone());
+        if let Some(uncertain) = failed
+            .as_deref()
+            .filter(|entry| valid_uncertain_entry(entry))
+        {
+            if let Err((_, state_error)) = persist_uncertain(
+                &state_path,
+                &p.manifest.project.name,
+                &target,
+                device_id.as_deref(),
+                &entries,
+                uncertain,
+            ) {
+                return Err((
+                    "PROJECT_DEPLOY_FAILED",
+                    format!(
+                        "{message}; tracking update failed: {state_error}; deployment report: {}",
+                        json!({"succeeded":succeeded,"failed":failed,"not_run":not_run,"uncertain":[uncertain],"tracking_error":true,"transactional":false,"cause":code})
+                    ),
+                ));
             }
         }
-        let state = Tracking {
-            version: 1,
-            project: p.manifest.project.name.clone(),
-            target: target.clone(),
-            entries,
-        };
-        let _ = save_tracking(&tracking_path(manifest_path), &state);
+        // Only confirmed successes are tracked. A failed mutation is marked uncertain because
+        // the device may have applied it before the response was lost.
         return Err((
             "PROJECT_DEPLOY_FAILED",
             format!(
                 "{message}; deployment report: {}",
-                json!({"succeeded":succeeded,"failed":failed,"not_run":not_run,"uncertain":failed,"transactional":false,"failed_operation":failed,"cause":code})
+                json!({"succeeded":succeeded,"failed":failed,"not_run":not_run,"uncertain":if tracking_error {Vec::<String>::new()} else {failed.clone().into_iter().collect()},"tracking_error":tracking_error,"transactional":false,"failed_operation":failed,"cause":code})
             ),
         ));
     }
-    let current = operations;
-    let previous = fs::read(tracking_path(manifest_path))
-        .ok()
-        .and_then(|b| serde_json::from_slice::<Tracking>(&b).ok())
-        .filter(|s| s.version == 1 && s.project == p.manifest.project.name && s.target == target)
-        .map(|s| s.entries)
-        .unwrap_or_default();
-    let mut entries = previous;
-    for entry in &current {
-        if valid_tracked_entry(entry) && !entries.contains(entry) {
-            entries.push(entry.clone());
-        }
-    }
-    save_tracking(
-        &tracking_path(manifest_path),
-        &Tracking {
-            version: 1,
-            project: p.manifest.project.name.clone(),
-            target: target.clone(),
-            entries,
-        },
-    )?;
     Ok(
         json!({"project":p.manifest.project.name,"target":target,"target_origin":selected.origin,"succeeded":succeeded,"failed":null,"not_run":[],"uncertain":[],"additive":true,"transactional":false}),
+    )
+}
+
+fn persist_success(
+    path: &Path,
+    project: &str,
+    target: &str,
+    device_id: Option<&str>,
+    entries: &mut Vec<String>,
+    operation: &str,
+) -> Result<()> {
+    if !valid_tracked_entry(operation) || entries.contains(&operation.to_owned()) {
+        return Ok(());
+    }
+    entries.push(operation.to_owned());
+    let mut state = Tracking {
+        version: 2,
+        project: project.to_owned(),
+        target: target.to_owned(),
+        device_id: device_id.map(str::to_owned),
+        entries: entries.clone(),
+        uncertain: Vec::new(),
+    };
+    let existing = fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Tracking>(&b).ok());
+    state.uncertain = existing.map(|s| s.uncertain).unwrap_or_default();
+    state.uncertain.retain(|entry| entry != operation);
+    if let Err(error) = save_tracking(path, &state) {
+        entries.pop();
+        return Err(error);
+    }
+    Ok(())
+}
+
+fn persist_uncertain(
+    path: &Path,
+    project: &str,
+    target: &str,
+    device_id: Option<&str>,
+    entries: &[String],
+    uncertain: &str,
+) -> Result<()> {
+    let previous = fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Tracking>(&b).ok());
+    let mut uncertain_entries = previous
+        .as_ref()
+        .map(|s| s.uncertain.clone())
+        .unwrap_or_default();
+    if !uncertain_entries.iter().any(|item| item == uncertain) {
+        uncertain_entries.push(uncertain.to_owned());
+    }
+    save_tracking(
+        path,
+        &Tracking {
+            version: 2,
+            project: project.to_owned(),
+            target: target.to_owned(),
+            device_id: device_id.map(str::to_owned),
+            entries: entries.to_vec(),
+            uncertain: uncertain_entries,
+        },
     )
 }
 
@@ -541,8 +674,24 @@ fn prune(p: Loaded, manifest_path: &Path, cli: &crate::Cli, dry_run: bool) -> Re
         .to_string()
         .trim_end_matches('/')
         .to_owned();
-    let path = tracking_path(manifest_path);
-    let mut state = read_tracking(&path, &p.manifest.project.name, &target)?;
+    let path = tracking_path(manifest_path, &p.manifest.project.name, &target);
+    let mut state = read_tracking(&path, &p.manifest.project.name, &target, None)?;
+    let api = crate::ApiClient::new(
+        cli,
+        selected.target.as_deref(),
+        selected.username,
+        selected.password,
+    )?;
+    let actual_device_id = device_id(&api)?;
+    if state.device_id.as_deref() != actual_device_id.as_deref() {
+        return Err((
+            "TRACKING_INVALID",
+            "device identity changed at this endpoint; refusing deletion".into(),
+        ));
+    }
+    if !state.uncertain.is_empty() {
+        return Err(("TRACKING_UNCERTAIN", "tracking contains operations with unknown remote effects; inspect and reconcile before pruning".into()));
+    }
     let current = p
         .manifest
         .modules
@@ -578,12 +727,6 @@ fn prune(p: Loaded, manifest_path: &Path, cli: &crate::Cli, dry_run: bool) -> Re
             json!({"project":state.project,"target":target,"dry_run":true,"planned":obsolete,"deleted":[],"failed":null,"not_run":[]}),
         );
     }
-    let api = crate::ApiClient::new(
-        cli,
-        selected.target.as_deref(),
-        selected.username,
-        selected.password,
-    )?;
     let mut deleted = Vec::new();
     let mut not_run = Vec::new();
     for (i, entry) in obsolete.iter().enumerate() {
@@ -609,11 +752,21 @@ fn prune(p: Loaded, manifest_path: &Path, cli: &crate::Cli, dry_run: bool) -> Re
             continue;
         };
         match result {
-            Ok(()) => deleted.push(entry.clone()),
+            Ok(()) => {
+                deleted.push(entry.clone());
+                state.entries.retain(|tracked| tracked != entry);
+                if let Err((_, message)) = save_tracking(&path, &state) {
+                    return Err(("PROJECT_DEPLOY_FAILED", format!("deletion succeeded but tracking update failed: {message}; deployment report: {}", json!({"succeeded":deleted,"failed":null,"not_run":obsolete.iter().skip(i + 1).collect::<Vec<_>>(),"uncertain":[],"tracking_error":true,"transactional":false}))));
+                }
+            }
             Err((code, _)) => {
                 not_run.extend(obsolete.iter().skip(i + 1).cloned());
-                state.entries.retain(|x| !deleted.contains(x));
-                save_tracking(&path, &state)?;
+                if !state.uncertain.iter().any(|item| item == entry) {
+                    state.uncertain.push(entry.clone());
+                }
+                if let Err((_, message)) = save_tracking(&path, &state) {
+                    return Err(("PROJECT_DEPLOY_FAILED", format!("prune failed and tracking update failed: {message}; deployment report: {}", json!({"succeeded":deleted,"failed":entry,"not_run":not_run,"uncertain":[entry],"tracking_error":true,"cause":code,"transactional":false}))));
+                }
                 return Err((
                     "PROJECT_DEPLOY_FAILED",
                     format!(
@@ -624,8 +777,6 @@ fn prune(p: Loaded, manifest_path: &Path, cli: &crate::Cli, dry_run: bool) -> Re
             }
         }
     }
-    state.entries.retain(|x| !deleted.contains(x));
-    save_tracking(&path, &state)?;
     Ok(
         json!({"project":state.project,"target":target,"dry_run":false,"planned":obsolete,"deleted":deleted,"failed":null,"not_run":[]}),
     )
@@ -644,5 +795,5 @@ fn encode(s: &str) -> String {
 
 pub fn describe(topic: &str) -> Value {
     let command = topic.strip_prefix("project ").unwrap_or("project");
-    json!({"command":command,"parameters":{"PATH":"project directory","MANIFEST":"manifest path (default awtrix.toml)","--force":"explicit unprotected overwrite for declared scripts","project prune --dry-run":"preview explicit tracked deletions"},"inputs":["awtrix.toml identity, target profile, scripts/modules/resources/config paths relative to manifest","private project-local .awtrix-tracking.json state"],"outputs":["validation counts","ordered deploy report with succeeded/failed/not_run/uncertain","prune report with planned/deleted/failed/not_run"],"examples":["awtrix project init ./demo","awtrix project validate --manifest demo/awtrix.toml","awtrix --json project deploy --manifest demo/awtrix.toml","awtrix --json project prune --manifest demo/awtrix.toml --dry-run","awtrix --json project prune --manifest demo/awtrix.toml"],"prerequisites":["personal profile configuration for named targets; no credentials in project manifest","scriptUpdates capability for protected scripts","prune requires a valid tracking file produced by deployment for this project and normalized endpoint"],"tracking_contract":{"version":1,"identity":"project name plus normalized effective HTTP endpoint; credentials are never stored","entries":"successfully deployed scripts, modules and resources only; config patches are not deletable resources","safety":"missing, corrupt, foreign-project or foreign-endpoint state fails closed; deploy remains additive","state_file":".awtrix-tracking.json beside the manifest, mode 0600 on Unix; it is not the credential configuration"},"schema":{"project":{"name":"string","version":"string"},"target":{"profile":"optional personal profile name"},"scripts":[{"name":"AWTRIX script name","file":"relative Berry source path","create":"boolean","expected_source_file":"relative original source used for conflict protection"}],"modules":[{"name":"module name","file":"relative Berry source with # @module"}],"resources":[{"path":"absolute device file path","file":"relative local binary path"}],"config":[{"script":"declared script name","file":"relative JSON object path"}]}})
+    json!({"command":command,"parameters":{"PATH":"project directory","MANIFEST":"manifest path (default awtrix.toml)","--force":"explicit unprotected overwrite for declared scripts","project prune --dry-run":"preview explicit tracked deletions"},"inputs":["awtrix.toml identity, target profile, scripts/modules/resources/config paths relative to manifest","private project-local identity-keyed .awtrix-tracking-*.json state"],"outputs":["validation counts","ordered deploy report with succeeded/failed/not_run/uncertain/tracking_error","prune report with planned/deleted/failed/not_run/uncertain/tracking_error"],"examples":["awtrix project init ./demo","awtrix project validate --manifest demo/awtrix.toml","awtrix --json project deploy --manifest demo/awtrix.toml","awtrix --json project prune --manifest demo/awtrix.toml --dry-run","awtrix --json project prune --manifest demo/awtrix.toml"],"prerequisites":["personal profile configuration for named targets; no credentials in project manifest","scriptUpdates capability for protected scripts","prune requires valid tracking state matching project, normalized endpoint, and available device ID; uncertain entries must be manually reconciled"],"tracking_contract":{"version":2,"identity":"project name plus normalized effective endpoint, and UID/deviceId/serial from /api/v1/device when supplied; credentials are never stored","entries":"successfully deployed scripts, modules and resources only; config patches are not deletable resources","uncertain":"failed operations are durably recorded separately; prune is blocked until manual reconciliation","safety":"missing, corrupt, foreign-project, foreign-endpoint, or changed-device state fails closed; deploy remains additive","state_file":".awtrix-tracking-<identity-key>.json beside the manifest, mode 0600 on Unix, atomically persisted after each successful operation; separate from credential configuration"},"schema":{"project":{"name":"string","version":"string"},"target":{"profile":"optional personal profile name"},"scripts":[{"name":"AWTRIX script name","file":"relative Berry source path","create":"boolean","expected_source_file":"relative original source used for conflict protection"}],"modules":[{"name":"module name","file":"relative Berry source with # @module"}],"resources":[{"path":"absolute device file path","file":"relative local binary path"}],"config":[{"script":"declared script name","file":"relative JSON object path"}]}})
 }
