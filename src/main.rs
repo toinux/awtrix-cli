@@ -518,6 +518,14 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
         Ok(value)
+            if value.pointer("/error/code").and_then(Value::as_str) == Some("REBOOT_TIMEOUT") =>
+        {
+            let rendered = render(value, &cli.fields, cli.json).unwrap_or_else(|_| "{}".into());
+            println!("{rendered}");
+            eprintln!("awtrix: REBOOT_TIMEOUT: reboot was accepted but offline-to-online recovery was not observed");
+            ExitCode::from(4)
+        }
+        Ok(value)
             if value
                 .get("runtime_error")
                 .is_some_and(|error| !error.is_null())
