@@ -66,6 +66,7 @@ pub(crate) struct ApiClient {
     client: reqwest::blocking::Client,
     username: Option<String>,
     password: Option<String>,
+    timeout: Duration,
 }
 
 impl ApiClient {
@@ -98,11 +99,19 @@ impl ApiClient {
             client,
             username,
             password,
+            timeout: Duration::from_millis(cli.timeout.max(1)),
         })
     }
 
     pub(crate) fn get(&self, path: &str) -> CliResult<Value> {
-        let mut request = self.client.get(format!("{}{path}", self.base));
+        self.get_with_timeout(path, self.timeout)
+    }
+
+    pub(crate) fn get_with_timeout(&self, path: &str, timeout: Duration) -> CliResult<Value> {
+        let mut request = self
+            .client
+            .get(format!("{}{path}", self.base))
+            .timeout(timeout.min(self.timeout));
         if let Some(username) = &self.username {
             request = request.basic_auth(username, self.password.as_deref());
         }
@@ -297,7 +306,18 @@ fn main() -> ExitCode {
             }
         },
         Err((code, message)) => {
-            emit_error(code, &message, cli.json);
+            let streaming_logs = matches!(
+                cli.command,
+                Command::Logs {
+                    action: logs::Command::Follow { .. }
+                }
+            );
+            emit_error(
+                code,
+                &message,
+                cli.json
+                    && !(streaming_logs && cli.fields.is_empty() && logs::is_stream_error(code)),
+            );
             ExitCode::from(exit_code(code))
         }
     }
@@ -324,6 +344,18 @@ fn emit_error(code: &str, message: &str, machine: bool) {
 }
 
 fn run(cli: &Cli) -> CliResult<Value> {
+    if matches!(
+        cli.command,
+        Command::Logs {
+            action: logs::Command::Follow { .. }
+        }
+    ) && !cli.fields.is_empty()
+    {
+        return Err((
+            "ARGUMENT",
+            "--fields is not supported with streaming logs follow".into(),
+        ));
+    }
     if let Command::Profile { action } = &cli.command {
         return profiles::run(action);
     }

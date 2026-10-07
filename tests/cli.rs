@@ -1065,11 +1065,14 @@ fn logs_follow_advances_api_cursor_and_emits_jsonl_without_duplicate_records() {
             assert_eq!(request.url(), expected);
             request.respond(Response::from_string(body)).unwrap();
         }
-        while let Some(request) = server.recv_timeout(Duration::from_millis(200)).unwrap() {
-            assert_eq!(request.url(), "/api/v1/logs?after=5");
-            request
-                .respond(Response::from_string(r#"{"next":5,"lines":[]}"#))
-                .unwrap();
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_millis(1300) {
+            if let Some(request) = server.recv_timeout(Duration::from_millis(50)).unwrap() {
+                assert_eq!(request.url(), "/api/v1/logs?after=5");
+                request
+                    .respond(Response::from_string(r#"{"next":5,"lines":[]}"#))
+                    .unwrap();
+            }
         }
     });
     let output = run(&[
@@ -1131,4 +1134,177 @@ fn logs_read_reports_empty_stream_and_remote_failure() {
         "HTTP"
     );
     assert!(!String::from_utf8_lossy(&failure.stdout).contains("private detail"));
+}
+
+#[test]
+fn logs_follow_request_timeout_is_clamped_to_remaining_duration() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        thread::sleep(Duration::from_millis(1500));
+        let _ = request.respond(Response::from_string(r#"{"next":0,"lines":[]}"#));
+    });
+    let start = std::time::Instant::now();
+    let output = run(&[
+        "--target",
+        &url,
+        "--timeout",
+        "3000",
+        "--json",
+        "logs",
+        "follow",
+        "--duration-secs",
+        "1",
+    ]);
+    let elapsed = start.elapsed();
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    assert!(
+        elapsed < Duration::from_millis(1400),
+        "request exceeded follow deadline: {elapsed:?}"
+    );
+}
+
+#[test]
+fn logs_follow_partial_failure_emits_error_and_resume_end_records() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"{"next":8,"lines":["script: started"]}"#,
+            ))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string("secret").with_status_code(500))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "logs",
+        "follow",
+        "--interval-ms",
+        "1",
+        "--duration-secs",
+        "1",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    let rows: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows[0]["type"], "log");
+    assert_eq!(rows[1]["type"], "error");
+    assert_eq!(rows[1]["next"], 8);
+    assert_eq!(rows[2]["type"], "end");
+    assert_eq!(rows[2]["next"], 8);
+    assert!(!rows.iter().any(|row| row.to_string().contains("secret")));
+}
+
+#[test]
+fn logs_follow_rejects_fields_before_http_request() {
+    let output = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "--json",
+        "--fields",
+        "next",
+        "logs",
+        "follow",
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "ARGUMENT"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--fields"));
+}
+
+#[test]
+fn logs_follow_filters_by_literal_text_and_ctrl_c_emits_interrupted_end() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        request
+            .respond(Response::from_string(
+                r#"{"next":2,"lines":["weather: ready","other: ignored"]}"#,
+            ))
+            .unwrap();
+        while let Some(request) = server.recv_timeout(Duration::from_millis(100)).unwrap() {
+            request
+                .respond(Response::from_string(r#"{"next":2,"lines":[]}"#))
+                .unwrap();
+        }
+    });
+    let child = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args([
+            "--target",
+            &url,
+            "--json",
+            "logs",
+            "follow",
+            "--script",
+            "weather",
+            "--interval-ms",
+            "60000",
+            "--duration-secs",
+            "3600",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    thread::sleep(Duration::from_millis(100));
+    let signaled = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(signaled.success());
+    let output = child.wait_with_output().unwrap();
+    worker.join().unwrap();
+    assert!(output.status.success());
+    let rows: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0]["line"], "weather: ready");
+    assert_eq!(rows[1]["type"], "end");
+    assert_eq!(rows[1]["interrupted"], true);
+}
+
+#[test]
+fn log_descriptions_distinguish_read_and_follow_schemas_and_global_parameters() {
+    let read = run(&["--json", "describe", "logs read"]);
+    let follow = run(&["--json", "describe", "logs follow"]);
+    let read: serde_json::Value = serde_json::from_slice(&read.stdout).unwrap();
+    let follow: serde_json::Value = serde_json::from_slice(&follow.stdout).unwrap();
+    for key in [
+        "--target",
+        "--profile",
+        "--username",
+        "--password",
+        "--timeout",
+        "--json",
+        "--fields",
+    ] {
+        assert!(read["parameters"][key].is_string());
+        assert!(follow["parameters"][key].is_string());
+    }
+    assert!(read["outputs"]["lines"].is_array());
+    assert!(follow["outputs"]["records"].is_array());
+    assert!(follow["output_fields"]
+        .as_array()
+        .unwrap()
+        .contains(&serde_json::json!("code")));
 }
