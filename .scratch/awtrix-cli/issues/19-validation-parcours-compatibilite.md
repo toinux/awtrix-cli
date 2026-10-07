@@ -6,6 +6,8 @@
 
 **Status:** ready-for-agent
 
+**Blocker:** Ticket 18 is not accepted: native macOS/Windows pipeline checks unavailable. Do not start final compatibility acceptance until those prerequisite checks pass. Physical target checks also require explicitly supplied hardware; unavailable physical results must remain marked not executed.
+
 ## Acceptance criteria
 
 - [ ] Un scénario reproductible couvre découverte de cible, affichage de progression, déploiement d’un projet script/module/ressource, tests d’état/logs/rendu et notification finale, avec les conditions de nettoyage documentées.

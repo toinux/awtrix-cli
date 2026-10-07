@@ -33,8 +33,9 @@ Verified unique IDs, existing references, acyclic graph (Luna preflight).
 | 14 | done | ticket/14-tracking / .worktrees/ticket-14 | 6ac6db5 | c97c366+1ba7e44+e9a36c1; review clear; integratedffff1a5 |
 | 04 | done | ticket/04-notify / .worktrees/ticket-04 | 3292b9d | 6c4af32+22f1293; reviewedclear integrated41ecc638 |
 | 16 | done | ticket/16-tests / .worktrees/ticket-16 | 3292b9d | f554231; reviewedclear integrated41ecc638; realignoredtest explicitlyrun passed |
-| 05,17 | in-progress | ticket/05-rotation, ticket/17-visual | next journal commit | pending |
-| 06 | in-progress | ticket/06-settings | next journal commit | pending |
+| 05 | done | ticket/05-rotation / .worktrees/ticket-05 | c3ccad8 | 8e8f136+f07565a; finalreview clear; integratedad44a83 |
+| 17 | done | ticket/17-visual / .worktrees/ticket-17 | c3ccad8 | 0b27e36+b4ba2d3; finalreview clear; integratedad44a83; actualrealvisualtest passed |
+| 06 | done | ticket/06-settings / .worktrees/ticket-06 | 8ed1bb2 | c2f6ac5+ccea906+07c9311; secretredactionfixed; finalreview clear; integrated670d0ee |
 | 19 | ready-for-agent, blocked by incomplete18 | unassigned | — | native runners unavailable |
 
 ## Shared contracts
@@ -96,3 +97,17 @@ Identity uses /device boardType+soc, not arbitrary strings. Describe offline and
   AWTRIX_WEBUI=/tmp/opencode/awtrix-ng-src/webui/index.html
   cargo test --test headless -- --ignored --nocapture: one real test passed19.12s,
   success/failure/Berryerror/isolation/cleanup scenarios. Final Luna re-review clear.
+- Tickets05/17/06 integrated670d0ee after actualroute fixes, visualschema/tolerance/artifact
+  tests, and officialsecretkey redactionfix. Final independent Luna review of ENTIRE
+  b1cfef8..670d0ee: no blocking Standards/Spec findings in implemented01–17scope.
+  fmt/clippy pass;6unit+133CLI+2distribution tests pass; explicit realheadless test including
+  visualrender passed21.48s; releaseLinuxbuild --locked passed. Native hosts/hardware not claimed.
+
+## Resume boundary
+
+Tickets01–17 done. Ticket18 implementation integrated but acceptance externally blocked;
+ticket19 remains unavailable because18 is incomplete. No further approved ticket can run here.
+Local branches retained. Clean integrated worker worktrees may be removed without losing commits.
+Next: native macOS ARM64/Windows MSVC jobs (remote publication requires separate permission),
+then resume18acceptance and19 via the same implement-spec command. Supply explicit physical
+targets if hardware checks are desired; otherwise19must document missing physical results.
