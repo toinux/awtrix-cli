@@ -743,6 +743,55 @@ fn script_get_preserves_raw_source_and_script_put_reports_berry_error() {
 }
 
 #[test]
+fn script_verify_detects_runtime_error_with_cursor_diagnostics_and_nonzero_exit() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for (route, body) in [
+            ("/api/v1/system", r#"{"scriptingEnabled":true}"#),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ),
+            (
+                "/api/v1/logs?after=4",
+                r#"{"next":5,"lines":["demo failed"]}"#,
+            ),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":{"message":"late failure","line":12}}]"#,
+            ),
+        ] {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), route);
+            request.respond(Response::from_string(body)).unwrap();
+        }
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "verify",
+        "demo",
+        "--after",
+        "4",
+        "--duration-secs",
+        "1",
+        "--interval-ms",
+        "1",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["start_verified"], true);
+    assert_eq!(value["logs"]["next"], 5);
+    assert_eq!(value["runtime_error"]["line"], 12);
+    assert_eq!(value["runtime_state"]["error"]["message"], "late failure");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("BERRY_ERROR"));
+}
+
+#[test]
 fn script_enable_uses_bare_boolean_and_script_state_exposes_only_observed_error_fields() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());

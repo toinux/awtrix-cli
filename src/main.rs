@@ -474,11 +474,48 @@ fn main() -> ExitCode {
                 .is_some_and(|error| !error.is_null())
                 || value
                     .get("not_available")
-                    .is_some_and(|reason| !reason.is_null()) =>
+                    .is_some_and(|reason| !reason.is_null())
+                || value.get("verification").is_some_and(|report| {
+                    report
+                        .get("runtime_error")
+                        .is_some_and(|error| !error.is_null())
+                        || report
+                            .get("not_available")
+                            .is_some_and(|reason| !reason.is_null())
+                }) =>
         {
+            let report = value.get("verification").unwrap_or(&value);
+            if report
+                .get("runtime_error")
+                .is_some_and(|error| !error.is_null())
+                || report
+                    .get("not_available")
+                    .is_some_and(|reason| !reason.is_null())
+            {
+                let diagnostic_code = if report
+                    .get("runtime_error")
+                    .is_some_and(|error| !error.is_null())
+                {
+                    "BERRY_ERROR"
+                } else {
+                    "SCRIPT_NOT_RUNNING"
+                };
+                let rendered = render(value, &cli.fields, cli.json).unwrap_or_else(|_| "{}".into());
+                println!("{rendered}");
+                eprintln!("awtrix: {diagnostic_code}: verification did not establish a healthy running script");
+                return ExitCode::from(1);
+            }
+            let diagnostic_code = if value
+                .get("runtime_error")
+                .is_some_and(|error| !error.is_null())
+            {
+                "BERRY_ERROR"
+            } else {
+                "SCRIPT_NOT_RUNNING"
+            };
             let rendered = render(value, &cli.fields, cli.json).unwrap_or_else(|_| "{}".into());
             println!("{rendered}");
-            eprintln!("awtrix: BERRY_ERROR: runtime error observed during verification");
+            eprintln!("awtrix: {diagnostic_code}: verification did not establish a healthy running script");
             ExitCode::from(1)
         }
         Ok(value) => match render(value, &cli.fields, cli.json) {

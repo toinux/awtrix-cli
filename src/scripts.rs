@@ -38,6 +38,9 @@ pub enum Command {
         /// Replace unconditionally using raw PUT; no concurrency guarantee.
         #[arg(long, conflicts_with_all = ["create", "expected_source"])]
         force: bool,
+        /// After saving, run verification for this many seconds (1..3600).
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        verify_secs: Option<u64>,
     },
     /// Enable a script without changing other apps.
     Enable { name: String },
@@ -107,6 +110,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             expected_source,
             create,
             force,
+            verify_secs,
         } => {
             validate(name)?;
             let source = match (source, file) {
@@ -125,7 +129,8 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             }
             if *force {
                 let result = api.raw_put(&format!("/api/v1/apps/script/{name}"), &source)?;
-                operational_result(result, false, None)
+                let saved = operational_result(result, false, None)?;
+                chain_verification(saved, api, name, *verify_secs)
             } else {
                 let capabilities = api.get("/api/v1/capabilities")?;
                 if capabilities.get("scriptUpdates").and_then(Value::as_bool) != Some(true) {
@@ -141,7 +146,8 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                     Err(e) => Err(e),
                     Ok(result) => {
                         let verification = verify_start(api, name);
-                        operational_result(result, true, verification)
+                        let saved = operational_result(result, true, verification)?;
+                        chain_verification(saved, api, name, *verify_secs)
                     }
                 }
             }
@@ -196,6 +202,21 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
     }
 }
 
+fn chain_verification(
+    mut saved: Value,
+    api: &crate::ApiClient,
+    name: &str,
+    duration: Option<u64>,
+) -> crate::CliResult<Value> {
+    if let Some(duration) = duration {
+        let report = verify(api, name, duration, 500, 0, None)?;
+        if let Some(object) = saved.as_object_mut() {
+            object.insert("verification".into(), report);
+        }
+    }
+    Ok(saved)
+}
+
 fn verify(
     api: &crate::ApiClient,
     name: &str,
@@ -230,6 +251,7 @@ fn verify(
             json!({"source_saved":"not_requested","start_verified":false,"observed_window":{"complete":false,"duration_secs":started.elapsed().as_secs_f64()},"not_available":if scripting != Some(true) {"scripting_disabled"} else if app.is_none() {"script_absent"} else {"script_disabled_or_start_error"},"runtime_error":runtime_error,"logs":{"after":after,"next":cursor,"lines":lines,"history_limit":34,"exhaustive":false},"capture":null,"runtime_success_guaranteed":false}),
         );
     }
+    let mut final_state = app.cloned();
     while started.elapsed() < deadline {
         let remaining = deadline.saturating_sub(started.elapsed());
         match api.get_with_timeout(&format!("/api/v1/logs?after={cursor}"), remaining) {
@@ -248,28 +270,40 @@ fn verify(
                 break;
             }
         }
+        let remaining = deadline.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        match api.get_with_timeout("/api/v1/apps", remaining) {
+            Ok(items) => {
+                final_state = items
+                    .as_array()
+                    .and_then(|apps| {
+                        apps.iter()
+                            .find(|a| a.get("name").and_then(Value::as_str) == Some(name))
+                    })
+                    .cloned();
+                runtime_error = final_state
+                    .as_ref()
+                    .and_then(|a| a.get("error"))
+                    .filter(|e| !e.is_null())
+                    .cloned();
+                if runtime_error.is_some() {
+                    break;
+                }
+            }
+            Err((code, message)) => {
+                collection_error =
+                    Some(json!({"code":code,"message":message,"phase":"state_observation"}));
+                break;
+            }
+        }
         if started.elapsed() >= deadline {
             break;
         }
         std::thread::sleep(
             Duration::from_millis(interval_ms).min(deadline.saturating_sub(started.elapsed())),
         );
-    }
-    let final_apps =
-        api.get_with_timeout("/api/v1/apps", deadline.saturating_sub(started.elapsed()));
-    if let Ok(items) = &final_apps {
-        runtime_error = items
-            .as_array()
-            .and_then(|apps| {
-                apps.iter()
-                    .find(|a| a.get("name").and_then(Value::as_str) == Some(name))
-            })
-            .and_then(|a| a.get("error"))
-            .filter(|e| !e.is_null())
-            .cloned();
-    } else if collection_error.is_none() {
-        let (code, message) = final_apps.unwrap_err();
-        collection_error = Some(json!({"code":code,"message":message}));
     }
     let artifact = if let Some(path) = capture {
         let result = crate::screen::run(
@@ -291,7 +325,7 @@ fn verify(
         None
     };
     Ok(
-        json!({"source_saved":"not_requested","start_verified":true,"observed_window":{"complete":collection_error.is_none() && started.elapsed() >= deadline,"duration_secs":started.elapsed().as_secs_f64(),"note":"No observed error is not proof of general correctness"},"not_available":collection_error,"runtime_error":runtime_error,"logs":{"after":after,"next":cursor,"lines":lines,"history_limit":34,"exhaustive":false},"capture":artifact,"runtime_success_guaranteed":false}),
+        json!({"source_saved":"not_requested","start_verified":true,"observed_window":{"complete":collection_error.is_none() && (started.elapsed() >= deadline || runtime_error.is_some()),"duration_secs":started.elapsed().as_secs_f64(),"note":"No observed error is not proof of general correctness"},"not_available":collection_error,"runtime_error":runtime_error,"runtime_state":final_state,"logs":{"after":after,"next":cursor,"lines":lines,"history_limit":34,"exhaustive":false},"capture":artifact,"runtime_success_guaranteed":false}),
     )
 }
 fn validate(name: &str) -> crate::CliResult<()> {
