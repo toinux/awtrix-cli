@@ -34,7 +34,7 @@ pub enum Command {
     Delete { name: String },
     /// Read declared, user-changeable @config settings.
     ConfigGet { name: String },
-    /// Patch declared @config settings (restarts init/setup).
+    /// Patch declared @config settings (restarts init/setup); {} is a valid no-op object per OpenAPI.
     ConfigPut {
         name: String,
         #[arg(long, help = "JSON object of setting keys and values")]
@@ -123,9 +123,11 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                 reqwest::Method::PUT,
                 &format!("/api/v1/apps/{name}/enabled"),
                 &json!(enabled),
-            )?;
+            ).map_err(|(code, message)| if code == "HTTP_507" {
+                ("APPLIED_NOT_SAVED", format!("{} was applied but not persisted; free device storage and repeat before rebooting", if enabled { "enable" } else { "disable" }))
+            } else { (code, message) })?;
             Ok(
-                json!({"name":name,"enabled":enabled,"accepted":true,"device_result":value,"runtime_success_guaranteed":false,"persistence":"switch is persisted across restart; a 507 means active but not saved"}),
+                json!({"name":name,"enabled":enabled,"accepted":true,"device_result":value,"runtime_success_guaranteed":false}),
             )
         }
         Command::Delete { name } => {
@@ -145,11 +147,8 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             validate(name)?;
             let body: Value = serde_json::from_str(values)
                 .map_err(|_| ("ARGUMENT", "config values must be a JSON object".into()))?;
-            if !body.is_object() || body.as_object().is_some_and(|o| o.is_empty()) {
-                return Err((
-                    "ARGUMENT",
-                    "config values must be a non-empty JSON object".into(),
-                ));
+            if !body.is_object() {
+                return Err(("ARGUMENT", "config values must be a JSON object".into()));
             }
             let result = api.mutate(
                 reqwest::Method::PATCH,

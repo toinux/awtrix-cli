@@ -272,6 +272,11 @@ impl ApiClient {
                 )
             }
         })?;
+        if response.status() == reqwest::StatusCode::INSUFFICIENT_STORAGE {
+            // The enabled-route OpenAPI explicitly says 507 is applied in memory but not saved.
+            // Discard the server body: its untrusted details must not leak to CLI output.
+            return Err(("HTTP_507", "device returned HTTP 507".into()));
+        }
         self.script_response(response)
     }
     pub(crate) fn conditional_put(
