@@ -5,6 +5,8 @@
 //! start-time before signaling; it never searches for or kills arbitrary processes.
 use clap::{Args, Subcommand};
 use serde_json::{json, Value};
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::{
     path::PathBuf,
     process::{Child, Command as ProcessCommand, Stdio},
@@ -32,6 +34,8 @@ pub(crate) struct StartArgs {
     height: u16,
     #[arg(long)]
     data: Option<PathBuf>,
+    #[arg(long)]
+    webui: Option<PathBuf>,
     #[arg(long, default_value_t = 15)]
     ready_timeout_secs: u64,
 }
@@ -73,7 +77,17 @@ fn write_state(
         &json!({"pid":pid,"start_time":started,"url":url,"data":data,"temporary":temporary}),
     )
     .map_err(|e| error("FILE", e.to_string()))?;
-    std::fs::write(path, bytes).map_err(|e| error("FILE", e.to_string()))
+    let parent = path
+        .parent()
+        .ok_or_else(|| error("FILE", "ownership record has no parent directory"))?;
+    let mut file =
+        tempfile::NamedTempFile::new_in(parent).map_err(|e| error("FILE", e.to_string()))?;
+    use std::io::Write;
+    file.write_all(&bytes)
+        .map_err(|e| error("FILE", e.to_string()))?;
+    file.persist(path)
+        .map_err(|e| error("FILE", e.to_string()))?;
+    Ok(())
 }
 fn read_state() -> Result<Value, (&'static str, String)> {
     let bytes = std::fs::read(state_file()?)
@@ -90,6 +104,27 @@ fn process_start(pid: u32) -> Option<u64> {
 #[cfg(not(target_os = "linux"))]
 fn process_start(_: u32) -> Option<u64> {
     None
+}
+
+/// Opens a stable kernel reference to a process; signaling through this fd cannot
+/// accidentally target a different process if the numeric PID is recycled.
+#[cfg(target_os = "linux")]
+fn open_owned_process(
+    pid: u32,
+    expected_start: u64,
+) -> Result<std::fs::File, (&'static str, String)> {
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) as i32 };
+    if fd < 0 {
+        return Err(error("NOT_RUNNING", "recorded process no longer exists"));
+    }
+    let process = unsafe { std::fs::File::from_raw_fd(fd) };
+    if process_start(pid) != Some(expected_start) {
+        return Err(error(
+            "NOT_RUNNING",
+            "recorded process identity no longer matches; no signal sent",
+        ));
+    }
+    Ok(process)
 }
 
 fn start(args: &StartArgs) -> Result<Value, (&'static str, String)> {
@@ -149,22 +184,37 @@ fn start(args: &StartArgs) -> Result<Value, (&'static str, String)> {
         ),
     };
     std::fs::create_dir_all(&data).map_err(|e| error("DATA_DIR", e.to_string()))?;
-    let child = ProcessCommand::new(binary)
-        .args([
-            "--data",
-            data.to_string_lossy().as_ref(),
-            "--port",
-            &args.port.to_string(),
-            "--width",
-            &args.width.to_string(),
-            "--height",
-            &args.height.to_string(),
-        ])
+    let mut process = ProcessCommand::new(binary);
+    process.args([
+        "--data",
+        data.to_string_lossy().as_ref(),
+        "--port",
+        &args.port.to_string(),
+        "--width",
+        &args.width.to_string(),
+        "--height",
+        &args.height.to_string(),
+    ]);
+    if let Some(webui) = &args.webui {
+        process.arg("--webui").arg(webui);
+    }
+    let child = match process
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| error("SPAWN", format!("could not start AWTRIX executable: {e}")))?;
+    {
+        Ok(child) => child,
+        Err(e) => {
+            if temporary {
+                let _ = std::fs::remove_dir_all(&data);
+            }
+            return Err(error(
+                "SPAWN",
+                format!("could not start AWTRIX executable: {e}"),
+            ));
+        }
+    };
     await_ready(child, &data, temporary, args)
 }
 
@@ -177,11 +227,47 @@ fn await_ready(
     let pid = child.id();
     let deadline = Instant::now() + Duration::from_secs(args.ready_timeout_secs);
     let url = format!("http://127.0.0.1:{}", args.port);
-    let client = reqwest::blocking::Client::builder()
+    let client = match reqwest::blocking::Client::builder()
         .timeout(Duration::from_millis(250))
         .build()
-        .map_err(|e| error("HTTP", e.to_string()))?;
+    {
+        Ok(client) => client,
+        Err(e) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            if temporary {
+                let _ = std::fs::remove_dir_all(data);
+            }
+            return Err(error("HTTP", e.to_string()));
+        }
+    };
+    let interrupted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let interrupt_flag = interrupted.clone();
+    if let Err(e) =
+        ctrlc::set_handler(move || interrupt_flag.store(true, std::sync::atomic::Ordering::SeqCst))
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        if temporary {
+            let _ = std::fs::remove_dir_all(data);
+        }
+        return Err(error(
+            "SIGNAL",
+            format!("cannot install startup interrupt handler: {e}"),
+        ));
+    }
     loop {
+        if interrupted.load(std::sync::atomic::Ordering::SeqCst) {
+            let _ = child.kill();
+            let _ = child.wait();
+            if temporary {
+                let _ = std::fs::remove_dir_all(data);
+            }
+            return Err(error(
+                "INTERRUPTED",
+                "headless startup interrupted; child stopped and temporary data removed",
+            ));
+        }
         if let Some(status) = child
             .try_wait()
             .map_err(|e| error("PROCESS", e.to_string()))?
@@ -199,8 +285,14 @@ fn await_ready(
             .send()
             .is_ok_and(|r| r.status().is_success())
         {
-            let started = process_start(pid)
-                .ok_or_else(|| error("OWNERSHIP", "cannot verify spawned process identity"))?;
+            let Some(started) = process_start(pid) else {
+                let _ = child.kill();
+                let _ = child.wait();
+                if temporary {
+                    let _ = std::fs::remove_dir_all(data);
+                }
+                return Err(error("OWNERSHIP", "cannot verify spawned process identity"));
+            };
             if let Err(e) = write_state(pid, started, &url, data, temporary) {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -242,15 +334,18 @@ fn stop() -> Result<Value, (&'static str, String)> {
     let expected = s["start_time"]
         .as_u64()
         .ok_or_else(|| error("STATE_INVALID", "missing process identity"))?;
-    if process_start(pid) != Some(expected) {
-        return Err(error(
-            "NOT_RUNNING",
-            "recorded process is no longer the same process; no signal sent",
-        ));
-    }
     #[cfg(target_os = "linux")]
     {
-        let result = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+        let process = open_owned_process(pid, expected)?;
+        let result = unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                process.as_raw_fd(),
+                libc::SIGTERM,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            ) as i32
+        };
         if result != 0 {
             return Err(error(
                 "STOP_FAILED",
@@ -284,5 +379,5 @@ fn stop() -> Result<Value, (&'static str, String)> {
 
 pub(crate) fn describe(topic: &str) -> Value {
     let action = topic.strip_prefix("headless ").unwrap_or("all");
-    json!({"command":format!("headless {action}"),"parameters":{"--binary":"provided awtrix-linux executable; alternatively AWTRIX_LINUX_BIN","--port":"loopback HTTP port 1024..65535","--width":"display width 8..128","--height":"display height 8..32","--data":"persistent directory; omitted creates isolated temporary data","--ready-timeout-secs":"bounded HTTP readiness wait, 1..300 (default 15)"},"outputs":["start returns owned target URL, PID and data directory","status reports only the recorded CLI-owned process","stop signals only a process matching the recorded Linux PID and start time"],"examples":["awtrix headless start --binary ./awtrix-linux","awtrix headless start --binary ./awtrix-linux --data ./dev-data --port 8081 --width 52 --height 16","awtrix headless status","awtrix headless stop"],"prerequisites":["Linux host and caller-supplied AWTRIX Linux executable; no automatic download","headless does not validate sensors, audio, or real ESP32 memory/instruction budgets"]})
+    json!({"command":format!("headless {action}"),"parameters":{"--binary":"provided awtrix-linux executable; alternatively AWTRIX_LINUX_BIN","--port":"loopback HTTP port 1024..65535","--width":"display width 8..128","--height":"display height 8..32","--data":"persistent directory; omitted creates isolated temporary data","--webui":"optional AWTRIX web UI asset file path","--ready-timeout-secs":"bounded HTTP readiness wait, 1..300 (default 15)"},"outputs":["start returns owned target URL, PID and data directory","status reports only the recorded CLI-owned process","stop signals only a process matching the recorded Linux PID and start time"],"examples":["awtrix headless start --binary ./awtrix-linux","awtrix headless start --binary ./awtrix-linux --webui ./webui/index.html --data ./dev-data --port 8081 --width 52 --height 16","awtrix headless status","awtrix headless stop"],"prerequisites":["Linux host and caller-supplied AWTRIX Linux executable; no automatic download","headless does not validate sensors, audio, or real ESP32 memory/instruction budgets"]})
 }
