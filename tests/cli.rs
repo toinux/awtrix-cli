@@ -64,6 +64,123 @@ fn executable_help_and_version_use_the_published_binary_name() {
 }
 
 #[test]
+fn update_help_is_explicit_and_version_remains_available() {
+    let help = run(&["update", "--help"]);
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("Install the latest stable"));
+}
+
+#[test]
+fn update_downloads_matching_asset_verifies_checksum_and_atomically_replaces_target() {
+    use sha2::{Digest, Sha256};
+    let executable = tempfile::tempdir().unwrap();
+    let target = executable.path().join("awtrix-cli-copy");
+    std::fs::write(&target, b"old executable").unwrap();
+    let payload = b"new validated executable";
+    let digest = format!("{:x}", Sha256::digest(payload));
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", server.server_addr());
+    let asset = if cfg!(target_os = "windows") {
+        "awtrix-cli-x86_64-pc-windows-msvc.exe"
+    } else if cfg!(target_os = "macos") {
+        "awtrix-cli-aarch64-apple-darwin"
+    } else {
+        "awtrix-cli-x86_64-unknown-linux-gnu"
+    };
+    let release = format!(
+        r#"{{"tag_name":"v99.0.0","prerelease":false,"draft":false,"assets":[{{"name":"{asset}","browser_download_url":"unused"}},{{"name":"SHA256SUMS","browser_download_url":"unused"}}]}}"#
+    );
+    let worker = thread::spawn(move || {
+        for _ in 0..3 {
+            let request = server.recv().unwrap();
+            let body = match request.url() {
+                "/latest" => release.as_bytes().to_vec(),
+                "/SHA256SUMS" => format!("{digest}  {asset}\n").into_bytes(),
+                _ if request.url() == format!("/{asset}") => payload.to_vec(),
+                other => panic!("unexpected update URL {other}"),
+            };
+            request.respond(Response::from_data(body)).unwrap();
+        }
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .arg("update")
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .env("AWTRIX_UPDATE_API_URL", format!("{base}/latest"))
+        .env("AWTRIX_UPDATE_ASSET_BASE_URL", &base)
+        .env("AWTRIX_UPDATE_EXECUTABLE", &target)
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read(target).unwrap(), payload);
+}
+
+#[test]
+fn update_checksum_mismatch_preserves_existing_executable() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("existing");
+    std::fs::write(&target, b"known working binary").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", server.server_addr());
+    let asset = if cfg!(target_os = "windows") {
+        "awtrix-cli-x86_64-pc-windows-msvc.exe"
+    } else if cfg!(target_os = "macos") {
+        "awtrix-cli-aarch64-apple-darwin"
+    } else {
+        "awtrix-cli-x86_64-unknown-linux-gnu"
+    };
+    let release = format!(
+        r#"{{"tag_name":"v99.0.0","prerelease":false,"draft":false,"assets":[{{"name":"{asset}","browser_download_url":"unused"}},{{"name":"SHA256SUMS","browser_download_url":"unused"}}]}}"#
+    );
+    let worker = thread::spawn(move || {
+        for _ in 0..3 {
+            let request = server.recv().unwrap();
+            let body = match request.url() {
+                "/latest" => release.as_bytes().to_vec(),
+                "/SHA256SUMS" => format!("{}  {asset}\n", "a".repeat(64)).into_bytes(),
+                _ if request.url() == format!("/{asset}") => b"altered bytes".to_vec(),
+                other => panic!("unexpected update URL {other}"),
+            };
+            request.respond(Response::from_data(body)).unwrap();
+        }
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .arg("update")
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .env("AWTRIX_UPDATE_API_URL", format!("{base}/latest"))
+        .env("AWTRIX_UPDATE_ASSET_BASE_URL", &base)
+        .env("AWTRIX_UPDATE_EXECUTABLE", &target)
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(target).unwrap(), b"known working binary");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("checksum"));
+}
+
+#[test]
+fn update_network_failure_does_not_require_device_configuration_or_change_target() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("existing");
+    std::fs::write(&target, b"working").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .arg("update")
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .env("AWTRIX_UPDATE_API_URL", "http://127.0.0.1:1/latest")
+        .env("AWTRIX_UPDATE_ASSET_BASE_URL", "http://127.0.0.1:1")
+        .env("AWTRIX_UPDATE_EXECUTABLE", &target)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(target).unwrap(), b"working");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("manual"));
+}
+
+#[test]
 fn release_notice_is_stable_cached_and_best_effort_at_the_cli_boundary() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}/releases", server.server_addr());

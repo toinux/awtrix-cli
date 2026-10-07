@@ -68,6 +68,23 @@ asset set and checksums and leaves a matching release unchanged; mismatched
 published releases fail rather than being modified. Incomplete draft releases
 may be safely completed by rerunning the workflow.
 
+## Explicit self-update
+
+`awtrix-cli update` is the only command that installs a release. It reads the
+GitHub latest-release endpoint, selects the one supported host asset, fetches
+`SHA256SUMS` and the binary, and verifies the exact asset entry before writing
+anything to the executable path. The executable is staged beside the target
+and atomically replaced on Unix. Windows first renames the old file to a
+same-directory backup (to handle executable locking), restores it if installing
+the staged file fails, and removes the backup after success. A failure reports
+the release page/manual next step; regular release-notice checks never install
+anything.
+
+In debug builds only, `AWTRIX_UPDATE_API_URL`, `AWTRIX_UPDATE_ASSET_BASE_URL`,
+and `AWTRIX_UPDATE_EXECUTABLE` allow local fixture servers and temporary target
+files. These overrides are compiled out of release binaries and do not make
+production destinations configurable.
+
 To cut a release, update the package version and lockfile as appropriate, tag
 the matching commit (for example `git tag v0.1.2`), and push that tag. The
 workflow needs repository `contents: write` permission for its release job.

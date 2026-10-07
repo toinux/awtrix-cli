@@ -14,6 +14,7 @@ mod screen;
 mod scripts;
 mod settings;
 mod tests;
+mod updater;
 
 #[derive(Parser)]
 #[command(name = "awtrix-cli", version, about = "AWTRIX NG device CLI")]
@@ -94,6 +95,8 @@ enum Command {
         #[command(subcommand)]
         action: settings::Command,
     },
+    /// Install the latest stable awtrix-cli release after validating its checksum.
+    Update,
 }
 
 #[derive(Subcommand)]
@@ -653,6 +656,14 @@ fn emit_error(code: &str, message: &str, machine: bool) {
 }
 
 fn run(cli: &Cli) -> CliResult<Value> {
+    if matches!(cli.command, Command::Update) {
+        updater::run().map(|message| json!({"updated":true,"message":message}))
+    } else {
+        run_command(cli)
+    }
+}
+
+fn run_command(cli: &Cli) -> CliResult<Value> {
     if matches!(
         cli.command,
         Command::Logs {
@@ -711,6 +722,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
         Command::Apps { action } => apps::run(action, &api),
         Command::Notify { action } => notifications::run(action, &api),
         Command::Settings { action } => settings::run(action, &api, cli.timeout),
+        Command::Update => unreachable!(),
         Command::Device {
             action: DeviceCommand::State,
         } => api.get("/api/v1/device"),
