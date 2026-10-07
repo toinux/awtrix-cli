@@ -5797,3 +5797,40 @@ fn unsupported_active_route_method_is_reported_without_get_fallback() {
     .contains("HTTP 405"));
     worker.join().unwrap();
 }
+
+#[test]
+fn default_profile_lookup_ignores_legacy_awtrix_directory_without_migrating_it() {
+    let root = std::env::temp_dir().join(format!("awtrix-config-dir-{}", std::process::id()));
+    let legacy_dir = root.join(".config/awtrix");
+    let current_dir = root.join(".config/awtrix-cli");
+    std::fs::create_dir_all(&legacy_dir).unwrap();
+    let legacy_config = legacy_dir.join("config.json");
+    let original =
+        br#"{"profiles":{"legacy":{"target":"http://legacy.local"}},"default":"legacy"}"#;
+    std::fs::write(&legacy_config, original).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args([
+            "profile",
+            "add",
+            "new-profile",
+            "--target",
+            "http://new.local",
+        ])
+        .env("HOME", &root)
+        .env_remove("AWTRIX_CONFIG")
+        .env_remove("AWTRIX_URL")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(current_dir.join("config.json").exists());
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(current_dir.join("config.json")).unwrap()).unwrap();
+    assert_eq!(
+        config["profiles"]["new-profile"]["target"],
+        "http://new.local"
+    );
+    assert_eq!(std::fs::read(&legacy_config).unwrap(), original);
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -104,6 +104,14 @@ Use `--profile desk` to select this device, or make it the default with
 `awtrix-cli profile set-default desk`. For one-off commands, use `--target URL`;
 `AWTRIX_URL` is also supported.
 
+Personal configuration defaults to `~/.config/awtrix-cli/config.json` on Linux
+and macOS, `%APPDATA%/awtrix-cli/config.json` on Windows, or
+`%USERPROFILE%/AppData/Roaming/awtrix-cli/config.json` when `APPDATA` is unset.
+`AWTRIX_CONFIG` selects an exact config file instead. The headless process
+ownership record is `headless.json` alongside that file. The old `awtrix`
+directory is neither searched nor migrated; to retain existing profiles,
+manually move its `config.json` into the new `awtrix-cli` directory.
+
 If HTTP Basic authentication is enabled, supply `AWTRIX_USERNAME` and
 `AWTRIX_PASSWORD`, or credentials in your personal profile. Project manifests
 reference profiles by name and do not store credentials. Examples use POSIX-shell
