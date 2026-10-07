@@ -355,3 +355,24 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
   beyond observed ESP32 1.2.2 behavior is claimed. Ticket merge is
   `ab508bda5103c35d349ff91cd3b6a6501e1cea76`; final validation/docs commit is
   `f64ba42`.
+
+## Specification #22 run — 2026-10-08
+
+- Authority: https://github.com/toinux/awtrix-cli/issues/22; sole native child
+  https://github.com/toinux/awtrix-cli/issues/25. Both observed OPEN, no comments,
+  no native blocked-by edges or further children. Graph has unique IDs and is acyclic.
+- New issues have no historical local ticket IDs; migration table remains unchanged.
+  Prior diagnostic #2 and original graph are already integrated; no redispatch needed.
+- Run baseline `8ad3d07d65c9551583ec86367b67e3ea081d64d2`, clean integration workspace
+  on `integration/awtrix-cli`. Existing release/installer worktrees are unrelated and
+  will be preserved. Git author identity exists. No ADR files are present.
+- Authorized: local commits/merges and tracker updates, not remote pushes/releases.
+  Maximum two implementers; only one eligible ticket (#25).
+- Assignment: `ticket/25-config-directory`, worktree
+  `/home/toine/Work/tries/2026-10-07-awtrix-cli/.worktrees/ticket-25`.
+  Dispatch base is the committed run checkpoint following this entry.
+- Shared constraints: defaults use `awtrix-cli`, exact `AWTRIX_CONFIG` override retained,
+  sibling `headless.json`, no legacy fallback/migration, no schema/lifecycle changes.
+- Real headless executable/UI remain available at the previously recorded paths
+  (official AWTRIX NG 1.2.2 source/build). No physical device mutation is authorized
+  or needed for this graph. No known external acceptance blocker.
