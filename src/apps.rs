@@ -9,6 +9,21 @@ const MAX_TC002_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// List the device's complete app inventory, including persistent apps and pushed apps.
+    List,
+    /// Read which app the device reports as active (does not dismiss notifications).
+    ActiveGet,
+    /// Select an app without claiming it is currently visible.
+    Select { name: String },
+    /// Read the ordered rotation.
+    OrderGet,
+    /// Set rotation order and complete disabled-name set (omitted order is preserved).
+    OrderSet {
+        #[arg(long)]
+        order: Option<String>,
+        #[arg(long, default_value = "[]")]
+        disabled: String,
+    },
     /// Create or replace a pushed app (the device route is an upsert, not create-only).
     Create {
         name: String,
@@ -43,6 +58,51 @@ pub enum Command {
 
 pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value> {
     match command {
+        Command::List => {
+            let inventory = api.get("/api/v1/apps")?;
+            let items = inventory
+                .as_array()
+                .ok_or(("INVALID_RESPONSE", "app inventory must be an array".into()))?;
+            let apps: Vec<Value> = items.iter().map(|app| json!({"name":app.get("name"),"origin":app.get("origin"),"enabled":app.get("enabled"),"present":app.get("present"),"in_loop":app.get("inLoop"),"error":app.get("error")})).collect();
+            Ok(json!({"apps":apps,"count":apps.len()}))
+        }
+        Command::ActiveGet => api.get("/api/v1/apps/active"),
+        Command::Select { name } => {
+            validate_name(name).map_err(|message| ("ARGUMENT", message))?;
+            let value = api.mutate(reqwest::Method::PUT, "/api/v1/apps/active", &json!(name))?;
+            Ok(
+                json!({"name":name,"accepted":true,"visibility":"unknown","device_result":value,"notification_effect":"none_claimed"}),
+            )
+        }
+        Command::OrderGet => api.get("/api/v1/apps"),
+        Command::OrderSet { order, disabled } => {
+            let disabled: Vec<String> = serde_json::from_str(disabled).map_err(|_| {
+                (
+                    "ARGUMENT",
+                    "--disabled must be a JSON array of app names".into(),
+                )
+            })?;
+            if disabled.iter().any(|name| validate_name(name).is_err()) {
+                return Err(("ARGUMENT", "--disabled contains an invalid app name".into()));
+            }
+            let mut body = json!({"disabled":disabled});
+            if let Some(order) = order {
+                let order: Vec<String> = serde_json::from_str(order).map_err(|_| {
+                    (
+                        "ARGUMENT",
+                        "--order must be a JSON array of app names".into(),
+                    )
+                })?;
+                if order.iter().any(|name| validate_name(name).is_err()) {
+                    return Err(("ARGUMENT", "--order contains an invalid app name".into()));
+                }
+                body["order"] = json!(order);
+            }
+            let result = api.mutate(reqwest::Method::PUT, "/api/v1/apps/order", &body)?;
+            Ok(
+                json!({"accepted":true,"order_included":body.get("order").is_some(),"disabled":body["disabled"],"device_result":result}),
+            )
+        }
         Command::Create {
             name,
             payload,
@@ -82,6 +142,23 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
 
 pub fn validate(command: &Command) -> Result<(), String> {
     match command {
+        Command::List | Command::ActiveGet | Command::OrderGet => Ok(()),
+        Command::Select { name } => validate_name(name),
+        Command::OrderSet { order, disabled } => {
+            let disabled: Vec<String> = serde_json::from_str(disabled)
+                .map_err(|_| "--disabled must be a JSON array of app names".to_owned())?;
+            if disabled.iter().any(|name| validate_name(name).is_err()) {
+                return Err("--disabled contains an invalid app name".into());
+            }
+            if let Some(order) = order {
+                let order: Vec<String> = serde_json::from_str(order)
+                    .map_err(|_| "--order must be a JSON array of app names".to_owned())?;
+                if order.iter().any(|name| validate_name(name).is_err()) {
+                    return Err("--order contains an invalid app name".into());
+                }
+            }
+            Ok(())
+        }
         Command::Create {
             name,
             payload,
@@ -300,6 +377,19 @@ fn accepts_icons(value: &Value) -> bool {
 
 pub fn describe(topic: &str) -> Value {
     let action = topic.strip_prefix("apps ").unwrap_or("create");
+    if matches!(
+        action,
+        "list" | "active-get" | "select" | "order-get" | "order-set"
+    ) {
+        let (route, parameters, output, example) = match action {
+            "list" => ("GET /api/v1/apps", json!({}), "apps: name, origin, enabled, present, in_loop, error (absent device fields are null)", "awtrix --json apps list"),
+            "active-get" => ("GET /api/v1/apps/active", json!({}), "device-reported active app", "awtrix apps active-get"),
+            "select" => ("PUT /api/v1/apps/active (JSON string name)", json!({"name":"[A-Za-z0-9_-]{1,32}"}), "accepted, visibility=unknown; does not remove notifications", "awtrix apps select demo"),
+            "order-get" => ("GET /api/v1/apps", json!({}), "full ordered app inventory", "awtrix apps order-get"),
+            _ => ("PUT /api/v1/apps/order", json!({"--order":"optional JSON string array; repeated names are allowed", "--disabled":"JSON string array, complete set of switched-off app names (default [])"}), "accepted, order_included, disabled, device_result", "awtrix apps order-set --order '[\"clock\",\"demo\"]' --disabled '[\"weather\"]'"),
+        };
+        return json!({"command":format!("apps {action}"),"route":route,"parameters":parameters,"inputs":[],"schemas":{"output":output},"outputs":[output],"output_fields":["apps","count","name","origin","enabled","present","in_loop","error","accepted","visibility","order_included","disabled","device_result"],"examples":[example],"prerequisites":["AWTRIX NG app API; device routes remain authoritative"],"limitations":["select acceptance does not guarantee current visibility or dismiss notifications","order-set disabled is the complete off-set; omitted order preserves existing order"]});
+    }
     let parameters = if action == "delete" {
         json!({"name":"[A-Za-z0-9_-]{1,32}"})
     } else {

@@ -4814,3 +4814,91 @@ fn screen_capture_replaces_same_destination_with_new_pixels() {
     assert_eq!(&pixels[..info.buffer_size()], &[0xaa, 0xbb, 0xcc]);
     std::fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn app_rotation_routes_and_payloads_are_observed_at_cli_boundary() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for (path, method, payload) in [
+            ("/api/v1/apps", "GET", None),
+            ("/api/v1/apps/active", "PUT", Some("\"demo\"")),
+            ("/api/v1/apps/order", "PUT", Some(r#"{"disabled":["old"]}"#)),
+            (
+                "/api/v1/apps/order",
+                "PUT",
+                Some(r#"{"disabled":["old"],"order":["demo","demo"]}"#),
+            ),
+        ] {
+            let mut request = server.recv().unwrap();
+            assert_eq!(request.url(), path);
+            assert_eq!(request.method().as_str(), method);
+            if let Some(expected) = payload {
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body).unwrap();
+                assert_eq!(body, expected);
+            }
+            let body = if path == "/api/v1/apps" {
+                r#"[{"name":"demo","origin":"script","enabled":true,"present":true,"inLoop":false,"error":null}]"#
+            } else {
+                "{}"
+            };
+            request.respond(Response::from_string(body)).unwrap();
+        }
+    });
+    let output = run(&["--target", &url, "--json", "apps", "list"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["apps"][0]["in_loop"], false);
+    for args in [
+        vec!["--target", &url, "--json", "apps", "select", "demo"],
+        vec![
+            "--target",
+            &url,
+            "apps",
+            "order-set",
+            "--disabled",
+            "[\"old\"]",
+        ],
+        vec![
+            "--target",
+            &url,
+            "apps",
+            "order-set",
+            "--disabled",
+            "[\"old\"]",
+            "--order",
+            "[\"demo\",\"demo\"]",
+        ],
+    ] {
+        let output = run(&args);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    worker.join().unwrap();
+}
+
+#[test]
+fn app_rotation_rejects_bad_name_before_network_access() {
+    let output = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "apps",
+        "select",
+        "bad/name",
+    ]);
+    assert_ne!(output.status.code(), Some(0));
+    assert!(format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .contains("name must match"));
+}
