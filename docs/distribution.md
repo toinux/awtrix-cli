@@ -73,12 +73,14 @@ may be safely completed by rerunning the workflow.
 `awtrix-cli update` is the only command that installs a release. It reads the
 GitHub latest-release endpoint, selects the one supported host asset, fetches
 `SHA256SUMS` and the binary, and verifies the exact asset entry before writing
-anything to the executable path. The executable is staged beside the target
-and atomically replaced on Unix. Windows first renames the old file to a
-same-directory backup (to handle executable locking), restores it if installing
-the staged file fails, and removes the backup after success. A failure reports
-the release page/manual next step; regular release-notice checks never install
-anything.
+anything to the executable path. The command updates the resolved path reported
+by `current_exe()`; launching through a symlink updates its resolved executable,
+not the symlink entry. The validated file is staged beside that executable and
+`self-replace` performs the platform-specific handoff, including Windows locking
+and delayed cleanup. Windows also keeps a temporary recovery copy while the
+handoff runs and restores it if replacement fails before the new executable is
+installed. A failure reports the release page/manual next step; regular
+release-notice checks never install anything.
 
 In debug builds only, `AWTRIX_UPDATE_API_URL`, `AWTRIX_UPDATE_ASSET_BASE_URL`,
 and `AWTRIX_UPDATE_EXECUTABLE` allow local fixture servers and temporary target

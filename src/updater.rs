@@ -91,29 +91,28 @@ fn run_for(target: PathBuf) -> Result<String, (&'static str, String)> {
 }
 
 fn endpoints() -> (String, String) {
-    if cfg!(debug_assertions) {
-        if let Ok(endpoint) = std::env::var("AWTRIX_UPDATE_API_URL") {
-            let base =
-                std::env::var("AWTRIX_UPDATE_ASSET_BASE_URL").unwrap_or_else(|_| endpoint.clone());
-            return (endpoint, base);
-        }
+    #[cfg(debug_assertions)]
+    if let Ok(endpoint) = std::env::var("AWTRIX_UPDATE_API_URL") {
+        let base =
+            std::env::var("AWTRIX_UPDATE_ASSET_BASE_URL").unwrap_or_else(|_| endpoint.clone());
+        return (endpoint, base);
     }
     (RELEASES.into(), RELEASE_PAGE.into())
 }
 
-fn url(base: &str, name: &str, published: &str) -> String {
-    if cfg!(debug_assertions) && std::env::var_os("AWTRIX_UPDATE_API_URL").is_some() {
-        format!("{}/{}", base.trim_end_matches('/'), name)
+fn url(_base: &str, name: &str, published: &str) -> String {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("AWTRIX_UPDATE_API_URL").is_some() {
+        return format!("{}/{}", _base.trim_end_matches('/'), name);
+    }
+    let parsed = reqwest::Url::parse(published).ok();
+    if parsed
+        .as_ref()
+        .is_some_and(|url| url.scheme() == "https" && url.host_str() == Some("github.com"))
+    {
+        published.to_owned()
     } else {
-        let parsed = reqwest::Url::parse(published).ok();
-        if parsed
-            .as_ref()
-            .is_some_and(|url| url.scheme() == "https" && url.host_str() == Some("github.com"))
-        {
-            published.to_owned()
-        } else {
-            format!("https://github.com/toinux/awtrix-cli/releases/latest/download/{name}")
-        }
+        format!("https://github.com/toinux/awtrix-cli/releases/latest/download/{name}")
     }
 }
 
@@ -186,8 +185,10 @@ fn asset_name() -> Option<&'static str> {
 
 fn current_exe() -> Result<PathBuf, (&'static str, String)> {
     #[cfg(debug_assertions)]
-    if let Some(path) = std::env::var_os("AWTRIX_UPDATE_EXECUTABLE") {
-        return Ok(path.into());
+    {
+        if let Some(path) = std::env::var_os("AWTRIX_UPDATE_EXECUTABLE") {
+            return Ok(path.into());
+        }
     }
     std::env::current_exe().map_err(|_| manual("the running executable path could not be resolved"))
 }
@@ -214,21 +215,113 @@ fn replace(target: &std::path::Path, bytes: &[u8]) -> Result<(), (&'static str, 
             .set_permissions(fs::Permissions::from_mode(0o755))
             .map_err(|_| manual("could not mark the new executable as runnable"))?;
     }
+
+    let running = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.canonicalize().ok());
+    let resolved_target = target.canonicalize().ok();
+    let is_running_executable = resolved_target.is_some() && resolved_target == running;
+
+    if is_running_executable {
+        #[cfg(windows)]
+        let backup = {
+            let mut backup = tempfile::NamedTempFile::new_in(parent)
+                .map_err(|_| manual("cannot stage a recovery copy beside the executable"))?;
+            let mut current = fs::File::open(target)
+                .map_err(|_| manual("cannot open the current executable for recovery"))?;
+            std::io::copy(&mut current, backup.as_file_mut())
+                .map_err(|_| manual("cannot preserve the current executable before replacement"))?;
+            backup
+                .as_file()
+                .sync_all()
+                .map_err(|_| manual("cannot flush the recovery copy before replacement"))?;
+            backup
+        };
+
+        #[cfg(debug_assertions)]
+        let result = if std::env::var_os("AWTRIX_UPDATE_REPLACE_FAIL").is_some() {
+            Err(std::io::Error::other("test-injected replacement failure"))
+        } else {
+            self_replace::self_replace(temporary.path())
+        };
+        #[cfg(not(debug_assertions))]
+        let result = self_replace::self_replace(temporary.path());
+        if let Err(error) = result {
+            #[cfg(windows)]
+            let recovery = if !target.exists() {
+                fs::copy(backup.path(), target).map(|_| ())
+            } else {
+                Ok(())
+            };
+            #[cfg(not(windows))]
+            let recovery: std::io::Result<()> = Ok(());
+
+            let message = if recovery.is_ok() {
+                format!(
+                    "replacement failed ({error}); existing executable was preserved or restored"
+                )
+            } else {
+                format!(
+                    "replacement failed ({error}) and automatic restoration failed ({recovery:?}); restore a saved executable before retrying"
+                )
+            };
+            return Err(manual(&message));
+        }
+
+        #[cfg(windows)]
+        {
+            let backup_path = backup.path().to_path_buf();
+            backup.close().map_err(|error| {
+                (
+                    "UPDATE_CLEANUP",
+                    format!(
+                        "update installed, but the previous executable backup at {} could not be removed ({error})",
+                        backup_path.display()
+                    ),
+                )
+            })?;
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(debug_assertions))]
+    return Err(manual(
+        "the resolved update target is not the running executable; install manually",
+    ));
+
+    #[cfg(debug_assertions)]
+    replace_fixture_target(target, temporary)
+}
+
+#[cfg(debug_assertions)]
+fn replace_fixture_target(
+    target: &std::path::Path,
+    temporary: tempfile::NamedTempFile,
+) -> Result<(), (&'static str, String)> {
     #[cfg(windows)]
     {
-        // Windows cannot rename an executable while it is running. Move the
-        // validated target aside, then restore it if the staged rename fails.
-        let backup = target.with_extension("awtrix-cli-update-backup");
-        fs::rename(target, &backup).map_err(|_| manual("Windows has locked the running executable. Close other awtrix-cli processes, then use the manual release installer; the executable was not changed"))?;
+        let backup = tempfile::Builder::new()
+            .prefix(".awtrix-cli-update-backup-")
+            .tempfile_in(
+                target
+                    .parent()
+                    .ok_or_else(|| manual("the executable has no safe parent directory"))?,
+            )
+            .map_err(|_| manual("cannot reserve a unique recovery path"))?;
+        let backup_path = backup.into_temp_path();
+        fs::remove_file(&backup_path).map_err(|_| {
+            manual("cannot prepare the recovery path; existing executable was not changed")
+        })?;
+        fs::rename(target, &backup_path).map_err(|_| manual("cannot move the test target to a recovery path; existing executable was not changed"))?;
         if let Err(error) = temporary.persist(target) {
-            let restore = fs::rename(&backup, target);
+            let restore = fs::rename(&backup_path, target);
             return Err(manual(if restore.is_ok() {
                 &format!("replacement failed ({error}); previous executable restored")
             } else {
                 "replacement failed and automatic restoration failed; restore the backup beside the executable"
             }));
         }
-        fs::remove_file(backup).map_err(|_| {
+        fs::remove_file(&backup_path).map_err(|_| {
             manual("update installed, but the previous executable backup could not be removed")
         })?;
     }
