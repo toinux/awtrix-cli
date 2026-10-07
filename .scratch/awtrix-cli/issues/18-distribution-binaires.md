@@ -6,7 +6,7 @@
 
 **Status:** in-progress
 
-**Blocker:** Native macOS ARM64 and Windows MSVC runtime/CI artifact checks require runners unavailable locally. Software pipeline and Linux validation integrated; no remote publication authorized.
+**Blocker:** Native CI now available and branch push authorized. Run 37658583268 passes Linux but fails macOS ARM64 and Windows MSVC Clippy on non-Linux headless code/test gating; builds/HTTP checks on those hosts and all artifact jobs are therefore not completed. Isolated correction worktree prepared, but Luna implementer dispatch failed twice with an OpenCode session database insertion error. See automation.md for resume evidence.
 
 ## Acceptance criteria
 

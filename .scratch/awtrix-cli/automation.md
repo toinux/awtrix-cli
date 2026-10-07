@@ -197,3 +197,27 @@ and rebuild from the recorded official source/commands if necessary.
 - Resume: user executes the push or explicitly changes harness permissions, then
   inspect GitHub Actions results and artifacts before accepting ticket 18. Ticket 19
   remains blocked. User conversational authorization alone did not remove the tool denial.
+
+## Build-mode push and first native CI — 2026-10-07
+
+- User switched to Build and explicitly requested retry. git push -u origin
+  integration/awtrix-cli succeeded; remote branch now contains 7ab4ffd and upstream
+  tracking is set. Earlier push denial no longer blocks the current Build session.
+- Actual CI https://github.com/toinux/awtrix-cli/actions/runs/37658583268 completed
+  with failure. Linux job 112919966085 passed formatting, Clippy, full default test
+  suite, standalone release build, and distribution CLI/HTTP tests.
+- macOS ARM64 job 112919966542 and Windows MSVC job 112919966770 failed Clippy.
+  Logs identify non-Linux unreachable code and unused pid/expected in src/headless.rs
+  stop, and unused PathBuf/run/parse/target_is_stopped in tests/headless.rs.
+  Their release builds and distribution tests were skipped; package job was skipped.
+  No downloadable artifacts or release were produced. Ticket 18 remains incomplete.
+- Isolated branch ticket/18-native-ci-fix, worktree .worktrees/ticket-18-resume,
+  dispatch base 7ab4ffd253a1d63e92212dee41fed6fc9ab92330 created for correction.
+  Both awtrix-implementer launches failed before starting with OpenCode database
+  session insertion error (sessions ses_ee899610effeLF7YXxYQEhsBvW and
+  ses_ee8991803ffe4L4RoU9l1vFiAr). No worker changes/commits exist. Luna was not
+  substituted, and no implementation was made in the integration workspace.
+- Resume after subagent session creation works: dispatch ticket18 correction in
+  prepared worktree, review independently, integrate/recheck, push corrected code
+  and await passing native jobs plus artifacts before unlocking ticket19.
+  This evidence update is local; avoid an identical CI rerun solely for journal edits.
