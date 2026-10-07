@@ -293,3 +293,34 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
   awtrix-cli-x86_64-pc-windows-msvc ID11501964511. No release published.
 - Ticket18 remains accepted with fresh post-rename native evidence. Ticket19 still
   ready, not started. Use awtrix-cli for its scenario and documentation.
+
+## Ticket #20 / historical ticket 19 — partial implementation, physical blocker — 2026-10-07
+
+- Reconciled live GitHub dependencies: #4, #5, #6, #7, #15, #18 and #19 are closed
+  as completed. Claimed #20 and posted progress; no implementation or acceptance
+  comments existed at dispatch.
+- Integration branch resumed at `c8be25c8b4e142524ff643b0fef79053e874e344` in a clean
+  dedicated worktree, preserving unrelated uncommitted tracker-migration changes in
+  the user's `main` checkout.
+- Historical ticket 19 implementation branch `ticket/19-validation`, based on that
+  SHA; commits `9737cb5` and `8257513` add `docs/validation.md` and README references.
+  The independent Luna review found no standards blockers, confirmed the stale link,
+  and identified the available physical ESP32 full-path run as an unmet acceptance
+  criterion. Review corrections fixed the link, added exact fixture/headless commands,
+  and documented safe ownership preflight/backup/abort steps for physical runs.
+- Integrated as merge `ab508bda5103c35d349ff91cd3b6a6501e1cea76`; complete diff reviewed
+  against ticket #20. Local full checks passed: `cargo fmt --check`, `cargo clippy --all-targets --all-features
+  --locked -- -D warnings`, `cargo test --locked` (6 unit, 135 CLI, 2 distribution;
+  1 headless test ignored by default), and explicit real headless test with the
+  recorded AWTRIX NG 1.2.2 binary/UI (1 passed, 21.47s). The four focused fixture
+  tests also passed in the worker; native distribution evidence remains CI run
+  37663709425. No physical mutation was performed.
+- `docs/validation.md` records the main physical workflow NOT EXECUTED on the known
+  ESP32 `192.168.1.202`; ESP32-S3 and TC002 are unavailable and marked NOT EXECUTED.
+  Prior ESP32 diagnosis and notification acceptance remain limited smoke evidence;
+  existing Update-Checker, Anothertime and Tesla scripts must be preserved.
+- Ticket #20 remains OPEN and not accepted: the full physical workflow on the
+  available ESP32 is still required. Visible/persistent device changes require the
+  owner's explicit agreement. Do not close or claim physical compatibility until
+  that run is authorized and its evidence recorded. Integration checkpoint after
+  ticket merge: `ab508bda5103c35d349ff91cd3b6a6501e1cea76`.
