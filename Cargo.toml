@@ -16,6 +16,7 @@ base64 = "0.22"
 ctrlc = "3"
 png = "0.17"
 tempfile = "3"
+libc = "0.2"
 
 [dev-dependencies]
 tiny_http = "0.12"
