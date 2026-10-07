@@ -413,6 +413,46 @@ fn validate(name: &str) -> crate::CliResult<()> {
         ))
     }
 }
+
+/// Project deployment preserves the ticket-07 conditional update/create contract.
+pub(crate) fn deploy_project(
+    api: &crate::ApiClient,
+    name: &str,
+    source: &str,
+    expected: Option<&str>,
+    create: bool,
+    force: bool,
+) -> crate::CliResult<Value> {
+    validate(name)?;
+    if force {
+        return operational_result(
+            api.raw_put(&format!("/api/v1/apps/script/{name}"), source)?,
+            false,
+            None,
+        );
+    }
+    let caps = api.get("/api/v1/capabilities")?;
+    if caps.get("scriptUpdates").and_then(Value::as_bool) != Some(true) {
+        return Err((
+            "PROTECTION_UNAVAILABLE",
+            "scriptUpdates capability absent; no script write performed".into(),
+        ));
+    }
+    let expected = if create {
+        Value::Null
+    } else {
+        Value::String(
+            expected
+                .ok_or((
+                    "PROJECT_INVALID",
+                    "script lacks original source reference".into(),
+                ))?
+                .to_owned(),
+        )
+    };
+    let response = api.conditional_put(name, &expected, source)?;
+    operational_result(response, true, verify_start(api, name))
+}
 fn verify_start(api: &crate::ApiClient, name: &str) -> Option<bool> {
     let system = api.get("/api/v1/system").ok()?;
     if system.get("scriptingEnabled").and_then(Value::as_bool) != Some(true) {
