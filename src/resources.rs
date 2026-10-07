@@ -84,6 +84,22 @@ fn validate_module(name: &str) -> crate::CliResult<()> {
         ))
     }
 }
+fn declares_module(source: &str) -> bool {
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Some(comment) = trimmed.strip_prefix('#') else {
+            return false;
+        };
+        let comment = comment.trim_start();
+        if let Some(rest) = comment.strip_prefix("@module") {
+            return rest.is_empty() || rest.starts_with(char::is_whitespace);
+        }
+    }
+    false
+}
 fn validate_icon(dir: &str, path: &Path, bytes: &[u8]) -> crate::CliResult<()> {
     if dir == "/ICONS" {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -162,12 +178,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                         ))
                     }
                 };
-                if source.is_empty()
-                    || !source
-                        .lines()
-                        .take(8)
-                        .any(|line| line.trim_start().starts_with("# @module"))
-                {
+                if source.is_empty() || !declares_module(&source) {
                     return Err((
                         "ARGUMENT",
                         "non-empty module source must declare # @module in its header".into(),
@@ -204,7 +215,7 @@ pub fn describe(topic: Option<&str>) -> Value {
         ),
         "resources files upload" => (
             json!({"FILE":"local file path","--dir":"destination directory (default /ICONS)"}),
-            json!(["upload response"]),
+            json!(["ok"]),
             "awtrix resources files upload icon.gif --dir /ICONS",
         ),
         "resources files delete" => (
@@ -214,7 +225,7 @@ pub fn describe(topic: Option<&str>) -> Value {
         ),
         "resources files download" => (
             json!({"PATH":"full device path","--output":"local destination"}),
-            json!(["unsupported error; route absent from official API"]),
+            json!(["error"]),
             "awtrix resources files download /ICONS/icon.gif --output icon.gif",
         ),
         "resources modules list" => (
@@ -224,7 +235,7 @@ pub fn describe(topic: Option<&str>) -> Value {
         ),
         "resources modules get" => (
             json!({"NAME":"module identifier","--output":"optional local destination"}),
-            json!(["source or path"]),
+            json!(["source", "path"]),
             "awtrix resources modules get helpers --output helpers.be",
         ),
         "resources modules deploy" => (
@@ -256,5 +267,14 @@ pub fn describe(topic: Option<&str>) -> Value {
         .filter_map(Value::as_str)
         .map(str::to_owned)
         .collect();
+    let mut parameters = parameters;
+    parameters["--target"] =
+        json!("HTTP base URL; required for execution, optional for connected describe");
+    parameters["--profile"] = json!("named device profile (or AWTRIX_PROFILE)");
+    parameters["--username"] = json!("HTTP Basic username");
+    parameters["--password"] = json!("HTTP Basic password");
+    parameters["--timeout"] = json!("bounded request timeout in milliseconds (default 3000)");
+    parameters["--json"] = json!("emit compact machine-readable JSON");
+    parameters["--fields"] = json!("comma-separated top-level result fields");
     json!({"command":op,"parameters":parameters,"outputs":outputs,"output_fields":output_fields,"examples":[example],"prerequisites":["AWTRIX NG HTTP API","module deploy source must carry # @module header"],"limitations":["No generic file-download API route is documented. Berry module source is available via GET /api/v1/apps/script/{name}.","Inline pushed-app icon values are icon IDs (up to 64 characters) or the documented data URLs data:image/gif.Base64,... / data:image/jpeg.Base64,...; this CLI file uploader does not reinterpret those JSON values.","Module replacement or deletion does not rewrite application references. Device request/storage capacity is enforced by the official route (413/507); no undocumented variant-independent cap is imposed."]})
 }
