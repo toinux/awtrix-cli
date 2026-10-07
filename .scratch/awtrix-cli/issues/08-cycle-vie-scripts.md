@@ -4,7 +4,7 @@
 
 **Blocked by:** 07 — Lire et déployer un script avec protection contre les conflits.
 
-**Status:** in-progress
+**Status:** done
 
 ## Acceptance criteria
 

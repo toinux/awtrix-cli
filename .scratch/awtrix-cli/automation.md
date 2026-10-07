@@ -23,8 +23,10 @@ Verified unique IDs, existing references, acyclic graph (Luna preflight).
 | 07 | done | ticket/07-scripts / .worktrees/ticket-07 | 70cb068 | 3b2a76c+1cc3a28+f4ed0bc; review clear; merge fe5cda1 |
 | 09 | done | ticket/09-logs / .worktrees/ticket-09 | 02cf98c | 698ccf4+753ddf3; review clear; integrated |
 | 10 | done | ticket/10-screen / .worktrees/ticket-10 | 02cf98c | 76abdab+af4fd8c+0dde76d+41b0444; final review clear; integrated240dab5 |
-| 08,12 | in-progress | ticket/08-lifecycle, ticket/12-resources | next journal commit | pending |
-| 03–06,11,13–19 | ready-for-agent, dependencies enforced | unassigned | — | — |
+| 08 | done | ticket/08-lifecycle / .worktrees/ticket-08 | c0dac40 | 7809dac+322528f; review clear; integrated102db6d |
+| 12 | done | ticket/12-resources / .worktrees/ticket-12 | c0dac40 | 40df070+1ed2174; review clear; integrated102db6d |
+| 11,15 | in-progress | ticket/11-verify, ticket/15-headless | next journal commit | pending |
+| 03–06,13–14,16–19 | ready-for-agent, dependencies enforced | unassigned | — | — |
 
 ## Shared contracts
 
@@ -53,3 +55,8 @@ Identity uses /device boardType+soc, not arbitrary strings. Describe offline and
   Screen worker accidentally edited root initially: provenance confirmed, redundant stray
   changes removed before integration. Merge conflicts resolved preserving both domains.
   Integration fmt/clippy pass; 2 unit+46 CLI tests pass; Luna review clear.
+- Tickets08/12 integrated102db6d after review fixes: lifecycle/config/data and
+  APPLIED_NOT_SAVED507; module leadingheader and multipart resources. Generic file
+  download absent from official API returns explicit UNSUPPORTED, no guessed endpoint.
+  Resource worker root-stray edits confirmed/removed; assignment isolation reiterated.
+  Integrated fmt/clippy pass, 2unit+61CLI tests. Luna review clear.

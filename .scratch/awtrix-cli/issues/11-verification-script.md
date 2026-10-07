@@ -4,7 +4,7 @@
 
 **Blocked by:** 07 — Lire et déployer un script avec protection contre les conflits ; 09 — Consulter et suivre les logs ; 10 — Capturer l’écran dans un fichier.
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 ## Acceptance criteria
 
