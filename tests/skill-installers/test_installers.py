@@ -101,6 +101,33 @@ exit 0
                 result = self.invoke("--version", version)
                 self.assertEqual(result.returncode, 2)
 
+    def test_verified_but_wrong_version_preserves_destination(self):
+        self.release()
+        binary = self.downloads / "binary"
+        binary.write_bytes(binary.read_bytes().replace(b"awtrix-cli 0.1.0", b"awtrix-cli 0.2.0"))
+        checksum = hashlib.sha256(binary.read_bytes()).hexdigest()
+        (self.downloads / "SHA256SUMS").write_text(f"{checksum}  awtrix-cli-x86_64-unknown-linux-gnu\n")
+        target = self.root / "installed/awtrix-cli"
+        target.parent.mkdir()
+        target.write_text("old")
+        result = self.invoke("--version", "v0.1.0", "--install-dir", str(target.parent))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unexpected binary version", result.stderr)
+        self.assertEqual(target.read_text(), "old")
+
+    def test_verified_binary_help_failure_preserves_destination(self):
+        binary = self.downloads / "binary"
+        binary.write_bytes(b'#!/bin/sh\n[ "$1" = --version ] && echo "awtrix-cli 0.1.0" && exit 0\nexit 42\n')
+        checksum = hashlib.sha256(binary.read_bytes()).hexdigest()
+        (self.downloads / "SHA256SUMS").write_text(f"{checksum}  awtrix-cli-x86_64-unknown-linux-gnu\n")
+        target = self.root / "installed/awtrix-cli"
+        target.parent.mkdir()
+        target.write_text("old")
+        result = self.invoke("--version", "v0.1.0", "--install-dir", str(target.parent))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Downloaded binary failed --help", result.stderr)
+        self.assertEqual(target.read_text(), "old")
+
     def test_latest_resolution_pins_tag_and_macos_arm64_asset(self):
         self.tool("uname", '#!/bin/sh\ncase "$1" in -s) echo Darwin;; -m) echo arm64;; esac\n')
         asset = "awtrix-cli-aarch64-apple-darwin"
@@ -128,6 +155,9 @@ class WindowsInstallerTests(unittest.TestCase):
         if not binary or not Path(binary).is_file():
             self.skipTest("AWTRIX_DISTRIBUTION_BINARY must identify the built Windows release executable")
         self.binary = Path(binary)
+        version = subprocess.check_output([str(self.binary), "--version"], text=True).strip()
+        self.assertTrue(version.startswith("awtrix-cli "))
+        self.tag = "v" + version.split()[1]
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.asset = "awtrix-cli-x86_64-pc-windows-msvc.exe"
@@ -147,7 +177,7 @@ class WindowsInstallerTests(unittest.TestCase):
         fixture = str(self.fixture).replace("'", "''")
         urls = str(self.urls).replace("'", "''")
         return f'''$ErrorActionPreference = 'Stop'
-function Invoke-RestMethod {{ [pscustomobject]@{{ tag_name = 'v0.1.0' }} }}
+function Invoke-RestMethod {{ [pscustomobject]@{{ tag_name = '{self.tag}' }} }}
 function Invoke-WebRequest {{
   param($Uri, $OutFile, $Headers, $TimeoutSec, $UseBasicParsing)
   Add-Content -LiteralPath '{urls}' -Value $Uri
@@ -168,7 +198,7 @@ exit $LASTEXITCODE
         installed = target / "awtrix-cli.exe"
         self.assertTrue(installed.is_file())
         self.assertEqual(hashlib.sha256(installed.read_bytes()).hexdigest(), self.checksum)
-        self.assertIn("/releases/download/v0.1.0/", self.urls.read_text())
+        self.assertIn(f"/releases/download/{self.tag}/", self.urls.read_text())
         self.assertNotIn("/releases/download/latest/", self.urls.read_text())
 
     def test_explicit_version_and_bad_checksum_preserve_old_destination(self):
@@ -178,11 +208,11 @@ exit $LASTEXITCODE
         target.mkdir()
         destination = target / "awtrix-cli.exe"
         destination.write_bytes(b"old executable")
-        result = self.invoke("-Version", "v0.1.0", "-InstallDir", str(target))
+        result = self.invoke("-Version", self.tag, "-InstallDir", str(target))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(destination.read_bytes(), b"old executable")
-        self.assertIn("/releases/download/v0.1.0/", self.urls.read_text())
-        self.assertNotIn("awtrix-cli 0.1.0", result.stdout)
+        self.assertIn(f"/releases/download/{self.tag}/", self.urls.read_text())
+        self.assertNotIn("awtrix-cli " + self.tag[1:], result.stdout)
 
     def test_existing_binary_fast_path_does_not_download(self):
         existing = self.root / "existing"

@@ -50,8 +50,7 @@ elif command -v shasum >/dev/null 2>&1; then hash_cmd=shasum
 else printf '%s\n' 'sha256sum or shasum is required.' >&2; exit 1; fi
 
 if [ -z "$install_dir" ]; then
-    if [ "$(uname -s)" = Darwin ]; then install_dir="${HOME}/.local/bin"
-    else install_dir="${HOME}/.local/bin"; fi
+    install_dir="${HOME}/.local/bin"
 fi
 mkdir -p "$install_dir"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/awtrix-cli-install.XXXXXX")

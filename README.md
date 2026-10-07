@@ -45,7 +45,33 @@ awtrix-cli --target http://awtrix.local screen capture --output screen.png
 
 ## Quick start
 
-### Install from this checkout
+### Install a published binary
+
+[GitHub releases](https://github.com/toinux/awtrix-cli/releases) provide binaries
+for Linux x86_64 (GNU/glibc), macOS Apple Silicon, and Windows x86_64.
+No Rust toolchain is needed. From this checkout, the bundled installers select
+the host asset, verify SHA-256, and check version/help before installation:
+
+```sh
+# Linux or macOS
+sh skills/awtrix-cli/scripts/install.sh
+export PATH="$HOME/.local/bin:$PATH"
+awtrix-cli --version
+```
+
+```powershell
+# Windows PowerShell
+& .\skills\awtrix-cli\scripts\install.ps1
+$env:PATH = "$env:LOCALAPPDATA\Programs\awtrix-cli\bin;$env:PATH"
+awtrix-cli --version
+```
+
+An existing working `awtrix-cli` is reused. To bootstrap a specific version or
+directory, use `--version v0.1.0 --install-dir DIR` (PowerShell: `-Version` and
+`-InstallDir`). See [distribution](docs/distribution.md) for release assets and
+checksums, or build from source for a host without a published binary.
+
+### Build and install from this checkout
 
 With a stable [Rust toolchain](https://rustup.rs/) installed:
 
@@ -149,6 +175,32 @@ instead of overwriting a concurrent edit. `--force` explicitly opts into an
 unprotected overwrite.
 
 ## Built for AI agent workflows
+
+### Install the Agent Skill
+
+This repository includes an [Agent Skills](https://agentskills.io)-compatible
+[awtrix-cli skill](skills/awtrix-cli/SKILL.md) for OpenCode, Claude Code, Codex,
+and other compatible coding agents. It covers CLI discovery, installation,
+structured output, protected deployment, and runtime verification, with detailed
+workflows loaded only when needed.
+
+```sh
+npx skills add toinux/awtrix-cli --skill awtrix-cli
+```
+
+Choose your agent in the installer. `skills add` installs instructions and bundled
+scripts; it does not execute a binary-install hook. When first used, the skill
+checks for `awtrix-cli` and guides the agent to install the matching GitHub release
+binary with checksum verification if it is missing. Cargo remains a fallback.
+For example, ask: “Use awtrix-cli; install the CLI if needed, then inspect my
+display at http://awtrix.local.” To inspect or install the skill from a local checkout:
+
+```sh
+npx skills add . --list
+npx skills add . --skill awtrix-cli
+```
+
+### Use the executable
 
 An agent with shell access can use the same executable as a person. Discover an
 operation, inspect the target, perform it, and collect runtime evidence:

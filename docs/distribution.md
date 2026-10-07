@@ -47,6 +47,11 @@ not exactly match the `awtrix-cli` version in `Cargo.toml` fails before release
 publication. Wait for all native jobs to pass before considering the release
 available.
 
+Native jobs also exercise the skill's installers with offline fixtures, including
+the freshly built Windows executable. After publication, a second native matrix
+downloads and installs the actual published assets with the bundled installers
+and runs `--version`/`--help` on Linux, macOS, and Windows.
+
 On a green run, the workflow assembles exactly these assets:
 
 * `awtrix-cli-x86_64-unknown-linux-gnu`
