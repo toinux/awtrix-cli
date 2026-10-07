@@ -53,13 +53,9 @@ pub(crate) fn run(action: &Command) -> Result<Value, (&'static str, String)> {
 }
 
 fn state_file() -> Result<PathBuf, (&'static str, String)> {
-    let root = std::env::var_os("AWTRIX_CONFIG")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config/awtrix/config.json"))
-        })
-        .ok_or_else(|| error("CONFIG", "cannot determine AWTRIX config path"))?;
-    Ok(root.with_file_name("headless.json"))
+    crate::profiles::path()
+        .map(|config| config.with_file_name("headless.json"))
+        .map_err(|(_, message)| error("CONFIG", message))
 }
 
 fn write_state(
