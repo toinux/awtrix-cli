@@ -26,8 +26,12 @@ before building on a different host. The matching native linker/SDK is
 required. `.github/workflows/verify.yml` runs on push and pull request and
 uploads one binary artifact per host. It does not publish a release or push to
 a remote. Workflow runs use the host-native runners: their help/version and
-HTTP contract test executes the built binary against a local deterministic
-HTTP fixture.
+HTTP contract test executes the just-built release artifact (selected by
+`AWTRIX_DISTRIBUTION_BINARY`) against a local deterministic HTTP fixture; it
+does not substitute Cargo's debug test executable. Headless process control is
+Linux-only: on other hosts `headless stop` returns `UNSUPPORTED_HOST` before
+reading ownership state, while `headless status` continues to report the
+recorded process as not running when Linux process identity cannot be checked.
 
 The crate disables reqwest's default TLS backend and selects `rustls-tls`;
 blocking, JSON and multipart support remain enabled. Personal profile

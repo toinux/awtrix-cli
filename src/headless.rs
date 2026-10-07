@@ -479,15 +479,21 @@ fn status() -> Result<Value, (&'static str, String)> {
 }
 
 fn stop() -> Result<Value, (&'static str, String)> {
-    let s = read_state()?;
-    let pid = s["pid"]
-        .as_u64()
-        .ok_or_else(|| error("STATE_INVALID", "missing PID"))? as u32;
-    let expected = s["start_time"]
-        .as_u64()
-        .ok_or_else(|| error("STATE_INVALID", "missing process identity"))?;
+    #[cfg(not(target_os = "linux"))]
+    return Err(error(
+        "UNSUPPORTED_HOST",
+        "AWTRIX process control requires Linux",
+    ));
+
     #[cfg(target_os = "linux")]
     {
+        let s = read_state()?;
+        let pid = s["pid"]
+            .as_u64()
+            .ok_or_else(|| error("STATE_INVALID", "missing PID"))? as u32;
+        let expected = s["start_time"]
+            .as_u64()
+            .ok_or_else(|| error("STATE_INVALID", "missing process identity"))?;
         let process = open_owned_process(pid, expected)?;
         let result = unsafe {
             libc::syscall(
@@ -504,29 +510,24 @@ fn stop() -> Result<Value, (&'static str, String)> {
                 std::io::Error::last_os_error().to_string(),
             ));
         }
-    }
-    #[cfg(not(target_os = "linux"))]
-    return Err(error(
-        "UNSUPPORTED_HOST",
-        "AWTRIX process control requires Linux",
-    ));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline && process_start(pid) == Some(expected) {
-        thread::sleep(Duration::from_millis(50));
-    }
-    if process_start(pid) == Some(expected) {
-        return Err(error(
-            "STOP_TIMEOUT",
-            "AWTRIX did not stop after SIGTERM; refusing unsafe escalation",
-        ));
-    }
-    if s["temporary"].as_bool() == Some(true) {
-        if let Some(path) = s["data"].as_str() {
-            std::fs::remove_dir_all(path).map_err(|e| error("CLEANUP", e.to_string()))?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline && process_start(pid) == Some(expected) {
+            thread::sleep(Duration::from_millis(50));
         }
+        if process_start(pid) == Some(expected) {
+            return Err(error(
+                "STOP_TIMEOUT",
+                "AWTRIX did not stop after SIGTERM; refusing unsafe escalation",
+            ));
+        }
+        if s["temporary"].as_bool() == Some(true) {
+            if let Some(path) = s["data"].as_str() {
+                std::fs::remove_dir_all(path).map_err(|e| error("CLEANUP", e.to_string()))?;
+            }
+        }
+        let _ = std::fs::remove_file(state_file()?);
+        Ok(json!({"stopped":true,"pid":pid,"data_removed":s["temporary"]}))
     }
-    let _ = std::fs::remove_file(state_file()?);
-    Ok(json!({"stopped":true,"pid":pid,"data_removed":s["temporary"]}))
 }
 
 pub(crate) fn describe(topic: &str) -> Value {

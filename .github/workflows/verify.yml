@@ -15,10 +15,13 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            suffix: ''
           - os: macos-latest
             target: aarch64-apple-darwin
+            suffix: ''
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            suffix: '.exe'
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +38,8 @@ jobs:
       - name: Build standalone binary
         run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Verify packaged binary CLI and HTTP
+        env:
+          AWTRIX_DISTRIBUTION_BINARY: target/${{ matrix.target }}/release/awtrix${{ matrix.suffix }}
         run: cargo test --test distribution
 
   package:
