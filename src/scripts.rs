@@ -1,12 +1,25 @@
 //! Raw Berry source operations. The conditional route is atomic; raw PUT is explicitly force-only.
 use clap::Subcommand;
 use serde_json::{json, Value};
+use std::time::{Duration, Instant};
 use std::{fs, path::PathBuf};
 
 #[derive(Subcommand)]
 pub enum Command {
     /// List apps and the currently observed script state, including Berry errors.
     State,
+    /// Verify a script over a bounded observation window (not a proof of correctness).
+    Verify {
+        name: String,
+        #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+        #[arg(long, default_value_t = 500, value_parser = clap::value_parser!(u64).range(1..=60000))]
+        interval_ms: u64,
+        #[arg(long, default_value_t = 0)]
+        after: u64,
+        #[arg(long)]
+        capture: Option<PathBuf>,
+    },
     /// Read exact source bytes from the device to stdout.
     Get { name: String },
     /// Deploy a raw Berry source file.
@@ -63,6 +76,23 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                 json!({"name":app.get("name"),"enabled":app.get("enabled"),"in_loop":app.get("inLoop"),"present":app.get("present"),"error":error,"error_message":error.and_then(|e|e.get("message")),"error_line":error.and_then(|e|e.get("line")),"error_hook":error.and_then(|e|e.get("hook"))})
             }).collect();
             Ok(json!({"scripts":scripts,"observed":true,"runtime_success_guaranteed":false}))
+        }
+        Command::Verify {
+            name,
+            duration_secs,
+            interval_ms,
+            after,
+            capture,
+        } => {
+            validate(name)?;
+            verify(
+                api,
+                name,
+                *duration_secs,
+                *interval_ms,
+                *after,
+                capture.as_ref(),
+            )
         }
         Command::Get { name } => {
             validate(name)?;
@@ -164,6 +194,105 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             api.get(&format!("/api/v1/apps/{name}/data"))
         }
     }
+}
+
+fn verify(
+    api: &crate::ApiClient,
+    name: &str,
+    duration_secs: u64,
+    interval_ms: u64,
+    after: u64,
+    capture: Option<&PathBuf>,
+) -> crate::CliResult<Value> {
+    let started = Instant::now();
+    let deadline = Duration::from_secs(duration_secs);
+    let system = api.get_with_timeout("/api/v1/system", deadline)?;
+    let apps = api.get_with_timeout("/api/v1/apps", deadline.saturating_sub(started.elapsed()))?;
+    let app = apps.as_array().and_then(|items| {
+        items.iter().find(|app| {
+            app.get("name").and_then(Value::as_str) == Some(name)
+                && app.get("origin").and_then(Value::as_str) == Some("script")
+        })
+    });
+    let scripting = system.get("scriptingEnabled").and_then(Value::as_bool);
+    let enabled = app.and_then(|a| a.get("enabled")).and_then(Value::as_bool) == Some(true);
+    let mut cursor = after;
+    let mut lines = Vec::new();
+    let mut collection_error = None;
+    let mut runtime_error = app
+        .and_then(|a| a.get("error"))
+        .filter(|e| !e.is_null())
+        .cloned();
+    let start_verified =
+        scripting == Some(true) && enabled && app.is_some() && runtime_error.is_none();
+    if scripting != Some(true) || app.is_none() || !enabled || !start_verified {
+        return Ok(
+            json!({"source_saved":"not_requested","start_verified":false,"observed_window":{"complete":false,"duration_secs":started.elapsed().as_secs_f64()},"not_available":if scripting != Some(true) {"scripting_disabled"} else if app.is_none() {"script_absent"} else {"script_disabled_or_start_error"},"runtime_error":runtime_error,"logs":{"after":after,"next":cursor,"lines":lines,"history_limit":34,"exhaustive":false},"capture":null,"runtime_success_guaranteed":false}),
+        );
+    }
+    while started.elapsed() < deadline {
+        let remaining = deadline.saturating_sub(started.elapsed());
+        match api.get_with_timeout(&format!("/api/v1/logs?after={cursor}"), remaining) {
+            Ok(logs) => {
+                cursor = logs
+                    .get("next")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(cursor)
+                    .max(cursor);
+                if let Some(batch) = logs.get("lines").and_then(Value::as_array) {
+                    lines.extend(batch.iter().filter_map(Value::as_str).map(str::to_owned));
+                }
+            }
+            Err((code, message)) => {
+                collection_error = Some(json!({"code":code,"message":message}));
+                break;
+            }
+        }
+        if started.elapsed() >= deadline {
+            break;
+        }
+        std::thread::sleep(
+            Duration::from_millis(interval_ms).min(deadline.saturating_sub(started.elapsed())),
+        );
+    }
+    let final_apps =
+        api.get_with_timeout("/api/v1/apps", deadline.saturating_sub(started.elapsed()));
+    if let Ok(items) = &final_apps {
+        runtime_error = items
+            .as_array()
+            .and_then(|apps| {
+                apps.iter()
+                    .find(|a| a.get("name").and_then(Value::as_str) == Some(name))
+            })
+            .and_then(|a| a.get("error"))
+            .filter(|e| !e.is_null())
+            .cloned();
+    } else if collection_error.is_none() {
+        let (code, message) = final_apps.unwrap_err();
+        collection_error = Some(json!({"code":code,"message":message}));
+    }
+    let artifact = if let Some(path) = capture {
+        let result = crate::screen::run(
+            &crate::screen::Command::Capture {
+                output: path.clone(),
+            },
+            api,
+        );
+        match result {
+            Ok(value) => Some(value),
+            Err((code, message)) => {
+                if collection_error.is_none() {
+                    collection_error = Some(json!({"code":code,"message":message}));
+                }
+                None
+            }
+        }
+    } else {
+        None
+    };
+    Ok(
+        json!({"source_saved":"not_requested","start_verified":true,"observed_window":{"complete":collection_error.is_none() && started.elapsed() >= deadline,"duration_secs":started.elapsed().as_secs_f64(),"note":"No observed error is not proof of general correctness"},"not_available":collection_error,"runtime_error":runtime_error,"logs":{"after":after,"next":cursor,"lines":lines,"history_limit":34,"exhaustive":false},"capture":artifact,"runtime_success_guaranteed":false}),
+    )
 }
 fn validate(name: &str) -> crate::CliResult<()> {
     if valid_name(name) {
