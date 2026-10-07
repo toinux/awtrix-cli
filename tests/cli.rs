@@ -12,6 +12,74 @@ fn run(args: &[&str]) -> Output {
         .unwrap()
 }
 
+#[test]
+fn settings_brightness_uses_display_patch_and_rejects_bad_values_before_http() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Patch);
+        assert_eq!(request.url(), "/api/v1/display");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"brightness":80})
+        );
+        request.respond(Response::from_string("{}")).unwrap();
+    });
+    let output = run(&["--json", "--target", &url, "settings", "brightness", "80"]);
+    worker.join().unwrap();
+    assert!(output.status.success());
+    let invalid = run(&[
+        "--json",
+        "--target",
+        "http://127.0.0.1:1",
+        "settings",
+        "brightness",
+        "256",
+    ]);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&invalid.stdout).unwrap()["error"]["code"],
+        "ARGUMENT"
+    );
+}
+
+#[test]
+fn settings_patch_invalid_field_does_not_send_http() {
+    let output = run(&[
+        "--json",
+        "--target",
+        "http://127.0.0.1:1",
+        "settings",
+        "patch",
+        "--values",
+        r#"{"mqttPassword":"secret"}"#,
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "ARGUMENT"
+    );
+}
+
+#[test]
+fn system_read_recursively_redacts_secret_fields() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/system");
+        request.respond(Response::from_string(r#"{"mqtt":{"password":"hidden","enabled":true},"tokens":[{"api_key":"hidden-too"}]}"#)).unwrap();
+    });
+    let output = run(&["--json", "--target", &url, "settings", "system-get"]);
+    worker.join().unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["mqtt"]["password"], "[REDACTED]");
+    assert_eq!(result["tokens"], "[REDACTED]");
+}
+
 fn run_with_url_env(args: &[&str], url: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_awtrix"))
         .args(args)
