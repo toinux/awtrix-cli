@@ -221,3 +221,18 @@ and rebuild from the recorded official source/commands if necessary.
   prepared worktree, review independently, integrate/recheck, push corrected code
   and await passing native jobs plus artifacts before unlocking ticket19.
   This evidence update is local; avoid an identical CI rerun solely for journal edits.
+
+## Implementer permissions clarified — 2026-10-07
+
+- User requested adjusting the worker permissions after the failed dispatches.
+  Existing awtrix-implementer already allowed edits and shell commands. Added explicit
+  skill access and external-directory allowances for this repository's .worktrees/**
+  and /tmp/opencode/**; added native CI correction instructions to the existing worker.
+  Model remains openai/gpt-6-luna; orchestration and remote pushes remain parent-owned.
+- opencode debug agent awtrix-implementer successfully loads the updated definition
+  and confirms the intended resolved permissions/model. git diff --check passes.
+- Screenshot confirms a session INSERT failure, not an explicit tool permission denial.
+  The shown todowrite denial is a session parameter, not a demonstrated root cause.
+  Permission clarification is not a claimed fix of the database failure.
+- Restart OpenCode to reload agent configuration, then retry dispatch in the prepared
+  ticket18 worktree. Actual worker creation and corrected native CI remain unverified.
