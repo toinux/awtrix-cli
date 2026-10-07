@@ -269,7 +269,7 @@ verification window does not prove future script correctness. Device logs retain
 only the latest 34 lines, so log collection is not exhaustive.
 
 The [distribution documentation](docs/distribution.md) and
-[physical validation ticket](.scratch/awtrix-cli/issues/19-validation-parcours-compatibilite.md)
+[physical validation ticket](https://github.com/toinux/awtrix-cli/issues/20)
 record the remaining acceptance gates.
 
 ## Documentation

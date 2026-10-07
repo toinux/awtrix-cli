@@ -31,16 +31,42 @@ awtrix-cli --target "$AWTRIX_URL" apps delete agent-progress
 ```
 
 `AWTRIX_URL` is required for this example; the explicit `--target` prevents a
-profile/default from silently selecting a different device. `examples/project`
-contains a script, `@module` source, GIF resource, and active/log assertions.
-Deployment is additive and not transactional. Project deploy tracks successful
-items but does not roll them back. On a disposable target, after reviewing the
-plan, `project prune --dry-run` previews and `project prune` explicitly deletes
-only stale items tracked for that project and target. On a shared target do not
-prune: preserve foreign or pre-existing scripts, and manually remove only
-temporary items whose ownership is known. The progress app is deleted explicitly;
-notifications are transient and may be dismissed with `notify delete-active`
-only when it is safe to dismiss the device's current notification.
+profile/default from silently selecting a different device. Before any physical
+or shared-target mutation, obtain explicit owner approval. Then perform this
+read-only ownership preflight and stop if any item is not clearly safe:
+
+1. Run `project validate` and inspect the manifest's exact project name, script
+   names/files, module names/files, resource destination paths/files, and test
+   assertions. Check the local resource bytes and Berry sources are the intended
+   content; record hashes (`sha256sum` or the host equivalent) for later
+   comparison. Confirm `agent-progress` is absent in the pushed-app inventory;
+   if it exists, choose a new unique progress name rather than replace/delete it.
+2. Run `resources modules list`, `apps list`, and `resources files list
+   --dir /ICONS` (plus `resources files list --dir DIR` for every other
+   destination directory). For each colliding script/module, run
+   `resources modules get NAME` or `script get NAME`, save its exact response,
+   and record its hash. For each colliding resource path, download/read it using
+   an independently verified, documented device procedure before proceeding.
+   The CLI has no generic resource download route; if exact backup and restore
+   cannot be established, abort rather than overwrite that resource.
+3. Compare the inventory with the manifest. If any name/path exists and is not
+   explicitly disposable project-owned content, either obtain approval to
+   replace it and verify a tested restoration path for the saved original, or
+   change the project names/paths to unique temporary values and validate again.
+   If neither option is safe, abort. A local backup alone is not permission to
+   overwrite.
+
+Only after that preflight may the operator run the commands above. Deployment is
+additive and not transactional; project deploy tracks successful items but does
+not roll them back. On a disposable target, after reviewing the plan,
+`project prune --dry-run` previews and `project prune` explicitly deletes only
+stale items tracked for that project and target. On a shared target do not
+prune; preserve foreign/pre-existing content and manually remove only temporary
+items whose ownership is known. If an approved replacement occurred, restore the
+saved original and verify its source/hash and runtime state as agreed with the
+owner. The progress app is deleted explicitly; notifications are transient and
+may be dismissed with `notify delete-active` only when safe to dismiss the
+device's current notification.
 
 For an isolated Linux headless run (recommended for repeatable acceptance),
 provide the upstream AWTRIX executable and its UI asset:
@@ -77,9 +103,28 @@ awtrix-cli --target "$AWTRIX_URL" --json project deploy \
 ```
 
 On nonzero exit, capture stdout and stderr separately; JSON error envelopes use
-the stable `error.code` contract. Never parse human diagnostics as JSON. The
-fixture suite exercises HTTP success carrying Berry errors and stale-source
-conflicts at the external CLI seam.
+the stable `error.code` contract. Never parse human diagnostics as JSON. Exact
+external-CLI fixture evidence (mock HTTP server; **not** AWTRIX firmware) is:
+
+```sh
+cargo test --test cli script_get_preserves_raw_source_and_script_put_reports_berry_error
+cargo test --test cli successful_conditional_response_with_setup_error_is_operational_failure
+cargo test --test cli script_deploy_surfaces_conflict_without_fallback_or_overwrite
+cargo test --test cli script_deploy_uses_atomic_expected_source_route_and_does_not_pre_read
+```
+
+The real Linux AWTRIX 1.2.2 headless test includes Berry-error deployment and
+isolated-run cleanup, but does **not** exercise concurrent source edits (that
+case is covered by the mock HTTP CLI fixture above):
+
+```sh
+AWTRIX_LINUX_BIN=/path/to/awtrix-linux AWTRIX_WEBUI=/path/to/webui/index.html \
+  cargo test --test headless -- --ignored --exact \
+  real_awtrix_headless_declarative_runs_cover_success_failure_berry_error_and_isolation --nocapture
+```
+
+Together these commands separate simulated correction/conflict behavior from
+real headless Berry/runtime behavior; neither is physical-device evidence.
 
 ## Evidence classes and compatibility
 
