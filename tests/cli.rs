@@ -96,7 +96,55 @@ fn release_notice_is_stable_cached_and_best_effort_at_the_cli_boundary() {
         .output()
         .unwrap();
     assert!(cached.status.success());
-    assert!(!cached.stderr.is_empty());
+    assert!(!String::from_utf8_lossy(&cached.stderr).contains("newer stable"));
+}
+
+#[test]
+fn release_notice_ignores_current_prerelease_and_opted_out_checks() {
+    for body in [
+        r#"[{"tag_name":"v0.1.2","prerelease":false}]"#,
+        r#"[{"tag_name":"v99.0.0-rc.1","prerelease":true}]"#,
+    ] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/releases", server.server_addr());
+        let response = body.to_owned();
+        let worker = thread::spawn(move || {
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_string(response))
+                .unwrap()
+        });
+        let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+            .args(["describe", "device"])
+            .env("AWTRIX_RELEASE_API_URL", endpoint)
+            .env(
+                "AWTRIX_RELEASE_CACHE",
+                tempfile::tempdir().unwrap().path().join("cache"),
+            )
+            .env_remove("AWTRIX_NO_UPDATE_CHECK")
+            .output()
+            .unwrap();
+        worker.join().unwrap();
+        assert!(output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("newer stable"));
+    }
+    let server = Server::http("127.0.0.1:0").unwrap();
+    assert!(Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["describe", "device"])
+        .env(
+            "AWTRIX_RELEASE_API_URL",
+            format!("http://{}/releases", server.server_addr())
+        )
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap()
+        .status
+        .success());
+    assert!(server
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap()
+        .is_none());
 }
 
 #[test]

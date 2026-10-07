@@ -112,6 +112,12 @@ ownership record is `headless.json` alongside that file. The old `awtrix`
 directory is neither searched nor migrated; to retain existing profiles,
 manually move its `config.json` into the new `awtrix-cli` directory.
 
+On ordinary CLI startup, `awtrix-cli` makes a best-effort check for a newer
+stable GitHub release no more than once every 24 hours. It only prints a notice;
+it never installs automatically. Set `AWTRIX_NO_UPDATE_CHECK=1` to disable
+release checks. Network failures are ignored so they cannot prevent commands
+from running.
+
 If HTTP Basic authentication is enabled, supply `AWTRIX_USERNAME` and
 `AWTRIX_PASSWORD`, or credentials in your personal profile. Project manifests
 reference profiles by name and do not store credentials. Examples use POSIX-shell
