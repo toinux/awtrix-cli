@@ -292,7 +292,7 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
   ID11502485325; awtrix-cli-x86_64-unknown-linux-gnu ID11502365895;
   awtrix-cli-x86_64-pc-windows-msvc ID11501964511. No release published.
 - Ticket18 remains accepted with fresh post-rename native evidence. Ticket19 still
-   ready, not started. Use awtrix-cli for its scenario and documentation.
+  complete. Use awtrix-cli for its scenario and documentation.
 
 ## GitHub tracker migration — 2026-10-07
 
@@ -308,3 +308,50 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
   their correspondence. This journal remains the local integration evidence source.
 - The implement-spec command now reads the live GitHub parent and sub-issues, reconciles
   existing local branches using the migration map, and updates GitHub after integration.
+
+## Ticket #20 / historical ticket 19 — completed — 2026-10-07
+
+- Reconciled live GitHub dependencies: #4, #5, #6, #7, #15, #18 and #19 are closed
+  as completed. Claimed #20, posted progress/evidence, and closed it as completed
+  after integration, checks and review. Updated and closed parent specification #1;
+  all 19 implementation issues (#2–#20) are closed as completed.
+- Integration branch resumed at `c8be25c8b4e142524ff643b0fef79053e874e344` in a clean
+  dedicated worktree, preserving unrelated uncommitted tracker-migration changes in
+  the user's `main` checkout.
+- Historical ticket 19 implementation branch `ticket/19-validation`, based on that
+  SHA; commits `9737cb5` and `8257513` add `docs/validation.md` and README references.
+  The independent Luna review found no standards blockers, confirmed the stale link,
+  and identified the available physical ESP32 full-path run as an unmet acceptance
+  criterion. Review corrections fixed the link, added exact fixture/headless commands,
+  and documented safe ownership preflight/backup/abort steps for physical runs.
+- Integrated as merge `ab508bda5103c35d349ff91cd3b6a6501e1cea76`; complete diff reviewed
+  against ticket #20. Local full checks passed: `cargo fmt --check`,
+  `cargo clippy --all-targets --all-features --locked -- -D warnings`,
+  `cargo test --locked` (6 unit, 135 CLI, 2 distribution; one headless test ignored
+  by default), and explicit real headless test with the recorded AWTRIX NG 1.2.2
+  binary/UI (1 passed, 21.47s). Four focused mock-HTTP fixture tests also passed.
+  Native distribution evidence remains CI run 37663709425.
+- After the user's explicit approval, ran the physical end-to-end project on
+  `http://192.168.1.202`, observed ESP32/AWTRIX NG 1.2.2, boardType `awtrixng`,
+  32x8, `scriptUpdates:true`. The first temporary module upload returned Berry error
+  (`module must end with 'return <value>'`); inspected the exact remote source,
+  deleted that uniquely owned failed upload, reconciled its uncertain tracking,
+  added `return true`, then successfully deployed the module, GIF resource and
+  unique `ticket20-check` script. Five-second script verification completed with
+  `start_verified:true`, active/in-loop, no runtime error, logs and 32x8 capture.
+  Sent and removed a unique progress app; final five-second notification was
+  accepted, but visibility is unknown.
+- Cleanup verified the test script/module/resource/progress app absent. The original
+  Update-Checker, Anothertime, Tesla scripts and pushed app `hello-world` remained.
+  Brightness remained 4 and matrix power remained on before/after; no device setting
+  was modified, so no settings restoration was necessary. Test-generated entries
+  remain in bounded logs (not cleared to avoid deleting user logs). Physical screen
+  captures retained at `/tmp/opencode/ticket20-esp32-during.png` and
+  `/tmp/opencode/ticket20-esp32-after.png`.
+- ESP32-S3 and TC002 hardware were unavailable; their physical checks remain
+  explicitly NOT EXECUTED and have a resumption protocol in `docs/validation.md`.
+  Ticket #20 acceptance is verified after integration and final independent review;
+  no minimum physical firmware version or cross-variant hardware compatibility
+  beyond observed ESP32 1.2.2 behavior is claimed. Ticket merge is
+  `ab508bda5103c35d349ff91cd3b6a6501e1cea76`; final validation/docs commit is
+  `f64ba42`.
