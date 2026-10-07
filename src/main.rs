@@ -2,6 +2,7 @@ use clap::{error::ErrorKind, Parser, Subcommand};
 use serde_json::{json, Map, Value};
 use std::{process::ExitCode, time::Duration};
 
+mod logs;
 mod profiles;
 mod scripts;
 
@@ -44,6 +45,10 @@ enum Command {
         #[command(subcommand)]
         action: scripts::Command,
     },
+    Logs {
+        #[command(subcommand)]
+        action: logs::Command,
+    },
 }
 
 #[derive(Subcommand)]
@@ -61,6 +66,7 @@ pub(crate) struct ApiClient {
     client: reqwest::blocking::Client,
     username: Option<String>,
     password: Option<String>,
+    timeout: Duration,
 }
 
 impl ApiClient {
@@ -93,11 +99,19 @@ impl ApiClient {
             client,
             username,
             password,
+            timeout: Duration::from_millis(cli.timeout.max(1)),
         })
     }
 
     pub(crate) fn get(&self, path: &str) -> CliResult<Value> {
-        let mut request = self.client.get(format!("{}{path}", self.base));
+        self.get_with_timeout(path, self.timeout)
+    }
+
+    pub(crate) fn get_with_timeout(&self, path: &str, timeout: Duration) -> CliResult<Value> {
+        let mut request = self
+            .client
+            .get(format!("{}{path}", self.base))
+            .timeout(timeout.min(self.timeout));
         if let Some(username) = &self.username {
             request = request.basic_auth(username, self.password.as_deref());
         }
@@ -267,6 +281,16 @@ fn main() -> ExitCode {
         }
     };
     match run(&cli) {
+        Ok(_)
+            if matches!(
+                cli.command,
+                Command::Logs {
+                    action: logs::Command::Follow { .. }
+                }
+            ) =>
+        {
+            ExitCode::SUCCESS
+        }
         Ok(value) if value.get("source").is_some() && cli.fields.is_empty() && !cli.json => {
             print!("{}", value["source"].as_str().unwrap_or_default());
             ExitCode::SUCCESS
@@ -282,7 +306,18 @@ fn main() -> ExitCode {
             }
         },
         Err((code, message)) => {
-            emit_error(code, &message, cli.json);
+            let streaming_logs = matches!(
+                cli.command,
+                Command::Logs {
+                    action: logs::Command::Follow { .. }
+                }
+            );
+            emit_error(
+                code,
+                &message,
+                cli.json
+                    && !(streaming_logs && cli.fields.is_empty() && logs::is_stream_error(code)),
+            );
             ExitCode::from(exit_code(code))
         }
     }
@@ -309,6 +344,18 @@ fn emit_error(code: &str, message: &str, machine: bool) {
 }
 
 fn run(cli: &Cli) -> CliResult<Value> {
+    if matches!(
+        cli.command,
+        Command::Logs {
+            action: logs::Command::Follow { .. }
+        }
+    ) && !cli.fields.is_empty()
+    {
+        return Err((
+            "ARGUMENT",
+            "--fields is not supported with streaming logs follow".into(),
+        ));
+    }
     if let Command::Profile { action } = &cli.command {
         return profiles::run(action);
     }
@@ -365,6 +412,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
         Command::Describe { .. } => unreachable!(),
         Command::Profile { .. } => unreachable!(),
         Command::Script { action } => scripts::run(action, &api),
+        Command::Logs { action } => logs::run(action, &api, cli.json),
     }
 }
 
@@ -408,6 +456,7 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
         "script" | "scripts" => {
             json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no conflict protection"},"inputs":["raw Berry source"],"outputs":["get: raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; otherwise execution_state unknown"],"examples":["awtrix script get demo","awtrix --json script get demo","awtrix script deploy demo --file main.be --expected-source OLD","awtrix script deploy demo --file main.be --create","awtrix script deploy demo --file main.be --force"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; start confirmation requires system/app state"],"offline_reference_variant":"ESP32"})
         }
+        "logs" | "logs follow" | "logs read" => logs::describe(topic)?,
         _ => return Err(("ARGUMENT", format!("unknown description topic '{topic}'"))),
     };
     if let Some(target) = &cli.target {
