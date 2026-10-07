@@ -12,6 +12,87 @@ fn run(args: &[&str]) -> Output {
         .unwrap()
 }
 
+fn update_asset_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "awtrix-cli-x86_64-pc-windows-msvc.exe"
+    } else if cfg!(target_os = "macos") {
+        "awtrix-cli-aarch64-apple-darwin"
+    } else {
+        "awtrix-cli-x86_64-unknown-linux-gnu"
+    }
+}
+
+fn update_release_with_assets(assets: &[&str], prerelease: bool, draft: bool) -> String {
+    let assets = assets
+        .iter()
+        .map(|name| format!(r#"{{"name":"{name}","browser_download_url":"unused"}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        r#"{{"tag_name":"v99.0.0","prerelease":{prerelease},"draft":{draft},"assets":[{assets}]}}"#
+    )
+}
+
+fn run_update_fixture(
+    target: &std::path::Path,
+    release: String,
+    checksum: (u16, Vec<u8>),
+    asset: (u16, Vec<u8>),
+    expected_requests: usize,
+    inject_replace_failure: bool,
+) -> Output {
+    run_update_fixture_with_program(
+        std::path::Path::new(env!("CARGO_BIN_EXE_awtrix-cli")),
+        target,
+        release,
+        checksum,
+        asset,
+        expected_requests,
+        inject_replace_failure,
+    )
+}
+
+fn run_update_fixture_with_program(
+    program: &std::path::Path,
+    target: &std::path::Path,
+    release: String,
+    checksum: (u16, Vec<u8>),
+    asset: (u16, Vec<u8>),
+    expected_requests: usize,
+    inject_replace_failure: bool,
+) -> Output {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", server.server_addr());
+    let asset_name = update_asset_name();
+    let worker = thread::spawn(move || {
+        for _ in 0..expected_requests {
+            let request = server.recv().unwrap();
+            let (status, body) = match request.url() {
+                "/latest" => (200, release.as_bytes().to_vec()),
+                "/SHA256SUMS" => checksum.clone(),
+                path if path == format!("/{asset_name}") => asset.clone(),
+                other => panic!("unexpected update URL {other}"),
+            };
+            request
+                .respond(Response::from_data(body).with_status_code(status))
+                .unwrap();
+        }
+    });
+    let mut command = Command::new(program);
+    command
+        .arg("update")
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .env("AWTRIX_UPDATE_API_URL", format!("{base}/latest"))
+        .env("AWTRIX_UPDATE_ASSET_BASE_URL", &base)
+        .env("AWTRIX_UPDATE_EXECUTABLE", target);
+    if inject_replace_failure {
+        command.env("AWTRIX_UPDATE_REPLACE_FAIL", "1");
+    }
+    let output = command.output().unwrap();
+    worker.join().unwrap();
+    output
+}
+
 #[test]
 fn settings_brightness_uses_settings_patch_and_rejects_bad_values_before_http() {
     let server = Server::http("127.0.0.1:0").unwrap();
@@ -61,6 +142,353 @@ fn executable_help_and_version_use_the_published_binary_name() {
         .unwrap();
     assert!(version.status.success());
     assert!(String::from_utf8_lossy(&version.stdout).starts_with("awtrix-cli "));
+}
+
+#[test]
+fn update_help_is_explicit_and_version_remains_available() {
+    let help = run(&["update", "--help"]);
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("Install the latest stable"));
+}
+
+#[test]
+fn update_downloads_matching_asset_verifies_checksum_and_atomically_replaces_target() {
+    use sha2::{Digest, Sha256};
+    let executable = tempfile::tempdir().unwrap();
+    let target = executable.path().join("awtrix-cli-copy");
+    std::fs::write(&target, b"old executable").unwrap();
+    let payload = b"new validated executable";
+    let digest = format!("{:x}", Sha256::digest(payload));
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", server.server_addr());
+    let asset = if cfg!(target_os = "windows") {
+        "awtrix-cli-x86_64-pc-windows-msvc.exe"
+    } else if cfg!(target_os = "macos") {
+        "awtrix-cli-aarch64-apple-darwin"
+    } else {
+        "awtrix-cli-x86_64-unknown-linux-gnu"
+    };
+    let release = format!(
+        r#"{{"tag_name":"v99.0.0","prerelease":false,"draft":false,"assets":[{{"name":"{asset}","browser_download_url":"unused"}},{{"name":"SHA256SUMS","browser_download_url":"unused"}}]}}"#
+    );
+    let worker = thread::spawn(move || {
+        for _ in 0..3 {
+            let request = server.recv().unwrap();
+            let body = match request.url() {
+                "/latest" => release.as_bytes().to_vec(),
+                "/SHA256SUMS" => format!("{digest}  {asset}\n").into_bytes(),
+                _ if request.url() == format!("/{asset}") => payload.to_vec(),
+                other => panic!("unexpected update URL {other}"),
+            };
+            request.respond(Response::from_data(body)).unwrap();
+        }
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .arg("update")
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .env("AWTRIX_UPDATE_API_URL", format!("{base}/latest"))
+        .env("AWTRIX_UPDATE_ASSET_BASE_URL", &base)
+        .env("AWTRIX_UPDATE_EXECUTABLE", &target)
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read(target).unwrap(), payload);
+}
+
+#[test]
+fn update_checksum_mismatch_preserves_existing_executable() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("existing");
+    std::fs::write(&target, b"known working binary").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", server.server_addr());
+    let asset = if cfg!(target_os = "windows") {
+        "awtrix-cli-x86_64-pc-windows-msvc.exe"
+    } else if cfg!(target_os = "macos") {
+        "awtrix-cli-aarch64-apple-darwin"
+    } else {
+        "awtrix-cli-x86_64-unknown-linux-gnu"
+    };
+    let release = format!(
+        r#"{{"tag_name":"v99.0.0","prerelease":false,"draft":false,"assets":[{{"name":"{asset}","browser_download_url":"unused"}},{{"name":"SHA256SUMS","browser_download_url":"unused"}}]}}"#
+    );
+    let worker = thread::spawn(move || {
+        for _ in 0..3 {
+            let request = server.recv().unwrap();
+            let body = match request.url() {
+                "/latest" => release.as_bytes().to_vec(),
+                "/SHA256SUMS" => format!("{}  {asset}\n", "a".repeat(64)).into_bytes(),
+                _ if request.url() == format!("/{asset}") => b"altered bytes".to_vec(),
+                other => panic!("unexpected update URL {other}"),
+            };
+            request.respond(Response::from_data(body)).unwrap();
+        }
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .arg("update")
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .env("AWTRIX_UPDATE_API_URL", format!("{base}/latest"))
+        .env("AWTRIX_UPDATE_ASSET_BASE_URL", &base)
+        .env("AWTRIX_UPDATE_EXECUTABLE", &target)
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(target).unwrap(), b"known working binary");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("checksum"));
+}
+
+#[test]
+fn update_network_failure_does_not_require_device_configuration_or_change_target() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("existing");
+    std::fs::write(&target, b"working").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .arg("update")
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .env("AWTRIX_UPDATE_API_URL", "http://127.0.0.1:1/latest")
+        .env("AWTRIX_UPDATE_ASSET_BASE_URL", "http://127.0.0.1:1")
+        .env("AWTRIX_UPDATE_EXECUTABLE", &target)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(target).unwrap(), b"working");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("manual"));
+}
+
+#[test]
+fn update_rejects_a_release_without_the_matching_host_asset() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    let output = run_update_fixture(
+        &target,
+        update_release_with_assets(&["SHA256SUMS"], false, false),
+        (200, b"".to_vec()),
+        (200, b"".to_vec()),
+        1,
+        false,
+    );
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("does not include"));
+}
+
+#[test]
+fn update_rejects_a_release_without_sha256sums() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    let output = run_update_fixture(
+        &target,
+        update_release_with_assets(&[update_asset_name()], false, false),
+        (200, b"".to_vec()),
+        (200, b"".to_vec()),
+        1,
+        false,
+    );
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("missing SHA256SUMS"));
+}
+
+#[test]
+fn update_rejects_prerelease_and_draft_responses_before_asset_download() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    for (prerelease, draft) in [(true, false), (false, true)] {
+        let output = run_update_fixture(
+            &target,
+            update_release_with_assets(&[update_asset_name(), "SHA256SUMS"], prerelease, draft),
+            (200, b"".to_vec()),
+            (200, b"".to_vec()),
+            1,
+            false,
+        );
+        assert!(!output.status.success());
+        assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("No stable release"));
+    }
+}
+
+#[test]
+fn update_rejects_malformed_or_missing_checksum_entries() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    let release = update_release_with_assets(&[update_asset_name(), "SHA256SUMS"], false, false);
+    for (body, expected_message) in [
+        (b"not-a-checksum\n".to_vec(), "malformed"),
+        (
+            format!("{}  some-other-asset\n", "a".repeat(64)).into_bytes(),
+            "no entry",
+        ),
+    ] {
+        let output = run_update_fixture(
+            &target,
+            release.clone(),
+            (200, body),
+            (200, b"would not be downloaded".to_vec()),
+            2,
+            false,
+        );
+        assert!(!output.status.success());
+        assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+        assert!(String::from_utf8_lossy(&output.stderr).contains(expected_message));
+    }
+}
+
+#[test]
+fn update_checksum_download_failure_preserves_the_working_executable() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    let output = run_update_fixture(
+        &target,
+        update_release_with_assets(&[update_asset_name(), "SHA256SUMS"], false, false),
+        (503, b"unavailable".to_vec()),
+        (200, b"would not be downloaded".to_vec()),
+        2,
+        false,
+    );
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+}
+
+#[test]
+fn update_asset_download_failure_preserves_the_working_executable() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    let output = run_update_fixture(
+        &target,
+        update_release_with_assets(&[update_asset_name(), "SHA256SUMS"], false, false),
+        (
+            200,
+            format!("{}  {}\n", "a".repeat(64), update_asset_name()).into_bytes(),
+        ),
+        (503, b"unavailable".to_vec()),
+        3,
+        false,
+    );
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+}
+
+#[test]
+fn update_replacement_failure_preserves_the_working_executable() {
+    use sha2::{Digest, Sha256};
+    let root = tempfile::tempdir().unwrap();
+    let target_name = if cfg!(target_os = "windows") {
+        "awtrix-cli-copy.exe"
+    } else {
+        "awtrix-cli-copy"
+    };
+    let target = root.path().join(target_name);
+    std::fs::copy(env!("CARGO_BIN_EXE_awtrix-cli"), &target).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let original = std::fs::read(&target).unwrap();
+    let payload = b"validated replacement";
+    let output = run_update_fixture_with_program(
+        &target,
+        &target,
+        update_release_with_assets(&[update_asset_name(), "SHA256SUMS"], false, false),
+        (
+            200,
+            format!("{:x}  {}\n", Sha256::digest(payload), update_asset_name()).into_bytes(),
+        ),
+        (200, payload.to_vec()),
+        3,
+        true,
+    );
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&target).unwrap(), original);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not changed"));
+}
+
+#[test]
+fn update_replaces_a_copy_of_the_running_executable_on_the_native_host() {
+    use sha2::{Digest, Sha256};
+    let root = tempfile::tempdir().unwrap();
+    let target_name = if cfg!(target_os = "windows") {
+        "awtrix-cli-copy.exe"
+    } else {
+        "awtrix-cli-copy"
+    };
+    let target = root.path().join(target_name);
+    std::fs::copy(env!("CARGO_BIN_EXE_awtrix-cli"), &target).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let payload = b"new native-host executable";
+    let output = run_update_fixture_with_program(
+        &target,
+        &target,
+        update_release_with_assets(&[update_asset_name(), "SHA256SUMS"], false, false),
+        (
+            200,
+            format!("{:x}  {}\n", Sha256::digest(payload), update_asset_name()).into_bytes(),
+        ),
+        (200, payload.to_vec()),
+        3,
+        false,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), payload);
+}
+
+#[cfg(unix)]
+#[test]
+fn update_replaces_the_resolved_executable_when_invoked_through_a_symlink() {
+    use sha2::{Digest, Sha256};
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("awtrix-cli-copy");
+    let link = root.path().join("awtrix-cli-link");
+    std::fs::copy(env!("CARGO_BIN_EXE_awtrix-cli"), &target).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let payload = b"new resolved executable";
+    let output = run_update_fixture_with_program(
+        &link,
+        &link,
+        update_release_with_assets(&[update_asset_name(), "SHA256SUMS"], false, false),
+        (
+            200,
+            format!("{:x}  {}\n", Sha256::digest(payload), update_asset_name()).into_bytes(),
+        ),
+        (200, payload.to_vec()),
+        3,
+        false,
+    );
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), payload);
+    assert!(std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
 }
 
 #[test]

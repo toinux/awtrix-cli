@@ -42,6 +42,8 @@ jobs:
       - name: Test
         if: runner.os == 'Linux'
         run: cargo test --locked
+      - name: Verify native self-update behavior
+        run: cargo test --locked --test cli update_
       - name: Build standalone binary
         run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Verify packaged binary CLI and HTTP
