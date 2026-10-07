@@ -2,6 +2,7 @@ use clap::{error::ErrorKind, Parser, Subcommand};
 use serde_json::{json, Map, Value};
 use std::{process::ExitCode, time::Duration};
 
+mod headless;
 mod logs;
 mod profiles;
 mod resources;
@@ -58,6 +59,10 @@ enum Command {
     Resources {
         #[command(subcommand)]
         action: resources::Command,
+    },
+    Headless {
+        #[command(subcommand)]
+        action: headless::Command,
     },
 }
 
@@ -535,6 +540,9 @@ fn run(cli: &Cli) -> CliResult<Value> {
     if let Command::Describe { topic } = &cli.command {
         return describe(cli, topic);
     }
+    if let Command::Headless { action } = &cli.command {
+        return headless::run(action);
+    }
     let explicit_target =
         std::env::args().any(|arg| arg == "--target" || arg.starts_with("--target="));
     let resolved = profiles::resolve(
@@ -588,6 +596,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
         Command::Logs { action } => logs::run(action, &api, cli.json),
         Command::Screen { action } => screen::run(action, &api),
         Command::Resources { action } => resources::run(action, &api),
+        Command::Headless { .. } => unreachable!(),
     }
 }
 
@@ -648,6 +657,9 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
         "logs" | "logs follow" | "logs read" => logs::describe(topic)?,
         "screen" => screen::describe(),
         "resources" | "resources files" | "resources modules" => resources::describe(None),
+        "headless" | "headless start" | "headless stop" | "headless status" => {
+            headless::describe(topic)
+        }
         "resources files list"
         | "resources files upload"
         | "resources files delete"

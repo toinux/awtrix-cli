@@ -448,6 +448,33 @@ fn help_version_and_offline_description_are_available() {
 }
 
 #[test]
+fn headless_description_documents_lifecycle_and_hardware_limits() {
+    let output = run(&["--json", "describe", "headless"]);
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(value["examples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.as_str().unwrap().contains("headless start")));
+    assert!(value["prerequisites"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v.as_str().unwrap().contains("sensors")));
+}
+
+#[test]
+fn headless_start_requires_a_user_supplied_binary() {
+    let output = run(&["--json", "headless", "start"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "BINARY_REQUIRED"
+    );
+}
+
+#[test]
 fn diagnose_reports_variant_version_and_capabilities_for_all_platforms() {
     for (variant, expected) in [
         ("esp32", "ESP32"),
