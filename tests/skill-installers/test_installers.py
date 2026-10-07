@@ -179,7 +179,7 @@ class WindowsInstallerTests(unittest.TestCase):
         return f'''$ErrorActionPreference = 'Stop'
 function Invoke-RestMethod {{ [pscustomobject]@{{ tag_name = '{self.tag}' }} }}
 function Invoke-WebRequest {{
-  param($Uri, $OutFile, $Headers, $TimeoutSec, $UseBasicParsing)
+  param($Uri, $OutFile, $Headers, $TimeoutSec, [switch]$UseBasicParsing)
   Add-Content -LiteralPath '{urls}' -Value $Uri
   if ($OutFile -like '*SHA256SUMS') {{ Set-Content -LiteralPath $OutFile -Value '{self.checksum}  {self.asset}' }}
   else {{ Copy-Item -LiteralPath '{fixture}' -Destination $OutFile -Force }}

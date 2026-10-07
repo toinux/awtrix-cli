@@ -67,7 +67,7 @@ awtrix-cli --version
 ```
 
 An existing working `awtrix-cli` is reused. To bootstrap a specific version or
-directory, use `--version v0.1.0 --install-dir DIR` (PowerShell: `-Version` and
+directory, use `--version v0.1.1 --install-dir DIR` (PowerShell: `-Version` and
 `-InstallDir`). See [distribution](docs/distribution.md) for release assets and
 checksums, or build from source for a host without a published binary.
 

@@ -39,7 +39,7 @@ recorded process as not running when Linux process identity cannot be checked.
 ## Tagged releases
 
 Pushing a stable tag whose name is exactly `v<package version>` (initially
-`v0.1.0`; prerelease/build-metadata versions are rejected) starts the same three
+`v0.1.1`; prerelease/build-metadata versions are rejected) starts the same three
 native verification jobs. Each job builds once with
 `--locked`, exercises the release executable, and uploads that verified binary;
 the release job reuses those artifacts rather than rebuilding. A tag that does
@@ -69,7 +69,7 @@ published releases fail rather than being modified. Incomplete draft releases
 may be safely completed by rerunning the workflow.
 
 To cut a release, update the package version and lockfile as appropriate, tag
-the matching commit (for example `git tag v0.1.0`), and push that tag. The
+the matching commit (for example `git tag v0.1.1`), and push that tag. The
 workflow needs repository `contents: write` permission for its release job.
 
 The crate disables reqwest's default TLS backend and selects `rustls-tls`;
