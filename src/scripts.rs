@@ -297,7 +297,8 @@ fn verify(
                 }
             }
             Err((code, message)) => {
-                collection_error = Some(json!({"code":code,"message":message}));
+                collection_error =
+                    Some(json!({"code":code,"message":message,"phase":"log_collection"}));
                 break;
             }
         }
