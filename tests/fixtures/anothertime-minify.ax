@@ -1,0 +1,62 @@
+# @name MinifyFixture
+# @desc Trimmed syntax fixture derived from the local Anothertime Berry script
+# @version 1.4
+# @config wlist text "Widgets" default="date,temperature,battery"
+
+import math
+
+class FixtureApp
+  var widgets
+  var widget_index
+  var current_widget
+  var sec_color
+
+  def parse_widgets()
+    var parsed = []
+    var raw = store.get("wlist")
+    if raw != nil
+      for entry : re.matchall("[^,]+", raw)
+        var found = re.match("(date|temperature|battery)(@([0-9]+))?$", entry)
+        if found != nil
+          parsed.push({"name":found[1], "duration":found[3] == nil ? 3 : clamp(num(found[3]), 1, 60)})
+        end
+      end
+    end
+    if size(parsed) == 0
+      parsed.push({"name":"date", "duration":3})
+    end
+    return parsed
+  end
+
+  def init()
+    self.widgets = self.parse_widgets()
+    self.widget_index = 0
+    self.current_widget = self.widgets[0]["name"]
+    self.sec_color = store.get("sc")
+    self.subscribe_topic("btopic", / t, p -> self.set_battery(p))
+  end
+
+  def subscribe_topic(key, callback)
+    var topic = store.get(key)
+    if topic == nil || size(topic) == 0 return false end
+    mqtt.subscribe(topic, callback)
+    return true
+  end
+
+  def set_battery(value)
+    self.battery = num(value, -1)
+  end
+
+  def draw()
+    var mask = (1 << 2) | (3 & 1)
+    var color = self.sec_color == nil ? 0xFFFFFF : self.sec_color
+    var angle = math.cos(2 * math.pi * real(mask) / 8.0)
+    if angle > 0
+      text(0, 0, str(self.current_widget), color)
+    else
+      scroll_text(0, 0, 6, "waiting...", color)
+    end
+  end
+end
+
+return FixtureApp()

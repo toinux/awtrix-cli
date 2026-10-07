@@ -133,6 +133,7 @@ quoting; adapt quotes and environment-variable syntax for your shell.
 | Notifications | Send, queue, hold, wake the display, and dismiss active or named notifications | `notify send`, `delete-active`, `delete` |
 | Display settings | Read settings, adjust brightness and power, configure supported overlays, and request reboot | `settings get`, `patch`, `brightness`, `display-get`, `display-patch`, `power`, `system-get`, `reboot` |
 | Persistent Berry scripts | Read and deploy source, enable or disable scripts, inspect runtime state, edit declared configuration, and read stored data | `script get`, `deploy`, `enable`, `disable`, `delete`, `state`, `config-get`, `config-put`, `data` |
+| Berry minification | Create a smaller local script without changing the readable source | `minify` |
 | Runtime feedback | Observe script health over a bounded window; read or follow incremental logs | `script verify`, `logs read`, `logs follow` |
 | Screen capture | Export the device framebuffer to a PNG using its reported dimensions | `screen capture` |
 | Modules and resources | Deploy reusable Berry modules and upload icon/resource files | `resources modules` (`list`, `get`, `deploy`, `delete`), `resources files` (`list`, `upload`, `delete`) |
@@ -187,6 +188,19 @@ existing script, supply the original source with `--expected-source`, or use the
 project manifest's `expected_source_file`. A stale reference produces a conflict
 instead of overwriting a concurrent edit. `--force` explicitly opts into an
 unprotected overwrite.
+
+### Minify a local Berry script
+
+```sh
+awtrix-cli minify ./demo/src/main.ax
+```
+
+The command writes `main.min.ax` beside the source, preserves every `# @...`
+AWTRIX directive, and enables class and variable renaming by default. Use
+`--no-classes` or `--no-variables` to disable either transformation; `--force`
+is required to replace an existing output. The source is never modified. Class
+field renaming only recognizes literal `self.field` access; accesses through an
+alias cannot be safely renamed by this minifier.
 
 ## Built for AI agent workflows
 
