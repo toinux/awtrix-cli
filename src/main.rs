@@ -2,6 +2,7 @@ use clap::{error::ErrorKind, Parser, Subcommand};
 use serde_json::{json, Map, Value};
 use std::{process::ExitCode, time::Duration};
 
+mod apps;
 mod headless;
 mod logs;
 mod profiles;
@@ -68,6 +69,11 @@ enum Command {
     Project {
         #[command(subcommand)]
         action: project::Command,
+    },
+    /// Create, update, and remove temporary pushed apps.
+    Apps {
+        #[command(subcommand)]
+        action: apps::Command,
     },
 }
 
@@ -622,6 +628,9 @@ fn run(cli: &Cli) -> CliResult<Value> {
     if let Command::Project { action } = &cli.command {
         return project::run(action, cli);
     }
+    if let Command::Apps { action } = &cli.command {
+        apps::validate(action).map_err(|message| ("ARGUMENT", message))?;
+    }
     let explicit_target =
         std::env::args().any(|arg| arg == "--target" || arg.starts_with("--target="));
     let resolved = profiles::resolve(
@@ -641,6 +650,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
         resolved.password.clone(),
     )?;
     match &cli.command {
+        Command::Apps { action } => apps::run(action, &api),
         Command::Device {
             action: DeviceCommand::State,
         } => api.get("/api/v1/device"),
@@ -746,6 +756,7 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
         "project" | "project init" | "project validate" | "project deploy" => {
             project::describe(topic)
         }
+        "apps" | "apps create" | "apps update" | "apps delete" => apps::describe(topic),
         "resources files list"
         | "resources files upload"
         | "resources files delete"
@@ -780,7 +791,7 @@ fn command_description(name: &str, inputs: &str, outputs: &str, example: &str) -
 }
 
 // AWTRIX NG's device-state schema exposes boardType and soc; inspect only these identity fields.
-fn detect_variant(state: &Value) -> &'static str {
+pub(crate) fn detect_variant(state: &Value) -> &'static str {
     let board_type = state
         .get("boardType")
         .and_then(Value::as_str)
