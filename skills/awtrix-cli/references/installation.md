@@ -1,39 +1,21 @@
-# Install only when needed
+# Bootstrap details and fallbacks
 
-The skill and the executable are separate installations. First run
-`awtrix-cli --version`. Use an existing executable directly when it works.
-If it is missing, check whether Cargo's binary directory is simply absent from
-`PATH` before installing again (`$CARGO_HOME/bin`, normally `~/.cargo/bin`, or
-`%USERPROFILE%\.cargo\bin` on Windows).
+The required bootstrap sequence is in [the skill](../SKILL.md#1-bootstrap-the-cli-first).
+Use this reference when that sequence needs recovery or a non-default installation.
+Cargo's binary directory can also contain an executable absent from `PATH`
+(`$CARGO_HOME/bin`, normally `~/.cargo/bin`, or `%USERPROFILE%\.cargo\bin` on Windows).
+Validate it by absolute path before considering a second installation.
 
 ## Preferred path: verified GitHub release binary
 
-Locate the installed skill's own directory, using the path from which its
-`SKILL.md` was loaded. Invoke the bundled installer by that absolute path;
-it works from any working directory and does not require a source checkout.
-
-Linux x86_64 GNU/glibc or macOS Apple Silicon, with `curl` and either `sha256sum`
-or `shasum` available:
-
-```sh
-sh /path/to/awtrix-cli/scripts/install.sh
-export PATH="$HOME/.local/bin:$PATH"
-awtrix-cli --version
-awtrix-cli --help
-```
-
-Windows x86_64, from PowerShell:
-
-```powershell
-& 'C:\path\to\awtrix-cli\scripts\install.ps1'
-$env:PATH = "$env:LOCALAPPDATA\Programs\awtrix-cli\bin;$env:PATH"
-awtrix-cli --version
-awtrix-cli --help
-```
-
-Replace the example script path with the actual installed skill path. If local
-PowerShell policy blocks execution, report it and use a caller-approved execution
-method rather than changing persistent machine policy.
+The shell installer requires `curl` and either `sha256sum` or `shasum`.
+The Windows installer uses PowerShell's web requests and SHA-256 support.
+Invoke scripts from the loaded skill's absolute directory. If scripts are absent,
+the installed skill copy is incomplete: reinstall it from `toinux/awtrix-cli` using
+`npx skills add toinux/awtrix-cli --skill awtrix-cli` with the original agent/scope
+options, or use the Cargo fallback. If local PowerShell policy blocks execution,
+report it and use a caller-approved execution method rather than changing
+persistent machine policy.
 
 The installers reuse an existing working command. Otherwise, they resolve the
 latest stable release to one concrete tag, choose the host asset, download it and
@@ -41,8 +23,9 @@ latest stable release to one concrete tag, choose the host asset, download it an
 destination. Downloads/install errors remain nonzero, and a failed verification
 leaves an existing destination intact. Installation is per-user and needs no
 administrator access. The scripts print PATH instructions; a child script cannot
-change its parent's environment. Use the absolute installed binary path if PATH
-cannot be changed, and preserve the original diagnostics on failure.
+change its parent's environment. Prefer the absolute verified executable path
+for agent shell calls; if adding to PATH, do so in each new shell invocation.
+Preserve the original diagnostics on failure.
 
 To choose a release or another destination **when the CLI is missing**, use
 `--version v0.1.1 --install-dir DIR` for shell, or `-Version v0.1.1 -InstallDir DIR`

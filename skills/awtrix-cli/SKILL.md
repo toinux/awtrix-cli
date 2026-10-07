@@ -15,14 +15,54 @@ Control an AWTRIX NG device through its HTTP(S) API using `awtrix-cli`.
 Use temporary pushed apps for status content; use persistent Berry scripts for
 on-device logic. Execute the CLI rather than reimplementing its HTTP operations.
 
-## 1. Check availability and discover the operation
+## 1. Bootstrap the CLI first
 
-Run `awtrix-cli --version` and `awtrix-cli --help`. If the executable is missing,
-read [installation](references/installation.md) and run the bundled installer
-for the host. It downloads the matching GitHub release binary, verifies SHA-256,
-and checks version/help before installing. Add its directory to the current
-shell's `PATH`, then repeat both checks. Installing this skill alone does not
-execute an installer. Shell examples here use POSIX quoting; adapt them for PowerShell.
+**On activation, complete this step before asking about app content or a device
+address.** Installing the skill does not install the executable. A missing CLI
+is a bootstrap task to perform, not a reason to stop or ask generic project questions.
+
+1. Run `awtrix-cli --version`. If it succeeds, run `awtrix-cli --help` and retain
+   that executable for subsequent commands. If it reports `command not found`,
+   take the missing-binary branch immediately; another bare `--help` cannot work.
+2. Check the normal per-user binary path below (and Cargo's bin directory if
+   relevant). If the executable works by absolute path, use it directly.
+3. Otherwise announce that you are installing the published CLI and **execute
+   the bundled installer now**. Set `SKILL_DIR` to the absolute **Base directory
+   for this skill** supplied when it was loaded, not the current project directory.
+   The commands below install per-user without sudo and verify SHA-256:
+   Keep `$HOME`/`$env:LOCALAPPDATA` as shell expressions; use the installer's
+   reported destination as authoritative instead of guessing a user's home path.
+
+   Linux/macOS, in a POSIX shell:
+
+   ```sh
+   sh "$SKILL_DIR/scripts/install.sh"
+   "$HOME/.local/bin/awtrix-cli" --version
+   "$HOME/.local/bin/awtrix-cli" --help
+   ```
+
+   Windows, in PowerShell (`$SkillDir` is the loaded skill's absolute directory):
+
+   ```powershell
+   & (Join-Path $SkillDir 'scripts\install.ps1')
+   & "$env:LOCALAPPDATA\Programs\awtrix-cli\bin\awtrix-cli.exe" --version
+   & "$env:LOCALAPPDATA\Programs\awtrix-cli\bin\awtrix-cli.exe" --help
+   ```
+
+4. Retain the verified **absolute executable path** in your working context.
+   Substitute it for `awtrix-cli` in every example below if the command is not on
+   `PATH`. Shell calls can be separate processes: an `export PATH=...` in one call
+   may disappear in the next. Reuse the absolute path rather than reinstalling.
+
+**Done means both version and help succeeded.** Then continue with the user's
+request, asking only for app requirements or a target that cannot be inferred.
+If a tool actually blocks installation, ask specifically to allow that install.
+For unsupported hosts, missing scripts, prerequisites, or download errors, read
+[installation details and fallbacks](references/installation.md), try the applicable
+recovery, and report any remaining blocker explicitly. Preserve the installer's
+nonzero status; a failed install is not completion.
+
+## 2. Discover the operation
 
 Load only the operation needed:
 
@@ -37,7 +77,7 @@ is supplied, including through `AWTRIX_URL`; connected capabilities take
 precedence over offline assumptions. Some description topics are family-level
 (for example `script`, `screen`); use the subcommand's help for exact flags.
 
-## 2. Establish the target
+## 3. Establish the target
 
 Use the user's device URL or existing personal profile. Inspect profiles with
 `awtrix-cli --json profile list` when needed. Replace `http://awtrix.local`
@@ -56,7 +96,7 @@ uses `AWTRIX_USERNAME` and `AWTRIX_PASSWORD` or personal profile credentials;
 keep credentials out of project manifests and reports. `--timeout` is a per-request
 bound in milliseconds, not an observation duration.
 
-## 3. Perform the requested operation
+## 4. Perform the requested operation
 
 For an authorized notification or named temporary status app:
 
@@ -81,7 +121,7 @@ Berry, collecting runtime evidence, managing resources, pruning, or running
 headless tests. For settings, inspect `settings --help`, then the specific
 operation's help and description; read current values before applying a patch.
 
-## 4. Interpret evidence and failures
+## 5. Interpret evidence and failures
 
 - Use `--json` for machine output. `--fields a,b` selects known top-level result
   fields; choose them from `describe` or a complete result, preserving evidence

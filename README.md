@@ -192,6 +192,8 @@ Choose your agent in the installer. `skills add` installs instructions and bundl
 scripts; it does not execute a binary-install hook. When first used, the skill
 checks for `awtrix-cli` and guides the agent to install the matching GitHub release
 binary with checksum verification if it is missing. Cargo remains a fallback.
+The skill completes this bootstrap before asking about app requirements or the
+device address, and uses an absolute executable path across separate shell calls.
 For example, ask: “Use awtrix-cli; install the CLI if needed, then inspect my
 display at http://awtrix.local.” To inspect or install the skill from a local checkout:
 
