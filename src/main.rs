@@ -779,7 +779,10 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
         "headless" | "headless start" | "headless stop" | "headless status" => {
             headless::describe(topic)
         }
-        "apps" | "apps create" | "apps update" | "apps delete" => apps::describe(topic),
+        "apps" | "apps create" | "apps update" | "apps delete" | "apps list"
+        | "apps active-get" | "apps select" | "apps order-get" | "apps order-set" => {
+            apps::describe(topic)
+        }
         "notify" | "notify send" | "notify delete" | "notify delete-active" => {
             notifications::describe(topic)
         }
