@@ -106,6 +106,83 @@ fn process_start(_: u32) -> Option<u64> {
     None
 }
 
+#[cfg(target_os = "linux")]
+fn owns_http_listener(pid: u32, port: u16) -> bool {
+    let Ok(entries) = std::fs::read_dir(format!("/proc/{pid}/fd")) else {
+        return false;
+    };
+    let sockets: std::collections::HashSet<String> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let target = std::fs::read_link(entry.path())
+                .ok()?
+                .to_string_lossy()
+                .into_owned();
+            target
+                .strip_prefix("socket:[")
+                .and_then(|s| s.strip_suffix(']'))
+                .map(str::to_owned)
+        })
+        .collect();
+    ["/proc/net/tcp", "/proc/net/tcp6"]
+        .into_iter()
+        .any(|table| {
+            let Ok(content) = std::fs::read_to_string(table) else {
+                return false;
+            };
+            content.lines().skip(1).any(|line| {
+                let fields: Vec<_> = line.split_whitespace().collect();
+                fields.len() > 9
+                    && fields[3] == "0A"
+                    && fields[1]
+                        .rsplit_once(':')
+                        .and_then(|(_, p)| u16::from_str_radix(p, 16).ok())
+                        == Some(port)
+                    && sockets.contains(fields[9])
+            })
+        })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn owns_http_listener(_: u32, _: u16) -> bool {
+    false
+}
+
+struct StartupGuard {
+    child: Option<Child>,
+    data: PathBuf,
+    temporary: bool,
+}
+
+impl StartupGuard {
+    fn new(child: Child, data: &std::path::Path, temporary: bool) -> Self {
+        Self {
+            child: Some(child),
+            data: data.to_path_buf(),
+            temporary,
+        }
+    }
+    fn child_mut(&mut self) -> &mut Child {
+        self.child.as_mut().expect("startup guard owns child")
+    }
+    fn disarm(&mut self) {
+        self.child = None;
+        self.temporary = false;
+    }
+}
+
+impl Drop for StartupGuard {
+    fn drop(&mut self) {
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if self.temporary {
+            let _ = std::fs::remove_dir_all(&self.data);
+        }
+    }
+}
+
 /// Opens a stable kernel reference to a process; signaling through this fd cannot
 /// accidentally target a different process if the numeric PID is recycled.
 #[cfg(target_os = "linux")]
@@ -169,6 +246,13 @@ fn start(args: &StartArgs) -> Result<Value, (&'static str, String)> {
             ));
         }
     }
+    let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, args.port))
+        .map_err(|_| {
+            error(
+                "PORT_IN_USE",
+                format!("loopback port {} is already in use", args.port),
+            )
+        })?;
     let (data, temporary) = match &args.data {
         Some(path) => (path.clone(), false),
         None => (
@@ -183,7 +267,12 @@ fn start(args: &StartArgs) -> Result<Value, (&'static str, String)> {
             true,
         ),
     };
-    std::fs::create_dir_all(&data).map_err(|e| error("DATA_DIR", e.to_string()))?;
+    if let Err(e) = std::fs::create_dir_all(&data) {
+        if temporary {
+            let _ = std::fs::remove_dir_all(&data);
+        }
+        return Err(error("DATA_DIR", e.to_string()));
+    }
     let mut process = ProcessCommand::new(binary);
     process.args([
         "--data",
@@ -198,6 +287,9 @@ fn start(args: &StartArgs) -> Result<Value, (&'static str, String)> {
     if let Some(webui) = &args.webui {
         process.arg("--webui").arg(webui);
     }
+    // The reservation detects an already-occupied port before any child is spawned.
+    // Release immediately before spawn; later ownership verification closes this race.
+    drop(reservation);
     let child = match process
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -219,12 +311,13 @@ fn start(args: &StartArgs) -> Result<Value, (&'static str, String)> {
 }
 
 fn await_ready(
-    mut child: Child,
+    child: Child,
     data: &std::path::Path,
     temporary: bool,
     args: &StartArgs,
 ) -> Result<Value, (&'static str, String)> {
-    let pid = child.id();
+    let mut startup = StartupGuard::new(child, data, temporary);
+    let pid = startup.child_mut().id();
     let deadline = Instant::now() + Duration::from_secs(args.ready_timeout_secs);
     let url = format!("http://127.0.0.1:{}", args.port);
     let client = match reqwest::blocking::Client::builder()
@@ -233,11 +326,6 @@ fn await_ready(
     {
         Ok(client) => client,
         Err(e) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            if temporary {
-                let _ = std::fs::remove_dir_all(data);
-            }
             return Err(error("HTTP", e.to_string()));
         }
     };
@@ -246,11 +334,6 @@ fn await_ready(
     if let Err(e) =
         ctrlc::set_handler(move || interrupt_flag.store(true, std::sync::atomic::Ordering::SeqCst))
     {
-        let _ = child.kill();
-        let _ = child.wait();
-        if temporary {
-            let _ = std::fs::remove_dir_all(data);
-        }
         return Err(error(
             "SIGNAL",
             format!("cannot install startup interrupt handler: {e}"),
@@ -258,23 +341,21 @@ fn await_ready(
     }
     loop {
         if interrupted.load(std::sync::atomic::Ordering::SeqCst) {
-            let _ = child.kill();
-            let _ = child.wait();
-            if temporary {
-                let _ = std::fs::remove_dir_all(data);
-            }
             return Err(error(
                 "INTERRUPTED",
                 "headless startup interrupted; child stopped and temporary data removed",
             ));
         }
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|e| error("PROCESS", e.to_string()))?
-        {
-            if temporary {
-                let _ = std::fs::remove_dir_all(data);
+        let status = match startup.child_mut().try_wait() {
+            Ok(status) => status,
+            Err(e) => {
+                return Err(error(
+                    "PROCESS",
+                    format!("failed checking child process; cleanup attempted: {e}"),
+                ))
             }
+        };
+        if let Some(status) = status {
             return Err(error(
                 "START_FAILED",
                 format!("AWTRIX exited before HTTP readiness ({status})"),
@@ -284,33 +365,29 @@ fn await_ready(
             .get(format!("{url}/api/v1/device"))
             .send()
             .is_ok_and(|r| r.status().is_success())
+            && owns_http_listener(pid, args.port)
         {
+            if let Some(status) = startup.child_mut().try_wait().map_err(|e| {
+                error(
+                    "PROCESS",
+                    format!("failed checking child after HTTP readiness: {e}"),
+                )
+            })? {
+                return Err(error(
+                    "START_FAILED",
+                    format!("AWTRIX exited during HTTP readiness ({status})"),
+                ));
+            }
             let Some(started) = process_start(pid) else {
-                let _ = child.kill();
-                let _ = child.wait();
-                if temporary {
-                    let _ = std::fs::remove_dir_all(data);
-                }
                 return Err(error("OWNERSHIP", "cannot verify spawned process identity"));
             };
-            if let Err(e) = write_state(pid, started, &url, data, temporary) {
-                let _ = child.kill();
-                let _ = child.wait();
-                if temporary {
-                    let _ = std::fs::remove_dir_all(data);
-                }
-                return Err(e);
-            }
+            write_state(pid, started, &url, data, temporary)?;
+            startup.disarm();
             return Ok(
                 json!({"running":true,"pid":pid,"target":url,"data":data,"temporary_data":temporary,"owned":true}),
             );
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            if temporary {
-                let _ = std::fs::remove_dir_all(data);
-            }
             return Err(error("TIMEOUT",format!("AWTRIX HTTP readiness timed out after {} seconds; child stopped and temporary data removed",args.ready_timeout_secs)));
         }
         thread::sleep(Duration::from_millis(100));

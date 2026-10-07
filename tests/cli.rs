@@ -501,6 +501,152 @@ fn headless_start_reports_missing_binary_without_creating_state() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn headless_refuses_occupied_port_before_spawning_child_or_claiming_external_service() {
+    use std::os::unix::fs::PermissionsExt;
+    let root =
+        std::env::temp_dir().join(format!("awtrix-headless-occupied-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let port = server.server_addr().to_ip().unwrap().port().to_string();
+    let config = root.join("config.json");
+    let marker = root.join("spawned");
+    let fake = root.join("sleeping-child");
+    std::fs::write(
+        &fake,
+        format!("#!/bin/sh\ntouch '{}'\nexec sleep 30\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args([
+            "--json",
+            "headless",
+            "start",
+            "--binary",
+            fake.to_str().unwrap(),
+            "--port",
+            &port,
+        ])
+        .env("AWTRIX_CONFIG", &config)
+        .output()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "PORT_IN_USE"
+    );
+    assert!(
+        !marker.exists(),
+        "occupied-port rejection must happen before child spawn"
+    );
+    assert!(!root.join("headless.json").exists());
+    let stop = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args(["--json", "headless", "stop"])
+        .env("AWTRIX_CONFIG", &config)
+        .output()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&stop.stdout).unwrap()["error"]["code"],
+        "NOT_RUNNING"
+    );
+    drop(server);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn headless_never_claims_or_stops_an_external_http_listener_winning_spawn_race() {
+    use std::{
+        os::unix::fs::PermissionsExt,
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        },
+    };
+    let root =
+        std::env::temp_dir().join(format!("awtrix-headless-port-race-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let reservation = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = reservation.local_addr().unwrap().port();
+    drop(reservation);
+    let spawned = root.join("spawned");
+    let release = root.join("release");
+    let child_pid_file = root.join("child.pid");
+    let fake = root.join("delayed-child");
+    std::fs::write(&fake,format!("#!/bin/sh\necho $$ > '{}'\ntouch '{}'\nwhile [ ! -e '{}' ]; do sleep 0.02; done\nexec sleep 30\n",child_pid_file.display(),spawned.display(),release.display())).unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let config = root.join("config.json");
+    let cli = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args([
+            "--json",
+            "headless",
+            "start",
+            "--binary",
+            fake.to_str().unwrap(),
+            "--port",
+            &port.to_string(),
+            "--ready-timeout-secs",
+            "1",
+        ])
+        .env("AWTRIX_CONFIG", &config)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    for _ in 0..100 {
+        if spawned.exists() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let server = Server::http(format!("127.0.0.1:{port}"))
+        .expect("port reservation is released immediately before spawn");
+    let serving = Arc::new(AtomicBool::new(true));
+    let worker_flag = serving.clone();
+    let worker = thread::spawn(move || {
+        while worker_flag.load(Ordering::SeqCst) {
+            if let Ok(Some(request)) = server.recv_timeout(Duration::from_millis(50)) {
+                let _ = request.respond(Response::from_string("{\"external\":true}"));
+            }
+        }
+    });
+    std::fs::write(&release, b"go").unwrap();
+    let cli_pid = cli.id();
+    let output = cli.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "TIMEOUT"
+    );
+    let child_pid: u32 = std::fs::read_to_string(&child_pid_file)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(!std::path::Path::new(&format!("/proc/{child_pid}")).exists());
+    assert!(!root.join("headless.json").exists());
+    assert!(!std::fs::read_dir(std::env::temp_dir())
+        .unwrap()
+        .flatten()
+        .any(|entry| entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(&format!("awtrix-headless-{cli_pid}-"))));
+    assert!(
+        reqwest::blocking::get(format!("http://127.0.0.1:{port}/api/v1/device"))
+            .unwrap()
+            .status()
+            .is_success(),
+        "the pre-existing external listener must remain alive"
+    );
+    serving.store(false, Ordering::SeqCst);
+    worker.join().unwrap();
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn headless_fake_process_start_status_stop_and_isolated_cleanup() {
     use std::os::unix::fs::PermissionsExt;
     let root = std::env::temp_dir().join(format!(
