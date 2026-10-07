@@ -1,0 +1,9 @@
+# Pushed-app CLI contract (ticket 03)
+
+`awtrix apps create NAME --payload JSON [--raw]` and `awtrix apps update NAME --payload JSON [--raw]` both send the required JSON object via `PUT /api/v1/apps/pushed/{name}`. The device route is an upsert, so create/update express caller intent and do not claim a conditional create/update guarantee. `awtrix apps delete NAME` sends `DELETE /api/v1/apps/{name}`. Names match `[A-Za-z0-9_-]{1,32}`.
+
+The default validator rejects unknown keys; `--raw` explicitly opts into forwarding unknown device-specific fields. The payload must be a non-empty JSON object with at least one display field (`text`, `icon`, `icons`, or `draw`). The accepted typed fields and basic JSON-type validation are implemented in `src/apps.rs`. Timing values use non-negative integer milliseconds: `lifetimeMs: 0` means no expiry, and `durationMs: 0` delegates dwell time to the device setting. The local maximum JSON payload is 8192 bytes, matching the official route's `413 payloadTooLarge` limit. The API allows at most 50 resident pushed apps; replacing a name does not consume a slot. The client does not pre-query inventory/capacity, so server `422` validation and `507` storage/capacity responses are authoritative.
+
+Successful mutation output reports `accepted: true` and `visibility: "unknown"`; HTTP acceptance is not evidence that the app is currently visible. Pushed apps reside in RAM, may expire by `lifetimeMs` (`lifetimeExpiry` is `remove` or `mark`), and are lost on reboot. They are distinct from persistent Berry scripts. HTTP 413/422/507 failures use shared API errors and do not disclose raw response bodies.
+
+Official references checked 2026-10-07: [ESP32 OpenAPI](https://blueforcer.github.io/awtrix-ng/esp32/api/openapi.yaml), [pushed-app payload](https://blueforcer.github.io/awtrix-ng/reference/payload/), and [limits](https://blueforcer.github.io/awtrix-ng/reference/limits).

@@ -771,6 +771,153 @@ fn help_version_and_offline_description_are_available() {
 }
 
 #[test]
+fn pushed_apps_create_update_and_delete_use_documented_routes_and_payload() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for method in ["PUT", "PUT", "DELETE"] {
+            let mut request = server.recv().unwrap();
+            assert_eq!(request.method().as_str(), method);
+            assert!(request.url().ends_with(if method == "DELETE" {
+                "/api/v1/apps/build"
+            } else {
+                "/api/v1/apps/pushed/build"
+            }));
+            if method == "PUT" {
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body).unwrap();
+                let payload: serde_json::Value = serde_json::from_str(&body).unwrap();
+                assert_eq!(payload["text"], "working");
+                assert_eq!(payload["lifetimeMs"], 2500);
+            }
+            request.respond(Response::from_string("{}")).unwrap();
+        }
+    });
+    for operation in ["create", "update"] {
+        let output = run(&[
+            "--target",
+            &url,
+            "--json",
+            "apps",
+            operation,
+            "build",
+            "--payload",
+            r#"{"text":"working","lifetimeMs":2500}"#,
+        ]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    let output = run(&["--target", &url, "--json", "apps", "delete", "build"]);
+    assert!(output.status.success());
+    worker.join().unwrap();
+}
+
+#[test]
+fn pushed_app_invalid_and_oversized_payloads_are_rejected_before_http() {
+    for payload in [
+        r#"{"text":""}"#,
+        r#"{"notAField":1}"#,
+        r#"{"text":"x","lifetimeMs":-1}"#,
+    ] {
+        let output = run(&[
+            "--target",
+            "http://127.0.0.1:1",
+            "--json",
+            "apps",
+            "create",
+            "build",
+            "--payload",
+            payload,
+        ]);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+            "ARGUMENT"
+        );
+    }
+    let large = format!(r#"{{"text":"{}"}}"#, "x".repeat(8192));
+    let output = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "--json",
+        "apps",
+        "create",
+        "build",
+        "--payload",
+        &large,
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "ARGUMENT"
+    );
+}
+
+#[test]
+fn pushed_app_description_documents_json_fields_and_expiration() {
+    for operation in ["create", "update", "delete"] {
+        let topic = format!("apps {operation}");
+        let output = run(&["--json", "describe", &topic]);
+        assert!(output.status.success());
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["command"], topic);
+        assert!(!value["schemas"]["output"].is_null());
+        assert!(value["examples"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()));
+        if operation != "delete" {
+            assert!(value["outputs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str().unwrap().contains("visibility")));
+            assert!(value["parameters"]["--payload"]
+                .as_str()
+                .unwrap()
+                .contains("lifetimeMs"));
+        }
+    }
+}
+
+#[test]
+fn pushed_app_remote_capacity_rejection_is_reported_as_http_failure() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/pushed/build");
+        request
+            .respond(Response::from_string("private upstream detail").with_status_code(507))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "apps",
+        "create",
+        "build",
+        "--payload",
+        r#"{"text":"working"}"#,
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "HTTP_507"
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private upstream detail"));
+}
+
+#[test]
 fn headless_description_documents_lifecycle_and_hardware_limits() {
     let output = run(&["--json", "describe", "headless"]);
     assert!(output.status.success());
