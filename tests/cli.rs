@@ -1674,6 +1674,381 @@ fn screen_capture_handles_representative_awtrix_matrix_sizes() {
 }
 
 #[test]
+fn resource_file_upload_uses_official_multipart_contract_and_checks_icon_magic_locally() {
+    let path = std::env::temp_dir().join(format!("awtrix-resource-{}.gif", std::process::id()));
+    std::fs::write(&path, b"GIF89a payload").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Post);
+        assert_eq!(request.url(), "/api/v1/files?dir=/ICONS");
+        assert!(request
+            .headers()
+            .iter()
+            .any(|h| h.field.equiv("Content-Type")
+                && h.value
+                    .as_str()
+                    .starts_with("multipart/form-data; boundary=")));
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert!(body.contains("name=\"file\""));
+        assert!(body.contains("GIF89a payload"));
+        request
+            .respond(Response::from_string(r#"{"ok":true}"#))
+            .unwrap();
+    });
+    let path_arg = path.to_string_lossy().into_owned();
+    let result = run(&[
+        "--target",
+        &url,
+        "--json",
+        "resources",
+        "files",
+        "upload",
+        &path_arg,
+    ]);
+    worker.join().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    std::fs::write(&path, b"not gif data").unwrap();
+    let result = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "--json",
+        "resources",
+        "files",
+        "upload",
+        &path_arg,
+    ]);
+    assert_eq!(result.status.code(), Some(1));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&result.stdout).unwrap()["error"]["code"],
+        "INVALID_RESOURCE"
+    );
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn resource_jpeg_upload_accepts_minimal_jpeg_signature_but_rejects_case_changed_extension() {
+    let path = std::env::temp_dir().join(format!("awtrix-resource-{}.jpg", std::process::id()));
+    // Valid 1x1 JPEG fixture; local preflight checks the signature and AWTRIX owns full decoding.
+    use base64::Engine;
+    let jpeg = base64::engine::general_purpose::STANDARD.decode("/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAAB//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8Af3//2Q==").unwrap();
+    std::fs::write(&path, &jpeg).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/files?dir=/ICONS");
+        let mut body = Vec::new();
+        request.as_reader().read_to_end(&mut body).unwrap();
+        assert!(body.windows(3).any(|window| window == [0xff, 0xd8, 0xff]));
+        request
+            .respond(Response::from_string(r#"{"ok":true}"#))
+            .unwrap();
+    });
+    let path_arg = path.to_string_lossy().into_owned();
+    let result = run(&[
+        "--target",
+        &url,
+        "--json",
+        "resources",
+        "files",
+        "upload",
+        &path_arg,
+    ]);
+    worker.join().unwrap();
+    assert!(result.status.success());
+    let upper = path.with_extension("JPG");
+    std::fs::rename(&path, &upper).unwrap();
+    let upper_arg = upper.to_string_lossy().into_owned();
+    let result = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "--json",
+        "resources",
+        "files",
+        "upload",
+        &upper_arg,
+    ]);
+    assert_eq!(result.status.code(), Some(1));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&result.stdout).unwrap()["error"]["code"],
+        "INVALID_RESOURCE"
+    );
+    std::fs::remove_file(upper).unwrap();
+}
+
+#[test]
+fn module_marker_after_executable_berry_is_rejected_before_http() {
+    let result = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "--json",
+        "resources",
+        "modules",
+        "deploy",
+        "helpers",
+        "--source",
+        "var x = 1\n# @module helpers\n",
+    ]);
+    assert_eq!(result.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&result.stdout).unwrap()["error"]["code"],
+        "ARGUMENT"
+    );
+}
+
+#[test]
+fn resource_upload_preserves_remote_payload_too_large_and_storage_full_statuses() {
+    for status in [413, 507] {
+        let path = std::env::temp_dir().join(format!(
+            "awtrix-resource-{status}-{}.gif",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"GIF89a payload").unwrap();
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            let request = server.recv().unwrap();
+            request
+                .respond(Response::from_string("private device detail").with_status_code(status))
+                .unwrap();
+        });
+        let path_arg = path.to_string_lossy().into_owned();
+        let result = run(&[
+            "--target",
+            &url,
+            "--json",
+            "resources",
+            "files",
+            "upload",
+            &path_arg,
+        ]);
+        worker.join().unwrap();
+        assert_eq!(result.status.code(), Some(5));
+        let error: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(error["error"]["code"], "HTTP");
+        assert!(!String::from_utf8_lossy(&result.stdout).contains("private device detail"));
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
+fn resource_module_list_uses_official_inventory_without_turning_modules_into_apps() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps");
+        request.respond(Response::from_string(r#"[{"name":"script","origin":"script"},{"name":"lib","origin":"module","import":"lib"}]"#)).unwrap();
+    });
+    let result = run(&["--target", &url, "--json", "resources", "modules", "list"]);
+    worker.join().unwrap();
+    assert!(result.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(value["modules"].as_array().unwrap().len(), 1);
+    assert_eq!(value["modules"][0]["origin"], "module");
+}
+
+#[test]
+fn resource_descriptions_document_every_operation_and_unsupported_download() {
+    for op in [
+        "files list",
+        "files upload",
+        "files delete",
+        "modules list",
+        "modules get",
+        "modules deploy",
+        "modules delete",
+    ] {
+        let topic = format!("resources {op}");
+        let result = run(&["--json", "describe", &topic]);
+        assert!(result.status.success(), "{topic}");
+        let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert!(
+            value["examples"].as_array().is_some_and(|a| !a.is_empty()),
+            "{topic}"
+        );
+        assert!(value["outputs"].is_array(), "{topic}");
+        assert!(value["output_fields"].is_array(), "{topic}");
+        for global in [
+            "--target",
+            "--profile",
+            "--username",
+            "--password",
+            "--timeout",
+            "--json",
+            "--fields",
+        ] {
+            assert!(
+                value["parameters"][global].is_string(),
+                "{topic} missing {global}"
+            );
+        }
+    }
+    let result = run(&["--json", "describe", "resources files download"]);
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(value["examples"][0].as_str().unwrap().contains("download"));
+    assert!(value["limitations"][0]
+        .as_str()
+        .unwrap()
+        .contains("No generic"));
+}
+
+#[test]
+fn resource_module_get_and_deploy_roundtrip_official_script_source_routes() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/script/helpers");
+        request
+            .respond(Response::from_string("# @module helpers\nvar x = 1\n"))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Put);
+        assert_eq!(request.url(), "/api/v1/apps/script/helpers");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(body, "# @module helpers\nvar x = 2\n");
+        request
+            .respond(Response::from_string(r#"{"ok":true,"error":null}"#))
+            .unwrap();
+    });
+    let get = run(&[
+        "--target",
+        &url,
+        "--json",
+        "resources",
+        "modules",
+        "get",
+        "helpers",
+    ]);
+    assert!(get.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&get.stdout).unwrap()["source"],
+        "# @module helpers\nvar x = 1\n"
+    );
+    let deploy = run(&[
+        "--target",
+        &url,
+        "--json",
+        "resources",
+        "modules",
+        "deploy",
+        "helpers",
+        "--source",
+        "# @module helpers\nvar x = 2\n",
+    ]);
+    worker.join().unwrap();
+    assert!(
+        deploy.status.success(),
+        "{}",
+        String::from_utf8_lossy(&deploy.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&deploy.stdout).unwrap();
+    assert_eq!(value["rotation_app"], false);
+    assert_eq!(value["references_rewritten"], false);
+}
+
+#[test]
+fn resource_module_delete_uses_official_app_delete_route() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Delete);
+        assert_eq!(request.url(), "/api/v1/apps/helpers");
+        request
+            .respond(Response::from_string(r#"{"ok":true}"#))
+            .unwrap();
+    });
+    let result = run(&[
+        "--target",
+        &url,
+        "--json",
+        "resources",
+        "modules",
+        "delete",
+        "helpers",
+    ]);
+    worker.join().unwrap();
+    assert!(result.status.success());
+}
+
+#[test]
+fn resource_download_reports_unsupported_and_never_guesses_an_http_path() {
+    let result = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "--json",
+        "resources",
+        "files",
+        "download",
+        "/ICONS/a.gif",
+        "--output",
+        "/tmp/a.gif",
+    ]);
+    assert_eq!(result.status.code(), Some(1));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&result.stdout).unwrap()["error"]["code"],
+        "UNSUPPORTED"
+    );
+}
+
+#[test]
+fn resource_file_list_and_delete_use_documented_query_parameters() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/files?dir=/PALETTES%20ONE");
+        request
+            .respond(Response::from_string(
+                r#"{"files":[{"name":"warm.json","size":8}],"usedBytes":8,"totalBytes":64}"#,
+            ))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Delete);
+        assert_eq!(request.url(), "/api/v1/files?path=/ICONS/a%20b.gif");
+        request
+            .respond(Response::from_string(r#"{"ok":true}"#))
+            .unwrap();
+    });
+    let list = run(&[
+        "--target",
+        &url,
+        "--json",
+        "resources",
+        "files",
+        "list",
+        "--dir",
+        "/PALETTES ONE",
+    ]);
+    assert!(list.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&list.stdout).unwrap()["files"][0]["name"],
+        "warm.json"
+    );
+    let delete = run(&[
+        "--target",
+        &url,
+        "--json",
+        "resources",
+        "files",
+        "delete",
+        "/ICONS/a b.gif",
+    ]);
+    worker.join().unwrap();
+    assert!(delete.status.success());
+}
+
+#[test]
 fn screen_capture_preserves_existing_destination_on_invalid_or_oversized_response() {
     let path = std::env::temp_dir().join(format!("awtrix-preserve-{}.png", std::process::id()));
     for (body, expected) in [

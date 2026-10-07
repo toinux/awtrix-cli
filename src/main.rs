@@ -4,6 +4,7 @@ use std::{process::ExitCode, time::Duration};
 
 mod logs;
 mod profiles;
+mod resources;
 mod screen;
 mod scripts;
 
@@ -53,6 +54,10 @@ enum Command {
     Screen {
         #[command(subcommand)]
         action: screen::Command,
+    },
+    Resources {
+        #[command(subcommand)]
+        action: resources::Command,
     },
 }
 
@@ -226,6 +231,89 @@ impl ApiClient {
             ));
         }
         Ok(bytes)
+    }
+    pub(crate) fn resource_request(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<reqwest::blocking::Body>,
+        content_type: Option<&str>,
+    ) -> CliResult<Value> {
+        let mut request =
+            self.authorized(self.client.request(method, format!("{}{path}", self.base)));
+        if let Some(body) = body {
+            request = request.body(body);
+        }
+        if let Some(content_type) = content_type {
+            request = request.header(reqwest::header::CONTENT_TYPE, content_type);
+        }
+        let response = request.send().map_err(|e| {
+            if e.is_timeout() {
+                ("TIMEOUT", "request timed out".into())
+            } else {
+                ("TRANSPORT", "could not reach the HTTP target".into())
+            }
+        })?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err((
+                "AUTHENTICATION",
+                "device rejected HTTP Basic credentials".into(),
+            ));
+        }
+        if !response.status().is_success() {
+            return Err((
+                "HTTP",
+                format!("device returned HTTP {}", response.status().as_u16()),
+            ));
+        }
+        let bytes = response
+            .bytes()
+            .map_err(|_| ("TRANSPORT", "failed reading device response".into()))?;
+        if bytes.is_empty() {
+            return Ok(json!({"ok":true}));
+        }
+        serde_json::from_slice(&bytes)
+            .map_err(|_| ("INVALID_RESPONSE", "device returned invalid JSON".into()))
+    }
+    pub(crate) fn multipart_post(
+        &self,
+        path: &str,
+        form: reqwest::blocking::multipart::Form,
+    ) -> CliResult<Value> {
+        let response = self
+            .authorized(
+                self.client
+                    .post(format!("{}{path}", self.base))
+                    .multipart(form),
+            )
+            .send()
+            .map_err(|e| {
+                if e.is_timeout() {
+                    ("TIMEOUT", "request timed out".into())
+                } else {
+                    ("TRANSPORT", "could not reach the HTTP target".into())
+                }
+            })?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err((
+                "AUTHENTICATION",
+                "device rejected HTTP Basic credentials".into(),
+            ));
+        }
+        if !response.status().is_success() {
+            return Err((
+                "HTTP",
+                format!("device returned HTTP {}", response.status().as_u16()),
+            ));
+        }
+        let bytes = response
+            .bytes()
+            .map_err(|_| ("TRANSPORT", "failed reading device response".into()))?;
+        if bytes.is_empty() {
+            return Ok(json!({"ok":true}));
+        }
+        serde_json::from_slice(&bytes)
+            .map_err(|_| ("INVALID_RESPONSE", "device returned invalid JSON".into()))
     }
     pub(crate) fn raw_put(&self, path: &str, source: &str) -> CliResult<Value> {
         let response = self
@@ -499,6 +587,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
         Command::Script { action } => scripts::run(action, &api),
         Command::Logs { action } => logs::run(action, &api, cli.json),
         Command::Screen { action } => screen::run(action, &api),
+        Command::Resources { action } => resources::run(action, &api),
     }
 }
 
@@ -558,6 +647,15 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
         }
         "logs" | "logs follow" | "logs read" => logs::describe(topic)?,
         "screen" => screen::describe(),
+        "resources" | "resources files" | "resources modules" => resources::describe(None),
+        "resources files list"
+        | "resources files upload"
+        | "resources files delete"
+        | "resources files download"
+        | "resources modules list"
+        | "resources modules get"
+        | "resources modules deploy"
+        | "resources modules delete" => resources::describe(Some(topic)),
         _ => return Err(("ARGUMENT", format!("unknown description topic '{topic}'"))),
     };
     if let Some(target) = &cli.target {
