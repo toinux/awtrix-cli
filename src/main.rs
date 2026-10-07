@@ -4,6 +4,7 @@ use std::{process::ExitCode, time::Duration};
 
 mod logs;
 mod profiles;
+mod screen;
 mod scripts;
 
 #[derive(Parser)]
@@ -48,6 +49,10 @@ enum Command {
     Logs {
         #[command(subcommand)]
         action: logs::Command,
+    },
+    Screen {
+        #[command(subcommand)]
+        action: screen::Command,
     },
 }
 
@@ -172,6 +177,55 @@ impl ApiClient {
                 .to_vec(),
         )
         .map_err(|_| ("INVALID_RESPONSE", "script source is not UTF-8".into()))
+    }
+    pub(crate) fn raw_bytes_get(&self, path: &str, max_bytes: u64) -> CliResult<Vec<u8>> {
+        let response = self
+            .authorized(self.client.get(format!("{}{path}", self.base)))
+            .send()
+            .map_err(|error| {
+                if error.is_timeout() {
+                    ("TIMEOUT", "request timed out".into())
+                } else {
+                    ("TRANSPORT", "could not reach the HTTP target".into())
+                }
+            })?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err((
+                "AUTHENTICATION",
+                "device rejected HTTP Basic credentials".into(),
+            ));
+        }
+        if !response.status().is_success() {
+            return Err((
+                "HTTP",
+                format!("device returned HTTP {}", response.status().as_u16()),
+            ));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > max_bytes)
+        {
+            return Err((
+                "RESPONSE_TOO_LARGE",
+                "framebuffer response exceeds the safe size limit".into(),
+            ));
+        }
+        use std::io::Read;
+        let mut limited = response.take(max_bytes.saturating_add(1));
+        let mut bytes = Vec::new();
+        limited.read_to_end(&mut bytes).map_err(|_| {
+            (
+                "TRANSPORT",
+                "failed while reading framebuffer response".into(),
+            )
+        })?;
+        if bytes.len() as u64 > max_bytes {
+            return Err((
+                "RESPONSE_TOO_LARGE",
+                "framebuffer response exceeds the safe size limit".into(),
+            ));
+        }
+        Ok(bytes)
     }
     pub(crate) fn raw_put(&self, path: &str, source: &str) -> CliResult<Value> {
         let response = self
@@ -413,6 +467,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
         Command::Profile { .. } => unreachable!(),
         Command::Script { action } => scripts::run(action, &api),
         Command::Logs { action } => logs::run(action, &api, cli.json),
+        Command::Screen { action } => screen::run(action, &api),
     }
 }
 
@@ -457,6 +512,7 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
             json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no conflict protection"},"inputs":["raw Berry source"],"outputs":["get: raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; otherwise execution_state unknown"],"examples":["awtrix script get demo","awtrix --json script get demo","awtrix script deploy demo --file main.be --expected-source OLD","awtrix script deploy demo --file main.be --create","awtrix script deploy demo --file main.be --force"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; start confirmation requires system/app state"],"offline_reference_variant":"ESP32"})
         }
         "logs" | "logs follow" | "logs read" => logs::describe(topic)?,
+        "screen" => screen::describe(),
         _ => return Err(("ARGUMENT", format!("unknown description topic '{topic}'"))),
     };
     if let Some(target) = &cli.target {
