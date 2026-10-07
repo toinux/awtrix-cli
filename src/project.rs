@@ -129,6 +129,12 @@ fn load(path: &Path) -> Result<Loaded> {
             .as_deref()
             .map(|p| read_text(base, p))
             .transpose()?;
+        if s.create && reference.is_some() {
+            return Err((
+                "PROJECT_INVALID",
+                "create=true cannot be combined with expected_source_file".into(),
+            ));
+        }
         if !s.create && reference.is_none() {
             return Err((
                 "PROJECT_INVALID",
@@ -145,11 +151,7 @@ fn load(path: &Path) -> Result<Loaded> {
             return Err(("PROJECT_INVALID", "duplicate script/module name".into()));
         }
         let source = read_text(base, &m.file)?;
-        if !source
-            .lines()
-            .take_while(|l| l.trim().is_empty() || l.trim_start().starts_with('#'))
-            .any(|l| l.trim_start().starts_with("# @module"))
-        {
+        if !crate::resources::declares_module(&source) {
             return Err((
                 "PROJECT_INVALID",
                 "module source must begin with # @module".into(),
@@ -172,9 +174,13 @@ fn load(path: &Path) -> Result<Loaded> {
                     "resource path must be unique, absolute, traversal-free, and include a filename".into(),
                 ));
             }
-            read_bytes(base, &r.file, "cannot read declared resource")
+            let bytes = read_bytes(base, &r.file, "cannot read declared resource")?;
+            let device_dir = r.path.rsplit_once('/').map(|(dir, _)| if dir.is_empty() { "/" } else { dir }).unwrap_or("/");
+            crate::resources::validate_icon(device_dir, Path::new(&r.path), &bytes)?;
+            Ok(bytes)
         })
         .collect::<Result<Vec<_>>>()?;
+    let mut config_targets = HashSet::new();
     let configs = manifest
         .config
         .iter()
@@ -184,6 +190,12 @@ fn load(path: &Path) -> Result<Loaded> {
                 return Err((
                     "PROJECT_INVALID",
                     "configuration references an undeclared script".into(),
+                ));
+            }
+            if !config_targets.insert(c.script.as_str()) {
+                return Err((
+                    "PROJECT_INVALID",
+                    "each script may have at most one config entry".into(),
                 ));
             }
             let data = read_bytes(base, &c.file, "cannot read declared config")?;
@@ -264,7 +276,7 @@ fn init(path: &Path, requested: Option<&str>) -> Result<Value> {
         .map_err(|_| ("FILE_WRITE", "cannot create source directory".into()))?;
     fs::write(path.join("awtrix.toml"), manifest)
         .map_err(|_| ("FILE_WRITE", "cannot write manifest".into()))?;
-    fs::write(path.join("src/main.be"), "# @name main\ndef init()\n  print(\"project ready\")\nend\n\ndef loop()\n  return true, 1000\nend\n").map_err(|_| ("FILE_WRITE", "cannot write Berry script".into()))?;
+    fs::write(path.join("src/main.be"), "# @name main\nclass ProjectApp\n  def init()\n    print(\"project ready\")\n  end\n  def draw()\n  end\n  def loop()\n    return true\n  end\nend\nreturn ProjectApp()\n").map_err(|_| ("FILE_WRITE", "cannot write Berry script".into()))?;
     load(&path.join("awtrix.toml"))?;
     Ok(
         json!({"path":path,"manifest":path.join("awtrix.toml"),"script":path.join("src/main.be"),"valid":true}),

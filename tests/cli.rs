@@ -46,10 +46,33 @@ fn project_init_creates_discoverable_manifest_and_valid_berry_entrypoint() {
     let source = std::fs::read_to_string(root.join("src/main.be")).unwrap();
     assert!(source.contains("# @name main"));
     assert!(source.contains("def loop()"));
+    assert!(source.contains("def draw()"));
+    assert!(source.contains("return ProjectApp()"));
     let description = run(&["--json", "describe", "project"]);
     assert!(description.status.success());
     assert!(String::from_utf8_lossy(&description.stdout).contains("awtrix project init"));
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn checked_in_project_example_preflights_its_gif_module_and_script() {
+    let output = run(&[
+        "--json",
+        "project",
+        "validate",
+        "--manifest",
+        "examples/project/awtrix.toml",
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["valid"], true);
+    assert_eq!(result["modules"], 1);
+    assert_eq!(result["resources"], 1);
+    assert_eq!(result["scripts"], 1);
 }
 
 #[test]
@@ -74,6 +97,48 @@ fn project_validation_checks_all_local_files_before_any_remote_request() {
 }
 
 #[test]
+fn project_preflight_rejects_conflicting_create_config_targets_icon_magic_and_module_tokens() {
+    let root =
+        std::env::temp_dir().join(format!("awtrix-project-contracts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("main.be"), "print(1)\n").unwrap();
+    std::fs::write(root.join("expected.be"), "before\n").unwrap();
+    std::fs::write(root.join("one.json"), "{}\n").unwrap();
+    std::fs::write(root.join("two.json"), "{}\n").unwrap();
+    std::fs::write(root.join("icon.gif"), b"not a GIF").unwrap();
+    std::fs::write(root.join("bad-module.be"), "# @modulex\n").unwrap();
+    let cases = [
+        ("create-reference", "[project]\nname='x'\nversion='1'\n[[scripts]]\nname='main'\nfile='main.be'\ncreate=true\nexpected_source_file='expected.be'\n", "PROJECT_INVALID"),
+        ("duplicate-config", "[project]\nname='x'\nversion='1'\n[[scripts]]\nname='main'\nfile='main.be'\ncreate=true\n[[config]]\nscript='main'\nfile='one.json'\n[[config]]\nscript='main'\nfile='two.json'\n", "PROJECT_INVALID"),
+        ("icon-magic", "[project]\nname='x'\nversion='1'\n[[resources]]\npath='/ICONS/bad.gif'\nfile='icon.gif'\n", "INVALID_RESOURCE"),
+        ("module-token", "[project]\nname='x'\nversion='1'\n[[modules]]\nname='broken'\nfile='bad-module.be'\n", "PROJECT_INVALID"),
+    ];
+    for (name, manifest, expected_code) in cases {
+        let manifest_path = root.join(format!("{name}.toml"));
+        std::fs::write(&manifest_path, manifest).unwrap();
+        let output = run(&[
+            "--target",
+            "http://127.0.0.1:1",
+            "--json",
+            "project",
+            "deploy",
+            "--manifest",
+            manifest_path.to_str().unwrap(),
+        ]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{name}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["error"]["code"], expected_code, "{name}");
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn project_deployment_orders_dependencies_and_reports_partial_failure_additively() {
     let root = std::env::temp_dir().join(format!("awtrix-project-deploy-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
@@ -85,7 +150,7 @@ fn project_deployment_orders_dependencies_and_reports_partial_failure_additively
     .unwrap();
     std::fs::write(
         root.join("src/main.be"),
-        "# @name main\ndef loop()\n return true, 1000\nend\n",
+        "# @name main\ndef loop()\n return true\nend\n",
     )
     .unwrap();
     std::fs::write(root.join("src/expected.be"), "old source\n").unwrap();
