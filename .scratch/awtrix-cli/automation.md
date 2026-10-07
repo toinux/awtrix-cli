@@ -53,7 +53,9 @@ Identity uses /device boardType+soc, not arbitrary strings. Describe offline and
   official source a02f3ab66cd88cbf5c5f08f3dcc47eb231ae0188, version1.2.2.
   CMake/platformio provided transiently via uv; required awtrix-linux target built.
   Default upstream all-target build GCC16 Werror fails; selected executable target succeeds.
-- Physical ESP32, ESP32-S3, TC002 targets: none explicitly supplied; physical checks cannot be claimed.
+- Physical target subsequently supplied: http://192.168.1.202. Two limited live-device
+  smoke checks succeeded (details below); read-only resume diagnosis identified ESP32/1.2.2.
+  Full physical validation of ESP32, ESP32-S3 and TC002 remains unperformed.
 - Cross-host distribution validation requires suitable runners; local host is Linux.
 - Ticket18 external blocker: native macOS ARM64 and Windows x86_64 MSVC help/version/HTTP/artifact
   execution pending. CI workflow prepared but not triggered (no remote publication authorized).
@@ -133,3 +135,49 @@ targets if hardware checks are desired; otherwise19must document missing physica
 - Earlier load-related logs-follow fixture timeouts were observed; reruns and final suites
   passed. Dedicated scheduling stress validation has not been performed. No hidden test pass
   is claimed for native macOS/Windows or physicaldevices.
+
+## Live-device checks and next-session context
+
+After the automatic run, the user explicitly supplied http://192.168.1.202 for two tests:
+
+- Read-only command: ./target/release/awtrix --json --target http://192.168.1.202
+  --timeout 5000 script state. Installed scripts: Update-Checker, Anothertime, Tesla;
+  each was present, enabled, in rotation and had error=null at observation time.
+- Requested notification: notify send --payload '{"text":"coucou gustave","durationMs":5000}'.
+  Device accepted the command. Visibility was unknown; no visual confirmation was obtained.
+
+These are smoke checks only, not a complete hardware validation. They authorize neither
+replacement/deletion of the existing scripts nor future persistent/device administration changes.
+For the next validation session, identify variant/version with read-only commands first;
+announce any visible/persistent change and obtain agreement before a temporary-script test.
+Preserve Update-Checker, Anothertime and Tesla. No credentials were required for these two checks.
+
+Recommended continuation: controlled physical validation, then native macOS/Windows CI,
+ticket18 acceptance and ticket19. Remote repository creation/push/release has NOT been authorized.
+Integration branch: integration/awtrix-cli; last committed run checkpoint: ab55fec.
+main still contains the original baseline. Check actual Git status/history on resume;
+this later live-device note may be uncommitted. No worker worktree is still active.
+Temporary /tmp/opencode headless executable/UI may disappear; verify availability before use,
+and rebuild from the recorded official source/commands if necessary.
+
+## Resume verification — 2026-10-07
+
+- Resumed at actual integration HEAD ab55fec; only pre-existing journal notes were
+  uncommitted. Preserved those notes. No active worker worktrees or configured Git remotes.
+- Tickets 18 and 19 remain blocked as recorded; no ready implementation frontier exists.
+  Installed Rust targets include aarch64-apple-darwin and x86_64-pc-windows-msvc,
+  but compilation targets are not native runtime validation and do not satisfy ticket 18.
+- Re-executed cargo fmt --check, cargo clippy --all-targets --all-features --locked
+  -- -D warnings, cargo test --locked: all passed (6 unit, 134 CLI, 2 distribution).
+- Re-executed real headless test with AWTRIX_LINUX_BIN=/tmp/opencode/awtrix-ng-build/awtrix-linux
+  and AWTRIX_WEBUI=/tmp/opencode/awtrix-ng-src/webui/index.html:
+  cargo test --locked --test headless -- --ignored --nocapture passed, 1 test, 21.48s.
+  cargo build --release --locked passed as well.
+- Read-only release CLI device diagnose against explicitly recorded http://192.168.1.202
+  with --json --timeout 5000 succeeded: variant ESP32, boardType awtrixng, soc esp32,
+  firmware 1.2.2, display 32x8, scriptUpdates true. No device mutations performed.
+  This establishes observed identity/connectivity, not complete hardware compatibility.
+- Next unblock action: provide native macOS ARM64 and Windows x86_64 MSVC runners,
+  or separately authorize remote setup/publication and CI execution. Then independently
+  verify ticket 18 evidence before dispatching ticket 19 to Luna. Any visible/persistent
+  physical test still requires agreement; preserve all existing installed scripts.
