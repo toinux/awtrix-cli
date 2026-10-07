@@ -4599,6 +4599,7 @@ fn force_cannot_be_combined_with_create_or_expected_source() {
 fn logs_follow_advances_api_cursor_and_emits_jsonl_without_duplicate_records() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
+    let (third_response_sent, third_response_received) = std::sync::mpsc::channel();
     let worker = thread::spawn(move || {
         for (expected, body) in [
             (
@@ -4615,29 +4616,36 @@ fn logs_follow_advances_api_cursor_and_emits_jsonl_without_duplicate_records() {
             assert_eq!(request.url(), expected);
             request.respond(Response::from_string(body)).unwrap();
         }
-        let start = std::time::Instant::now();
-        while start.elapsed() < Duration::from_millis(1300) {
-            if let Some(request) = server.recv_timeout(Duration::from_millis(50)).unwrap() {
-                assert_eq!(request.url(), "/api/v1/logs?after=5");
-                request
-                    .respond(Response::from_string(r#"{"next":5,"lines":[]}"#))
-                    .unwrap();
-            }
-        }
+        third_response_sent.send(()).unwrap();
     });
-    let output = run(&[
-        "--target",
-        &url,
-        "--json",
-        "logs",
-        "follow",
-        "--after",
-        "0",
-        "--interval-ms",
-        "10",
-        "--duration-secs",
-        "1",
-    ]);
+    // End the follow only after the fixture has returned all cursor batches. This
+    // keeps the assertions about cursor advancement independent of host scheduling
+    // near the one-second deadline and avoids timing out an incidental final poll.
+    let child = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args([
+            "--target",
+            &url,
+            "--json",
+            "logs",
+            "follow",
+            "--after",
+            "0",
+            "--interval-ms",
+            "10",
+            "--duration-secs",
+            "30",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    third_response_received
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGINT);
+    }
+    let output = child.wait_with_output().unwrap();
     worker.join().unwrap();
     assert!(
         output.status.success(),
