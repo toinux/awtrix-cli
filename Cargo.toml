@@ -1,10 +1,10 @@
 [package]
-name = "awtrix"
+name = "awtrix-cli"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "awtrix"
+name = "awtrix-cli"
 path = "src/main.rs"
 
 [dependencies]

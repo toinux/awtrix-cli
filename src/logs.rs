@@ -233,13 +233,13 @@ pub fn describe(topic: &str) -> crate::CliResult<Value> {
     };
     let examples = if follow {
         json!([
-            "awtrix --json logs follow --after 12 --interval-ms 500 --duration-secs 60",
-            "awtrix logs follow --script weather"
+            "awtrix-cli --json logs follow --after 12 --interval-ms 500 --duration-secs 60",
+            "awtrix-cli logs follow --script weather"
         ])
     } else {
         json!([
-            "awtrix --json logs read --after 0",
-            "awtrix --fields next,lines logs read --after 12"
+            "awtrix-cli --json logs read --after 0",
+            "awtrix-cli --fields next,lines logs read --after 12"
         ])
     };
     Ok(

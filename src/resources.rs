@@ -211,32 +211,32 @@ pub fn describe(topic: Option<&str>) -> Value {
         "resources files list" => (
             json!({"--dir":"asset folder, default /ICONS"}),
             json!(["files", "usedBytes", "totalBytes"]),
-            "awtrix resources files list --dir /ICONS",
+            "awtrix-cli resources files list --dir /ICONS",
         ),
         "resources files upload" => (
             json!({"FILE":"local file path","--dir":"destination directory (default /ICONS)"}),
             json!(["ok"]),
-            "awtrix resources files upload icon.gif --dir /ICONS",
+            "awtrix-cli resources files upload icon.gif --dir /ICONS",
         ),
         "resources files delete" => (
             json!({"PATH":"full device path"}),
             json!(["ok"]),
-            "awtrix resources files delete /ICONS/icon.gif",
+            "awtrix-cli resources files delete /ICONS/icon.gif",
         ),
         "resources files download" => (
             json!({"PATH":"full device path","--output":"local destination"}),
             json!(["error"]),
-            "awtrix resources files download /ICONS/icon.gif --output icon.gif",
+            "awtrix-cli resources files download /ICONS/icon.gif --output icon.gif",
         ),
         "resources modules list" => (
             json!({}),
             json!(["modules"]),
-            "awtrix resources modules list",
+            "awtrix-cli resources modules list",
         ),
         "resources modules get" => (
             json!({"NAME":"module identifier","--output":"optional local destination"}),
             json!(["source", "path"]),
-            "awtrix resources modules get helpers --output helpers.be",
+            "awtrix-cli resources modules get helpers --output helpers.be",
         ),
         "resources modules deploy" => (
             json!({"NAME":"module identifier","--source":"Berry source","--file":"UTF-8 source file"}),
@@ -247,17 +247,17 @@ pub fn describe(topic: Option<&str>) -> Value {
                 "references_rewritten",
                 "result"
             ]),
-            "awtrix resources modules deploy helpers --file helpers.be",
+            "awtrix-cli resources modules deploy helpers --file helpers.be",
         ),
         "resources modules delete" => (
             json!({"NAME":"module identifier"}),
             json!(["ok"]),
-            "awtrix resources modules delete helpers",
+            "awtrix-cli resources modules delete helpers",
         ),
         _ => (
             json!({"files":"list/upload/delete at /api/v1/files; no download route","modules":"list/get/deploy/delete via documented app/script routes"}),
             json!(["operation-specific result"]),
-            "awtrix resources files list",
+            "awtrix-cli resources files list",
         ),
     };
     let output_fields: Vec<String> = outputs

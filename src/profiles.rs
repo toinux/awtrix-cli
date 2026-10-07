@@ -200,25 +200,25 @@ pub fn describe(action: Option<&str>) -> Result<Value> {
             "profile",
             json!({"<action>":"add, update, list, show, set-default, or delete"}),
             json!(["action-specific result fields"]),
-            "awtrix profile list",
+            "awtrix-cli profile list",
         ),
         "add" => (
             "profile add",
             json!({"NAME":"profile name","--target":"HTTP base URL","--username":"optional Basic username","--password":"optional Basic password"}),
             json!(["name", "target", "saved"]),
-            "awtrix profile add desk --target http://awtrix.local",
+            "awtrix-cli profile add desk --target http://awtrix.local",
         ),
         "update" => (
             "profile update",
             json!({"NAME":"existing profile name","--target":"HTTP base URL","--username":"optional Basic username","--password":"optional Basic password"}),
             json!(["name", "target", "updated"]),
-            "awtrix profile update desk --target http://awtrix.local",
+            "awtrix-cli profile update desk --target http://awtrix.local",
         ),
         "list" => (
             "profile list",
             json!({}),
             json!(["profiles", "default"]),
-            "awtrix --json profile list",
+            "awtrix-cli --json profile list",
         ),
         "show" => (
             "profile show",
@@ -229,19 +229,19 @@ pub fn describe(action: Option<&str>) -> Result<Value> {
                 "username_configured",
                 "password_configured"
             ]),
-            "awtrix profile show desk",
+            "awtrix-cli profile show desk",
         ),
         "set-default" => (
             "profile set-default",
             json!({"NAME":"profile name"}),
             json!(["default"]),
-            "awtrix profile set-default desk",
+            "awtrix-cli profile set-default desk",
         ),
         "delete" => (
             "profile delete",
             json!({"NAME":"profile name"}),
             json!(["deleted"]),
-            "awtrix profile delete desk",
+            "awtrix-cli profile delete desk",
         ),
         other => {
             return Err((

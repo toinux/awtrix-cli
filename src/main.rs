@@ -15,7 +15,7 @@ mod settings;
 mod tests;
 
 #[derive(Parser)]
-#[command(name = "awtrix", version, about = "AWTRIX NG device CLI")]
+#[command(name = "awtrix-cli", version, about = "AWTRIX NG device CLI")]
 pub(crate) struct Cli {
     #[arg(long, global = true, env = "AWTRIX_URL")]
     pub(crate) target: Option<String>,
@@ -756,50 +756,50 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
     }
     let mut result = match topic {
         "device" => {
-            json!({"command":"device","parameters":{"--target":"HTTP base URL; required for device commands, optional for describe","--username":"HTTP Basic username","--password":"HTTP Basic password","--timeout":"bounded request timeout in milliseconds (default 3000)","--json":"emit compact JSON independent of terminal","--fields":"comma-separated top-level result fields"},"inputs":["AWTRIX NG HTTP device"],"outputs":["identity: variant, version, identity, state","state: /api/v1/device JSON","capabilities: /api/v1/capabilities JSON","diagnose: reachability, variant, version, state and capabilities"],"examples":["awtrix --target http://awtrix.local device diagnose","awtrix --json --target http://awtrix.local device identity"],"prerequisites":["HTTP(S) AWTRIX NG endpoint; Basic credentials when configured"],"offline_reference_variant":"ESP32"})
+            json!({"command":"device","parameters":{"--target":"HTTP base URL; required for device commands, optional for describe","--username":"HTTP Basic username","--password":"HTTP Basic password","--timeout":"bounded request timeout in milliseconds (default 3000)","--json":"emit compact JSON independent of terminal","--fields":"comma-separated top-level result fields"},"inputs":["AWTRIX NG HTTP device"],"outputs":["identity: variant, version, identity, state","state: /api/v1/device JSON","capabilities: /api/v1/capabilities JSON","diagnose: reachability, variant, version, state and capabilities"],"examples":["awtrix-cli --target http://awtrix.local device diagnose","awtrix-cli --json --target http://awtrix.local device identity"],"prerequisites":["HTTP(S) AWTRIX NG endpoint; Basic credentials when configured"],"offline_reference_variant":"ESP32"})
         }
         "profiles" => profiles::describe(None)?,
         "identity" | "device identity" => command_description(
             "device identity",
             "GET /api/v1/device and /api/v1/version",
             "variant, firmware version, identity and state",
-            "awtrix --target http://awtrix.local device identity",
+            "awtrix-cli --target http://awtrix.local device identity",
         ),
         "state" | "device state" => command_description(
             "device state",
             "GET /api/v1/device",
             "device state JSON",
-            "awtrix --target http://awtrix.local device state",
+            "awtrix-cli --target http://awtrix.local device state",
         ),
         "capabilities" | "device capabilities" => command_description(
             "device capabilities",
             "GET /api/v1/capabilities",
             "device capability names",
-            "awtrix --target http://awtrix.local device capabilities",
+            "awtrix-cli --target http://awtrix.local device capabilities",
         ),
         "diagnose" | "device diagnose" => command_description(
             "device diagnose",
             "GET /api/v1/device, /api/v1/version and /api/v1/capabilities",
             "reachability, variant, version, state, capabilities",
-            "awtrix --target http://awtrix.local device diagnose",
+            "awtrix-cli --target http://awtrix.local device diagnose",
         ),
         "script" | "scripts" => {
-            json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no conflict protection","--verify-secs":"optional bounded observation after successful deploy, 1..3600"},"inputs":["raw Berry source"],"outputs":["get: raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; optional verification report; otherwise execution_state unknown"],"examples":["awtrix script get demo","awtrix --json script get demo","awtrix script deploy demo --file main.be --expected-source OLD --verify-secs 30","awtrix script deploy demo --file main.be --create","awtrix script deploy demo --file main.be --force"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; start confirmation requires system/app state"],"offline_reference_variant":"ESP32"})
+            json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no conflict protection","--verify-secs":"optional bounded observation after successful deploy, 1..3600"},"inputs":["raw Berry source"],"outputs":["get: raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; optional verification report; otherwise execution_state unknown"],"examples":["awtrix-cli script get demo","awtrix-cli --json script get demo","awtrix-cli script deploy demo --file main.be --expected-source OLD --verify-secs 30","awtrix-cli script deploy demo --file main.be --create","awtrix-cli script deploy demo --file main.be --force"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; start confirmation requires system/app state"],"offline_reference_variant":"ESP32"})
         }
         "script verify" => {
-            json!({"command":"script verify","parameters":{"name":"script name [A-Za-z0-9_-]{1,32}","--duration-secs":"bounded observation window, 1..3600 (default 10)","--interval-ms":"log polling interval, 1..60000 (default 500)","--after":"initial log cursor (default 0)","--capture":"optional PNG output path"},"inputs":["AWTRIX NG system, app inventory, cursor logs and optional framebuffer"],"outputs":{"source_saved":"not_requested for existing-script verification","start_verified":"boolean","observed_window":{"complete":"true only if the full requested duration elapsed without early termination","elapsed_ms":"integer","early_termination_reason":"null or berry_error, script_not_running, collection_error"},"not_available":"null, reason string, or diagnostic object with code/message/phase","runtime_error":"null or reported Berry error","runtime_state":"last observed app state or null","logs":{"after":"integer","next":"integer","lines":"string array","history_limit":34,"exhaustive":false},"capture":"optional screen artifact summary","runtime_success_guaranteed":false},"examples":["awtrix --json script verify demo --duration-secs 30 --interval-ms 500","awtrix script verify demo --capture observed.png"],"prerequisites":["existing enabled AWTRIX NG script","bounded device log history"],"limitations":["No error observed is not proof of general correctness","log history is bounded to 34 lines"]})
+            json!({"command":"script verify","parameters":{"name":"script name [A-Za-z0-9_-]{1,32}","--duration-secs":"bounded observation window, 1..3600 (default 10)","--interval-ms":"log polling interval, 1..60000 (default 500)","--after":"initial log cursor (default 0)","--capture":"optional PNG output path"},"inputs":["AWTRIX NG system, app inventory, cursor logs and optional framebuffer"],"outputs":{"source_saved":"not_requested for existing-script verification","start_verified":"boolean","observed_window":{"complete":"true only if the full requested duration elapsed without early termination","elapsed_ms":"integer","early_termination_reason":"null or berry_error, script_not_running, collection_error"},"not_available":"null, reason string, or diagnostic object with code/message/phase","runtime_error":"null or reported Berry error","runtime_state":"last observed app state or null","logs":{"after":"integer","next":"integer","lines":"string array","history_limit":34,"exhaustive":false},"capture":"optional screen artifact summary","runtime_success_guaranteed":false},"examples":["awtrix-cli --json script verify demo --duration-secs 30 --interval-ms 500","awtrix-cli script verify demo --capture observed.png"],"prerequisites":["existing enabled AWTRIX NG script","bounded device log history"],"limitations":["No error observed is not proof of general correctness","log history is bounded to 34 lines"]})
         }
         "script state" | "script enable" | "script disable" | "script delete"
         | "script config-get" | "script config-put" | "script data" => {
             let action = topic.strip_prefix("script ").unwrap_or("state");
             let (route, output, example) = match action {
-                "state" => ("GET /api/v1/apps", "scripts with observed enabled/inLoop/present and available error message/line/hook", "awtrix script state"),
-                "enable" => ("PUT /api/v1/apps/{name}/enabled (bare JSON true)", "name, enabled, accepted, device_result, runtime_success_guaranteed=false", "awtrix script enable demo"),
-                "disable" => ("PUT /api/v1/apps/{name}/enabled (bare JSON false)", "name, enabled, accepted, device_result, runtime_success_guaranteed=false", "awtrix script disable demo"),
-                "delete" => ("DELETE /api/v1/apps/{name}", "name, deleted, device_result", "awtrix script delete demo"),
-                "config-get" => ("GET /api/v1/apps/{name}/config", "declared settings fields and warnings", "awtrix script config-get demo"),
-                "config-put" => ("PATCH /api/v1/apps/{name}/config", "accepted, device_result; saves restart init()/setup() and do not promise future runtime success", "awtrix script config-put demo --values '{\"rate\":2}'"),
-                _ => ("GET /api/v1/apps/{name}/data", "persisted store values", "awtrix script data demo"),
+                "state" => ("GET /api/v1/apps", "scripts with observed enabled/inLoop/present and available error message/line/hook", "awtrix-cli script state"),
+                "enable" => ("PUT /api/v1/apps/{name}/enabled (bare JSON true)", "name, enabled, accepted, device_result, runtime_success_guaranteed=false", "awtrix-cli script enable demo"),
+                "disable" => ("PUT /api/v1/apps/{name}/enabled (bare JSON false)", "name, enabled, accepted, device_result, runtime_success_guaranteed=false", "awtrix-cli script disable demo"),
+                "delete" => ("DELETE /api/v1/apps/{name}", "name, deleted, device_result", "awtrix-cli script delete demo"),
+                "config-get" => ("GET /api/v1/apps/{name}/config", "declared settings fields and warnings", "awtrix-cli script config-get demo"),
+                "config-put" => ("PATCH /api/v1/apps/{name}/config", "accepted, device_result; saves restart init()/setup() and do not promise future runtime success", "awtrix-cli script config-put demo --values '{\"rate\":2}'"),
+                _ => ("GET /api/v1/apps/{name}/data", "persisted store values", "awtrix-cli script data demo"),
             };
             command_description(&format!("script {action}"), route, output, example)
         }

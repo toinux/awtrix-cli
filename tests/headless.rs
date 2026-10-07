@@ -11,7 +11,7 @@ use std::{
 
 #[cfg(target_os = "linux")]
 fn run(manifest: &str, binary: &Path, webui: &Path, config: &Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--json",
             "test",

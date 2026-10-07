@@ -39,7 +39,7 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }}
       - name: Verify packaged binary CLI and HTTP
         env:
-          AWTRIX_DISTRIBUTION_BINARY: target/${{ matrix.target }}/release/awtrix${{ matrix.suffix }}
+          AWTRIX_DISTRIBUTION_BINARY: target/${{ matrix.target }}/release/awtrix-cli${{ matrix.suffix }}
         run: cargo test --test distribution
 
   package:
@@ -65,5 +65,5 @@ jobs:
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
-          name: awtrix-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/awtrix${{ matrix.suffix }}
+          name: awtrix-cli-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/awtrix-cli${{ matrix.suffix }}

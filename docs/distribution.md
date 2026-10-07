@@ -4,8 +4,9 @@
 
 The v0.1 distribution matrix is **Linux x86_64 (GNU/glibc)**, **macOS arm64**,
 and **Windows x86_64 (MSVC)**. Artifacts are respectively named
-`awtrix-x86_64-unknown-linux-gnu`, `awtrix-aarch64-apple-darwin`, and
-`awtrix-x86_64-pc-windows-msvc.exe`. The CLI requires no Rust installation.
+`awtrix-cli-x86_64-unknown-linux-gnu`, `awtrix-cli-aarch64-apple-darwin`, and
+`awtrix-cli-x86_64-pc-windows-msvc.exe`. The executable is named `awtrix-cli` on
+all hosts. The CLI requires no Rust installation.
 Linux artifacts dynamically use the host GNU C runtime; use a compatible
 glibc-based system. macOS and Windows artifacts use their platform system
 libraries. HTTPS uses bundled Rustls roots and does not require OpenSSL.
@@ -16,8 +17,8 @@ the committed lockfile, for example:
 
 ```sh
 cargo build --release --locked --target x86_64-unknown-linux-gnu
-target/x86_64-unknown-linux-gnu/release/awtrix --help
-target/x86_64-unknown-linux-gnu/release/awtrix --version
+target/x86_64-unknown-linux-gnu/release/awtrix-cli --help
+target/x86_64-unknown-linux-gnu/release/awtrix-cli --version
 ```
 
 On macOS use `aarch64-apple-darwin` and on Windows use

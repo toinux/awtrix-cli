@@ -289,29 +289,29 @@ pub fn describe(topic: &str) -> Value {
     let (route, example) = match topic {
         "settings patch" => (
             "PATCH /api/v1/settings",
-            "awtrix settings patch --values '{\"brightness\":80,\"autoBrightness\":false}'",
+            "awtrix-cli settings patch --values '{\"brightness\":80,\"autoBrightness\":false}'",
         ),
         "settings display-get" | "settings display" => {
-            ("GET /api/v1/display", "awtrix settings display-get")
+            ("GET /api/v1/display", "awtrix-cli settings display-get")
         }
         "settings display-patch" => (
             "PATCH /api/v1/display",
-            "awtrix settings display-patch --values '{\"power\":true,\"overlay\":\"rain\"}'",
+            "awtrix-cli settings display-patch --values '{\"power\":true,\"overlay\":\"rain\"}'",
         ),
         "settings brightness" => (
             "PATCH /api/v1/settings with brightness and optional autoBrightness",
-            "awtrix settings brightness 80 --auto false",
+            "awtrix-cli settings brightness 80 --auto false",
         ),
         "settings power" => (
             "PATCH /api/v1/display with power boolean",
-            "awtrix settings power off",
+            "awtrix-cli settings power off",
         ),
-        "settings system-get" => ("GET /api/v1/system", "awtrix settings system-get"),
+        "settings system-get" => ("GET /api/v1/system", "awtrix-cli settings system-get"),
         "settings reboot" => (
             "POST /api/v1/device/reboot once",
-            "awtrix settings reboot --wait-secs 30",
+            "awtrix-cli settings reboot --wait-secs 30",
         ),
-        _ => ("GET /api/v1/settings", "awtrix settings get"),
+        _ => ("GET /api/v1/settings", "awtrix-cli settings get"),
     };
     let fields = match topic {
         "settings get" => vec!["settings"],
