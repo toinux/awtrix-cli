@@ -14,3 +14,14 @@ file = "assets/project.gif"
 name = "main"
 file = "src/main.be"
 create = true
+
+[tests]
+window_secs = 5
+
+[[tests.assertion]]
+name = "main-remains-active"
+script_active = "main"
+
+[[tests.assertion]]
+name = "headless-runtime-log"
+log_contains = "vm heap"

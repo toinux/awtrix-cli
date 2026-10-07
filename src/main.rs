@@ -10,6 +10,7 @@ mod project;
 mod resources;
 mod screen;
 mod scripts;
+mod tests;
 
 #[derive(Parser)]
 #[command(name = "awtrix", version, about = "AWTRIX NG device CLI")]
@@ -69,6 +70,11 @@ enum Command {
     Project {
         #[command(subcommand)]
         action: project::Command,
+    },
+    /// Run the declarative tests in a project manifest.
+    Test {
+        #[command(subcommand)]
+        action: tests::Command,
     },
     /// Create, update, and remove temporary pushed apps.
     Apps {
@@ -493,6 +499,12 @@ fn main() -> ExitCode {
             print!("{}", value["source"].as_str().unwrap_or_default());
             ExitCode::SUCCESS
         }
+        Ok(value) if value.get("passed").and_then(Value::as_bool) == Some(false) => {
+            let rendered = render(value, &cli.fields, cli.json).unwrap_or_else(|_| "{}".into());
+            println!("{rendered}");
+            eprintln!("awtrix: TEST_FAILED: one or more declarative assertions failed");
+            ExitCode::from(1)
+        }
         Ok(value)
             if value
                 .get("runtime_error")
@@ -628,6 +640,9 @@ fn run(cli: &Cli) -> CliResult<Value> {
     if let Command::Project { action } = &cli.command {
         return project::run(action, cli);
     }
+    if let Command::Test { action } = &cli.command {
+        return tests::run(action, cli);
+    }
     if let Command::Apps { action } = &cli.command {
         apps::validate(action).map_err(|message| ("ARGUMENT", message))?;
     }
@@ -687,6 +702,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
         Command::Resources { action } => resources::run(action, &api),
         Command::Headless { .. } => unreachable!(),
         Command::Project { .. } => unreachable!(),
+        Command::Test { .. } => unreachable!(),
     }
 }
 
@@ -756,6 +772,7 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
         "apps" | "apps create" | "apps update" | "apps delete" => apps::describe(topic),
         "project" | "project init" | "project validate" | "project deploy" | "project prune"
         | "project reconcile" => project::describe(topic),
+        "test" | "test project" => tests::describe(),
         "resources files list"
         | "resources files upload"
         | "resources files delete"
