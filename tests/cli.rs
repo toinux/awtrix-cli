@@ -212,6 +212,59 @@ fn local_minify_renames_by_default_preserves_source_and_refuses_overwrite() {
 }
 
 #[test]
+fn local_minify_handles_anothertime_berry_constructs_and_all_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let source_path = root.path().join("anothertime.ax");
+    let output_path = root.path().join("anothertime.min.ax");
+    let source = include_str!("fixtures/anothertime-minify.ax");
+    std::fs::write(&source_path, source).unwrap();
+    let metadata = source
+        .lines()
+        .filter(|line| line.trim_start().starts_with("# @"))
+        .collect::<Vec<_>>();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "minify", source_path.to_str().unwrap()])
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let compacted = std::fs::read_to_string(&output_path).unwrap();
+    assert!(compacted.len() < source.len());
+    for line in metadata {
+        assert!(compacted.lines().any(|output_line| output_line == line));
+    }
+    assert!(compacted.contains("class a"));
+    assert!(!compacted.contains("class FixtureApp"));
+    assert_eq!(std::fs::read_to_string(&source_path).unwrap(), source);
+}
+
+#[test]
+fn local_minify_force_preserves_an_existing_output_when_atomic_replace_fails() {
+    let root = tempfile::tempdir().unwrap();
+    let source_path = root.path().join("blocked.ax");
+    let output_path = root.path().join("blocked.min.ax");
+    std::fs::write(&source_path, "class Demo\nend\n").unwrap();
+    std::fs::create_dir(&output_path).unwrap();
+    let sentinel = output_path.join("keep.txt");
+    std::fs::write(&sentinel, b"existing output tree").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["minify", source_path.to_str().unwrap(), "--force"])
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"existing output tree");
+    assert!(output_path.is_dir());
+}
+
+#[test]
 fn update_help_is_explicit_and_version_remains_available() {
     let help = run(&["update", "--help"]);
     assert!(help.status.success());

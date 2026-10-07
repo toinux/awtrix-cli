@@ -36,33 +36,50 @@ pub(crate) fn run(
         },
     )?;
     let bytes = compacted.len();
-    if force {
-        fs::write(&output, &compacted).map_err(|error| {
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
+        (
+            "MINIFY_OUTPUT",
+            format!(
+                "cannot create a temporary output beside {}: {error}",
+                output.display()
+            ),
+        )
+    })?;
+    use std::io::Write;
+    temporary
+        .write_all(compacted.as_bytes())
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|error| {
             (
                 "MINIFY_OUTPUT",
                 format!("cannot write {}: {error}", output.display()),
             )
         })?;
+    if force {
+        temporary.persist(&output).map_err(|error| {
+            (
+                "MINIFY_OUTPUT",
+                format!("cannot replace {}: {}", output.display(), error.error),
+            )
+        })?;
     } else {
-        use std::io::Write;
-        let mut destination = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&output)
-            .map_err(|error| {
+        temporary.persist_noclobber(&output).map_err(|error| {
+            if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+                (
+                    "OUTPUT_EXISTS",
+                    format!(
+                        "{} already exists; pass --force to replace it",
+                        output.display()
+                    ),
+                )
+            } else {
                 (
                     "MINIFY_OUTPUT",
-                    format!("cannot create {}: {error}", output.display()),
+                    format!("cannot create {}: {}", output.display(), error.error),
                 )
-            })?;
-        destination
-            .write_all(compacted.as_bytes())
-            .map_err(|error| {
-                (
-                    "MINIFY_OUTPUT",
-                    format!("cannot write {}: {error}", output.display()),
-                )
-            })?;
+            }
+        })?;
     }
     Ok(json!({"output":output,"bytes":bytes}))
 }
