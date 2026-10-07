@@ -270,3 +270,26 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
   release execution/generation on all announced hosts. No release auto-published.
 - Ticket18 is done. Ticket19 is available, not yet implemented or accepted. Preserve
   installed physical scripts; full ESP32/ESP32-S3/TC002 compatibility is not claimed.
+
+## User-requested executable rename — 2026-10-07
+
+- Before ticket19, user requested awtrix-cli instead of awtrix. Luna implemented
+  c1237d6 + README correction1b58234 in feature/awtrix-cli-binary, dispatch8003681.
+  Independent Luna review ses_ee87b155affeBxIJqCTh0BEzNp found no blockers and one
+  README naming residue, corrected before integration. Integrated/pushed04fb6e1.
+- Cargo package/bin and Clap identity now awtrix-cli. Current help/describe examples,
+  README/contracts, test executable references and native artifact paths/names updated.
+  awtrix.toml, upstream awtrix-linux, environment variables and personal state paths
+  remain the same; historical execution evidence above retains its original names.
+- Integrated fmt/clippy/default tests pass (6unit+135CLI); release build passes.
+  Explicit AWTRIX_DISTRIBUTION_BINARY=target/release/awtrix-cli distribution tests
+  pass2; real Linux AWTRIX headless integration explicitly passes21.48s.
+  ./target/release/awtrix-cli --version reports awtrix-cli0.1.0.
+- Native CI https://github.com/toinux/awtrix-cli/actions/runs/37663709425 succeeds
+  on04fb6e1: all three host-test and all three package jobs passed. Release help/version
+  and HTTP checked natively on Linux x86_64, macOS ARM64 and Windows x86_64 MSVC.
+- Nonexpired renamed artifacts observed through API: awtrix-cli-aarch64-apple-darwin
+  ID11502485325; awtrix-cli-x86_64-unknown-linux-gnu ID11502365895;
+  awtrix-cli-x86_64-pc-windows-msvc ID11501964511. No release published.
+- Ticket18 remains accepted with fresh post-rename native evidence. Ticket19 still
+  ready, not started. Use awtrix-cli for its scenario and documentation.
