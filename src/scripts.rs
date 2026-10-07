@@ -227,8 +227,22 @@ fn verify(
 ) -> crate::CliResult<Value> {
     let started = Instant::now();
     let deadline = Duration::from_secs(duration_secs);
-    let system = api.get_with_timeout("/api/v1/system", deadline)?;
-    let apps = api.get_with_timeout("/api/v1/apps", deadline.saturating_sub(started.elapsed()))?;
+    let system = match api.get_with_timeout("/api/v1/system", deadline) {
+        Ok(value) => value,
+        Err((code, message)) => {
+            return Ok(initial_failure(after, started, code, message, "system"))
+        }
+    };
+    if system.get("scriptingEnabled").and_then(Value::as_bool) != Some(true) {
+        return Ok(
+            json!({"source_saved":"not_requested","start_verified":false,"observed_window":{"complete":false,"duration_secs":started.elapsed().as_secs_f64(),"elapsed_ms":started.elapsed().as_millis(),"early_termination_reason":"scripting_disabled"},"not_available":"scripting_disabled","runtime_error":null,"runtime_state":null,"logs":{"after":after,"next":after,"lines":[],"history_limit":34,"exhaustive":false},"capture":null,"runtime_success_guaranteed":false}),
+        );
+    }
+    let remaining = deadline.saturating_sub(started.elapsed());
+    let apps = match api.get_with_timeout("/api/v1/apps", remaining) {
+        Ok(value) => value,
+        Err((code, message)) => return Ok(initial_failure(after, started, code, message, "apps")),
+    };
     let app = apps.as_array().and_then(|items| {
         items.iter().find(|app| {
             app.get("name").and_then(Value::as_str) == Some(name)
@@ -247,8 +261,17 @@ fn verify(
     let start_verified =
         scripting == Some(true) && enabled && app.is_some() && runtime_error.is_none();
     if scripting != Some(true) || app.is_none() || !enabled || !start_verified {
+        let reason = if scripting != Some(true) {
+            "scripting_disabled"
+        } else if app.is_none() {
+            "script_absent"
+        } else if runtime_error.is_some() {
+            "berry_error"
+        } else {
+            "script_disabled"
+        };
         return Ok(
-            json!({"source_saved":"not_requested","start_verified":false,"observed_window":{"complete":false,"duration_secs":started.elapsed().as_secs_f64()},"not_available":if scripting != Some(true) {"scripting_disabled"} else if app.is_none() {"script_absent"} else {"script_disabled_or_start_error"},"runtime_error":runtime_error,"logs":{"after":after,"next":cursor,"lines":lines,"history_limit":34,"exhaustive":false},"capture":null,"runtime_success_guaranteed":false}),
+            json!({"source_saved":"not_requested","start_verified":false,"observed_window":{"complete":false,"duration_secs":started.elapsed().as_secs_f64(),"elapsed_ms":started.elapsed().as_millis(),"early_termination_reason":reason},"not_available":reason,"runtime_error":runtime_error,"logs":{"after":after,"next":cursor,"lines":lines,"history_limit":34,"exhaustive":false},"capture":null,"runtime_success_guaranteed":false}),
         );
     }
     let mut final_state = app.cloned();
@@ -299,6 +322,16 @@ fn verify(
                 if runtime_error.is_some() {
                     break;
                 }
+                let still_running = final_state.as_ref().is_some_and(|app| {
+                    app.get("origin").and_then(Value::as_str) == Some("script")
+                        && app.get("enabled").and_then(Value::as_bool) == Some(true)
+                });
+                if !still_running {
+                    collection_error = Some(
+                        json!({"code":"SCRIPT_NOT_RUNNING","message":"script disappeared, changed origin, or became disabled during verification","phase":"state_observation"}),
+                    );
+                    break;
+                }
             }
             Err((code, message)) => {
                 collection_error =
@@ -342,9 +375,33 @@ fn verify(
     } else {
         None
     };
+    if collection_error.is_none() && runtime_error.is_none() && started.elapsed() < deadline {
+        std::thread::sleep(deadline.saturating_sub(started.elapsed()));
+    }
+    let early_reason = if runtime_error.is_some() {
+        Some("berry_error")
+    } else if collection_error.as_ref().is_some_and(|error| {
+        error.get("code").and_then(Value::as_str) == Some("SCRIPT_NOT_RUNNING")
+    }) {
+        Some("script_not_running")
+    } else if collection_error.is_some() {
+        Some("collection_error")
+    } else {
+        None
+    };
     Ok(
-        json!({"source_saved":"not_requested","start_verified":true,"observed_window":{"complete":collection_error.is_none() && (started.elapsed() >= poll_deadline || runtime_error.is_some()),"duration_secs":started.elapsed().as_secs_f64(),"note":"No observed error is not proof of general correctness"},"not_available":collection_error,"runtime_error":runtime_error,"runtime_state":final_state,"logs":{"after":after,"next":cursor,"lines":lines,"history_limit":34,"exhaustive":false},"capture":artifact,"runtime_success_guaranteed":false}),
+        json!({"source_saved":"not_requested","start_verified":true,"observed_window":{"complete":started.elapsed() >= deadline && early_reason.is_none(),"duration_secs":started.elapsed().as_secs_f64(),"elapsed_ms":started.elapsed().as_millis(),"early_termination_reason":early_reason,"note":"No observed error is not proof of general correctness"},"not_available":collection_error,"runtime_error":runtime_error,"runtime_state":final_state,"logs":{"after":after,"next":cursor,"lines":lines,"history_limit":34,"exhaustive":false},"capture":artifact,"runtime_success_guaranteed":false}),
     )
+}
+
+fn initial_failure(
+    after: u64,
+    started: Instant,
+    code: &str,
+    message: String,
+    phase: &str,
+) -> Value {
+    json!({"source_saved":"not_requested","start_verified":false,"observed_window":{"complete":false,"duration_secs":started.elapsed().as_secs_f64(),"elapsed_ms":started.elapsed().as_millis(),"early_termination_reason":"collection_error"},"not_available":{"code":code,"message":message,"phase":phase},"runtime_error":null,"runtime_state":null,"logs":{"after":after,"next":after,"lines":[],"history_limit":34,"exhaustive":false},"capture":null,"runtime_success_guaranteed":false})
 }
 fn validate(name: &str) -> crate::CliResult<()> {
     if valid_name(name) {

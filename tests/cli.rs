@@ -788,6 +788,12 @@ fn script_verify_detects_runtime_error_with_cursor_diagnostics_and_nonzero_exit(
     assert_eq!(value["logs"]["next"], 5);
     assert_eq!(value["runtime_error"]["line"], 12);
     assert_eq!(value["runtime_state"]["error"]["message"], "late failure");
+    assert_eq!(value["observed_window"]["complete"], false);
+    assert_eq!(
+        value["observed_window"]["early_termination_reason"],
+        "berry_error"
+    );
+    assert!(value["observed_window"]["elapsed_ms"].is_number());
     assert!(String::from_utf8_lossy(&output.stderr).contains("BERRY_ERROR"));
 }
 
@@ -797,7 +803,7 @@ fn script_verify_absent_or_disabled_returns_nonzero_without_logs() {
         ("[]", "script_absent"),
         (
             r#"[{"name":"demo","origin":"script","enabled":false,"error":null}]"#,
-            "script_disabled_or_start_error",
+            "script_disabled",
         ),
     ] {
         let server = Server::http("127.0.0.1:0").unwrap();
@@ -820,6 +826,179 @@ fn script_verify_absent_or_disabled_returns_nonzero_without_logs() {
         assert_eq!(report["not_available"], reason);
         assert_eq!(report["start_verified"], false);
     }
+}
+
+#[test]
+fn script_verify_global_disable_and_initial_http_errors_return_reports() {
+    let disabled = Server::http("127.0.0.1:0").unwrap();
+    let disabled_url = format!("http://{}", disabled.server_addr());
+    let worker = thread::spawn(move || {
+        disabled
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":false}"#))
+            .unwrap()
+    });
+    let output = run(&[
+        "--target",
+        &disabled_url,
+        "--json",
+        "script",
+        "verify",
+        "demo",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["not_available"], "scripting_disabled");
+    assert_eq!(report["observed_window"]["complete"], false);
+
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":true}"#))
+            .unwrap();
+        server.recv().unwrap().respond(Response::from_string(r#"[{"name":"demo","origin":"script","enabled":true,"error":{"message":"compile failure","line":3}}]"#)).unwrap();
+    });
+    let output = run(&["--target", &url, "--json", "script", "verify", "demo"]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["runtime_error"]["line"], 3);
+    assert_eq!(
+        report["observed_window"]["early_termination_reason"],
+        "berry_error"
+    );
+
+    for (route, phase) in [("/api/v1/system", "system"), ("/api/v1/apps", "apps")] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let route = route.to_owned();
+        let phase = phase.to_owned();
+        let worker = thread::spawn(move || {
+            if route == "/api/v1/apps" {
+                server
+                    .recv()
+                    .unwrap()
+                    .respond(Response::from_string(r#"{"scriptingEnabled":true}"#))
+                    .unwrap();
+            }
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_string("private").with_status_code(500))
+                .unwrap();
+        });
+        let output = run(&["--target", &url, "--json", "script", "verify", "demo"]);
+        worker.join().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["not_available"]["code"], "HTTP");
+        assert_eq!(report["not_available"]["phase"], phase);
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("private"));
+    }
+}
+
+#[test]
+fn script_verify_initial_system_and_apps_timeouts_are_bounded_reports() {
+    for (slow_route, phase) in [("/api/v1/system", "system"), ("/api/v1/apps", "apps")] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let slow_route = slow_route.to_owned();
+        let worker = thread::spawn(move || {
+            if slow_route == "/api/v1/apps" {
+                server
+                    .recv()
+                    .unwrap()
+                    .respond(Response::from_string(r#"{"scriptingEnabled":true}"#))
+                    .unwrap();
+            }
+            let request = server.recv().unwrap();
+            thread::sleep(Duration::from_millis(1300));
+            let _ = request.respond(Response::from_string(if slow_route == "/api/v1/system" {
+                r#"{"scriptingEnabled":true}"#
+            } else {
+                "[]"
+            }));
+        });
+        let start = std::time::Instant::now();
+        let output = run(&[
+            "--target",
+            &url,
+            "--timeout",
+            "3000",
+            "--json",
+            "script",
+            "verify",
+            "demo",
+            "--duration-secs",
+            "1",
+        ]);
+        let elapsed = start.elapsed();
+        worker.join().unwrap();
+        assert!(
+            elapsed < Duration::from_millis(1250),
+            "request exceeded verify deadline: {elapsed:?}"
+        );
+        assert_eq!(output.status.code(), Some(1));
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["not_available"]["code"], "TIMEOUT");
+        assert_eq!(report["not_available"]["phase"], phase);
+    }
+}
+
+#[test]
+fn script_verify_reports_script_disappearance_or_disable_during_window() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":true}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"next":2,"lines":[]}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string("[]"))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "verify",
+        "demo",
+        "--duration-secs",
+        "1",
+        "--interval-ms",
+        "1",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["not_available"]["code"], "SCRIPT_NOT_RUNNING");
+    assert_eq!(report["observed_window"]["complete"], false);
+    assert_eq!(
+        report["observed_window"]["early_termination_reason"],
+        "script_not_running"
+    );
 }
 
 #[test]
