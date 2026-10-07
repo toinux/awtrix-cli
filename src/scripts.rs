@@ -5,6 +5,8 @@ use std::{fs, path::PathBuf};
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// List apps and the currently observed script state, including Berry errors.
+    State,
     /// Read exact source bytes from the device to stdout.
     Get { name: String },
     /// Deploy a raw Berry source file.
@@ -24,6 +26,22 @@ pub enum Command {
         #[arg(long, conflicts_with_all = ["create", "expected_source"])]
         force: bool,
     },
+    /// Enable a script without changing other apps.
+    Enable { name: String },
+    /// Disable a script without changing other apps.
+    Disable { name: String },
+    /// Delete a script and its persisted store.
+    Delete { name: String },
+    /// Read declared, user-changeable @config settings.
+    ConfigGet { name: String },
+    /// Patch declared @config settings (restarts init/setup).
+    ConfigPut {
+        name: String,
+        #[arg(long, help = "JSON object of setting keys and values")]
+        values: String,
+    },
+    /// Read data persisted by store.set().
+    Data { name: String },
 }
 
 fn valid_name(name: &str) -> bool {
@@ -35,6 +53,17 @@ fn valid_name(name: &str) -> bool {
 
 pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value> {
     match command {
+        Command::State => {
+            let apps = api.get("/api/v1/apps")?;
+            let Some(apps) = apps.as_array() else {
+                return Err(("INVALID_RESPONSE", "app inventory must be an array".into()));
+            };
+            let scripts: Vec<Value> = apps.iter().filter(|app| app.get("origin").and_then(Value::as_str) == Some("script")).map(|app| {
+                let error = app.get("error").filter(|v| !v.is_null());
+                json!({"name":app.get("name"),"enabled":app.get("enabled"),"in_loop":app.get("inLoop"),"present":app.get("present"),"error":error,"error_message":error.and_then(|e|e.get("message")),"error_line":error.and_then(|e|e.get("line")),"error_hook":error.and_then(|e|e.get("hook"))})
+            }).collect();
+            Ok(json!({"scripts":scripts,"observed":true,"runtime_success_guaranteed":false}))
+        }
         Command::Get { name } => {
             validate(name)?;
             let response = api.raw_get(&format!("/api/v1/apps/script/{name}"))?;
@@ -86,6 +115,54 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                     }
                 }
             }
+        }
+        Command::Enable { name } | Command::Disable { name } => {
+            validate(name)?;
+            let enabled = matches!(command, Command::Enable { .. });
+            let value = api.mutate(
+                reqwest::Method::PUT,
+                &format!("/api/v1/apps/{name}/enabled"),
+                &json!(enabled),
+            )?;
+            Ok(
+                json!({"name":name,"enabled":enabled,"accepted":true,"device_result":value,"runtime_success_guaranteed":false,"persistence":"switch is persisted across restart; a 507 means active but not saved"}),
+            )
+        }
+        Command::Delete { name } => {
+            validate(name)?;
+            let value = api.mutate(
+                reqwest::Method::DELETE,
+                &format!("/api/v1/apps/{name}"),
+                &Value::Null,
+            )?;
+            Ok(json!({"name":name,"deleted":true,"device_result":value}))
+        }
+        Command::ConfigGet { name } => {
+            validate(name)?;
+            api.get(&format!("/api/v1/apps/{name}/config"))
+        }
+        Command::ConfigPut { name, values } => {
+            validate(name)?;
+            let body: Value = serde_json::from_str(values)
+                .map_err(|_| ("ARGUMENT", "config values must be a JSON object".into()))?;
+            if !body.is_object() || body.as_object().is_some_and(|o| o.is_empty()) {
+                return Err((
+                    "ARGUMENT",
+                    "config values must be a non-empty JSON object".into(),
+                ));
+            }
+            let result = api.mutate(
+                reqwest::Method::PATCH,
+                &format!("/api/v1/apps/{name}/config"),
+                &body,
+            )?;
+            Ok(
+                json!({"name":name,"accepted":true,"device_result":result,"restart":"saving config restarts the script; init() and setup() run again","runtime_success_guaranteed":false}),
+            )
+        }
+        Command::Data { name } => {
+            validate(name)?;
+            api.get(&format!("/api/v1/apps/{name}/data"))
         }
     }
 }

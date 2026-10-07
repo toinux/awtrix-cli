@@ -743,6 +743,39 @@ fn script_get_preserves_raw_source_and_script_put_reports_berry_error() {
 }
 
 #[test]
+fn script_enable_uses_bare_boolean_and_script_state_exposes_only_observed_error_fields() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Put);
+        assert_eq!(request.url(), "/api/v1/apps/demo/enabled");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(body, "true");
+        request
+            .respond(Response::from_string(r#"{"ok":true}"#))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps");
+        request.respond(Response::from_string(r#"[{"name":"demo","origin":"script","enabled":true,"error":{"message":"bad","line":4}}]"#)).unwrap();
+    });
+    let enabled = run(&["--target", &url, "--json", "script", "enable", "demo"]);
+    assert!(enabled.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&enabled.stdout).unwrap()
+            ["runtime_success_guaranteed"],
+        false
+    );
+    let state = run(&["--target", &url, "--json", "script", "state"]);
+    worker.join().unwrap();
+    let state: serde_json::Value = serde_json::from_slice(&state.stdout).unwrap();
+    assert_eq!(state["scripts"][0]["error_message"], "bad");
+    assert_eq!(state["scripts"][0]["error_line"], 4);
+    assert!(state["scripts"][0].get("error_hook").unwrap().is_null());
+}
+
+#[test]
 fn script_deploy_uses_atomic_expected_source_route_and_does_not_pre_read() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
