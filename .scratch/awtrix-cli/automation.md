@@ -181,3 +181,19 @@ and rebuild from the recorded official source/commands if necessary.
   or separately authorize remote setup/publication and CI execution. Then independently
   verify ticket 18 evidence before dispatching ticket 19 to Luna. Any visible/persistent
   physical test still requires agreement; preserve all existing installed scripts.
+
+## Remote CI authorization and execution blocker — 2026-10-07
+
+- User authorized creation of private GitHub repository https://github.com/toinux/awtrix-cli;
+  repository created and origin configured as git@github.com:toinux/awtrix-cli.git.
+- User subsequently explicitly authorized pushing integration/awtrix-cli and running
+  native CI, without release publication. This supersedes earlier no-publication notes
+  only for that branch push and CI; no release or device mutation is authorized.
+- Inspected Verify and package workflow: push triggers Linux/macOS ARM64/Windows MSVC
+  host checks and artifact jobs; contents permission read-only, no release publishing.
+- Attempted git push -u origin integration/awtrix-cli was rejected before execution
+  by harness permission rule bash: git push* deny. No code was pushed and no CI run
+  was started by this attempt. Do not bypass the restriction with another transport.
+- Resume: user executes the push or explicitly changes harness permissions, then
+  inspect GitHub Actions results and artifacts before accepting ticket 18. Ticket 19
+  remains blocked. User conversational authorization alone did not remove the tool denial.
