@@ -1,12 +1,25 @@
 //! Raw Berry source operations. The conditional route is atomic; raw PUT is explicitly force-only.
 use clap::Subcommand;
 use serde_json::{json, Value};
+use std::time::{Duration, Instant};
 use std::{fs, path::PathBuf};
 
 #[derive(Subcommand)]
 pub enum Command {
     /// List apps and the currently observed script state, including Berry errors.
     State,
+    /// Verify a script over a bounded observation window (not a proof of correctness).
+    Verify {
+        name: String,
+        #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        duration_secs: u64,
+        #[arg(long, default_value_t = 500, value_parser = clap::value_parser!(u64).range(1..=60000))]
+        interval_ms: u64,
+        #[arg(long, default_value_t = 0)]
+        after: u64,
+        #[arg(long)]
+        capture: Option<PathBuf>,
+    },
     /// Read exact source bytes from the device to stdout.
     Get { name: String },
     /// Deploy a raw Berry source file.
@@ -25,6 +38,9 @@ pub enum Command {
         /// Replace unconditionally using raw PUT; no concurrency guarantee.
         #[arg(long, conflicts_with_all = ["create", "expected_source"])]
         force: bool,
+        /// After saving, run verification for this many seconds (1..3600).
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..=3600))]
+        verify_secs: Option<u64>,
     },
     /// Enable a script without changing other apps.
     Enable { name: String },
@@ -64,6 +80,23 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             }).collect();
             Ok(json!({"scripts":scripts,"observed":true,"runtime_success_guaranteed":false}))
         }
+        Command::Verify {
+            name,
+            duration_secs,
+            interval_ms,
+            after,
+            capture,
+        } => {
+            validate(name)?;
+            verify(
+                api,
+                name,
+                *duration_secs,
+                *interval_ms,
+                *after,
+                capture.as_ref(),
+            )
+        }
         Command::Get { name } => {
             validate(name)?;
             let response = api.raw_get(&format!("/api/v1/apps/script/{name}"))?;
@@ -77,6 +110,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             expected_source,
             create,
             force,
+            verify_secs,
         } => {
             validate(name)?;
             let source = match (source, file) {
@@ -95,7 +129,8 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             }
             if *force {
                 let result = api.raw_put(&format!("/api/v1/apps/script/{name}"), &source)?;
-                operational_result(result, false, None)
+                let saved = operational_result(result, false, None)?;
+                chain_verification(saved, api, name, *verify_secs)
             } else {
                 let capabilities = api.get("/api/v1/capabilities")?;
                 if capabilities.get("scriptUpdates").and_then(Value::as_bool) != Some(true) {
@@ -111,7 +146,8 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                     Err(e) => Err(e),
                     Ok(result) => {
                         let verification = verify_start(api, name);
-                        operational_result(result, true, verification)
+                        let saved = operational_result(result, true, verification)?;
+                        chain_verification(saved, api, name, *verify_secs)
                     }
                 }
             }
@@ -164,6 +200,208 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             api.get(&format!("/api/v1/apps/{name}/data"))
         }
     }
+}
+
+fn chain_verification(
+    mut saved: Value,
+    api: &crate::ApiClient,
+    name: &str,
+    duration: Option<u64>,
+) -> crate::CliResult<Value> {
+    if let Some(duration) = duration {
+        let report = verify(api, name, duration, 500, 0, None)?;
+        if let Some(object) = saved.as_object_mut() {
+            object.insert("verification".into(), report);
+        }
+    }
+    Ok(saved)
+}
+
+fn verify(
+    api: &crate::ApiClient,
+    name: &str,
+    duration_secs: u64,
+    interval_ms: u64,
+    after: u64,
+    capture: Option<&PathBuf>,
+) -> crate::CliResult<Value> {
+    let started = Instant::now();
+    let deadline = Duration::from_secs(duration_secs);
+    let system = match api.get_with_timeout("/api/v1/system", deadline) {
+        Ok(value) => value,
+        Err((code, message)) => {
+            return Ok(initial_failure(after, started, code, message, "system"))
+        }
+    };
+    if system.get("scriptingEnabled").and_then(Value::as_bool) != Some(true) {
+        return Ok(
+            json!({"source_saved":"not_requested","start_verified":false,"observed_window":{"complete":false,"duration_secs":started.elapsed().as_secs_f64(),"elapsed_ms":started.elapsed().as_millis(),"early_termination_reason":"scripting_disabled"},"not_available":"scripting_disabled","runtime_error":null,"runtime_state":null,"logs":{"after":after,"next":after,"lines":[],"history_limit":34,"exhaustive":false},"capture":null,"runtime_success_guaranteed":false}),
+        );
+    }
+    let remaining = deadline.saturating_sub(started.elapsed());
+    let apps = match api.get_with_timeout("/api/v1/apps", remaining) {
+        Ok(value) => value,
+        Err((code, message)) => return Ok(initial_failure(after, started, code, message, "apps")),
+    };
+    let app = apps.as_array().and_then(|items| {
+        items.iter().find(|app| {
+            app.get("name").and_then(Value::as_str) == Some(name)
+                && app.get("origin").and_then(Value::as_str) == Some("script")
+        })
+    });
+    let scripting = system.get("scriptingEnabled").and_then(Value::as_bool);
+    let enabled = app.and_then(|a| a.get("enabled")).and_then(Value::as_bool) == Some(true);
+    let mut cursor = after;
+    let mut lines = Vec::new();
+    let mut collection_error = None;
+    let mut runtime_error = app
+        .and_then(|a| a.get("error"))
+        .filter(|e| !e.is_null())
+        .cloned();
+    let start_verified =
+        scripting == Some(true) && enabled && app.is_some() && runtime_error.is_none();
+    if scripting != Some(true) || app.is_none() || !enabled || !start_verified {
+        let reason = if scripting != Some(true) {
+            "scripting_disabled"
+        } else if app.is_none() {
+            "script_absent"
+        } else if runtime_error.is_some() {
+            "berry_error"
+        } else {
+            "script_disabled"
+        };
+        return Ok(
+            json!({"source_saved":"not_requested","start_verified":false,"observed_window":{"complete":false,"duration_secs":started.elapsed().as_secs_f64(),"elapsed_ms":started.elapsed().as_millis(),"early_termination_reason":reason},"not_available":reason,"runtime_error":runtime_error,"logs":{"after":after,"next":cursor,"lines":lines,"history_limit":34,"exhaustive":false},"capture":null,"runtime_success_guaranteed":false}),
+        );
+    }
+    let mut final_state = app.cloned();
+    // Reserve a bounded tail of the same deadline for optional framebuffer I/O and local PNG write.
+    let capture_reserve = if capture.is_some() {
+        (deadline / 4).min(Duration::from_secs(2))
+    } else {
+        Duration::ZERO
+    };
+    let observation_deadline = deadline.saturating_sub(capture_reserve);
+    let poll_deadline = observation_deadline.saturating_sub(Duration::from_millis(100));
+    while started.elapsed() < poll_deadline {
+        let remaining = observation_deadline.saturating_sub(started.elapsed());
+        match api.get_with_timeout(&format!("/api/v1/logs?after={cursor}"), remaining) {
+            Ok(logs) => {
+                cursor = logs
+                    .get("next")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(cursor)
+                    .max(cursor);
+                if let Some(batch) = logs.get("lines").and_then(Value::as_array) {
+                    lines.extend(batch.iter().filter_map(Value::as_str).map(str::to_owned));
+                }
+            }
+            Err((code, message)) => {
+                collection_error = Some(json!({"code":code,"message":message}));
+                break;
+            }
+        }
+        let remaining = observation_deadline.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            break;
+        }
+        match api.get_with_timeout("/api/v1/apps", remaining) {
+            Ok(items) => {
+                final_state = items
+                    .as_array()
+                    .and_then(|apps| {
+                        apps.iter()
+                            .find(|a| a.get("name").and_then(Value::as_str) == Some(name))
+                    })
+                    .cloned();
+                runtime_error = final_state
+                    .as_ref()
+                    .and_then(|a| a.get("error"))
+                    .filter(|e| !e.is_null())
+                    .cloned();
+                if runtime_error.is_some() {
+                    break;
+                }
+                let still_running = final_state.as_ref().is_some_and(|app| {
+                    app.get("origin").and_then(Value::as_str) == Some("script")
+                        && app.get("enabled").and_then(Value::as_bool) == Some(true)
+                });
+                if !still_running {
+                    collection_error = Some(
+                        json!({"code":"SCRIPT_NOT_RUNNING","message":"script disappeared, changed origin, or became disabled during verification","phase":"state_observation"}),
+                    );
+                    break;
+                }
+            }
+            Err((code, message)) => {
+                collection_error =
+                    Some(json!({"code":code,"message":message,"phase":"state_observation"}));
+                break;
+            }
+        }
+        if started.elapsed() >= observation_deadline {
+            break;
+        }
+        std::thread::sleep(
+            Duration::from_millis(interval_ms)
+                .min(observation_deadline.saturating_sub(started.elapsed())),
+        );
+    }
+    let artifact = if let Some(path) = capture {
+        let remaining = deadline.saturating_sub(started.elapsed());
+        let result = if remaining.is_zero() {
+            Err((
+                "TIMEOUT",
+                "verification deadline left no time for capture".into(),
+            ))
+        } else {
+            crate::screen::run_with_timeout(
+                &crate::screen::Command::Capture {
+                    output: path.clone(),
+                },
+                api,
+                remaining,
+            )
+        };
+        match result {
+            Ok(value) => Some(value),
+            Err((code, message)) => {
+                if collection_error.is_none() {
+                    collection_error = Some(json!({"code":code,"message":message}));
+                }
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if collection_error.is_none() && runtime_error.is_none() && started.elapsed() < deadline {
+        std::thread::sleep(deadline.saturating_sub(started.elapsed()));
+    }
+    let early_reason = if runtime_error.is_some() {
+        Some("berry_error")
+    } else if collection_error.as_ref().is_some_and(|error| {
+        error.get("code").and_then(Value::as_str) == Some("SCRIPT_NOT_RUNNING")
+    }) {
+        Some("script_not_running")
+    } else if collection_error.is_some() {
+        Some("collection_error")
+    } else {
+        None
+    };
+    Ok(
+        json!({"source_saved":"not_requested","start_verified":true,"observed_window":{"complete":started.elapsed() >= deadline && early_reason.is_none(),"duration_secs":started.elapsed().as_secs_f64(),"elapsed_ms":started.elapsed().as_millis(),"early_termination_reason":early_reason,"note":"No observed error is not proof of general correctness"},"not_available":collection_error,"runtime_error":runtime_error,"runtime_state":final_state,"logs":{"after":after,"next":cursor,"lines":lines,"history_limit":34,"exhaustive":false},"capture":artifact,"runtime_success_guaranteed":false}),
+    )
+}
+
+fn initial_failure(
+    after: u64,
+    started: Instant,
+    code: &str,
+    message: String,
+    phase: &str,
+) -> Value {
+    json!({"source_saved":"not_requested","start_verified":false,"observed_window":{"complete":false,"duration_secs":started.elapsed().as_secs_f64(),"elapsed_ms":started.elapsed().as_millis(),"early_termination_reason":"collection_error"},"not_available":{"code":code,"message":message,"phase":phase},"runtime_error":null,"runtime_state":null,"logs":{"after":after,"next":after,"lines":[],"history_limit":34,"exhaustive":false},"capture":null,"runtime_success_guaranteed":false})
 }
 fn validate(name: &str) -> crate::CliResult<()> {
     if valid_name(name) {

@@ -1,7 +1,7 @@
 //! Save the AWTRIX framebuffer as an RGB PNG without returning pixel data.
 use clap::Subcommand;
 use serde_json::{json, Value};
-use std::{io::Write, path::PathBuf};
+use std::{io::Write, path::PathBuf, time::Duration};
 use tempfile::NamedTempFile;
 
 const MAX_PIXELS: u64 = 4_194_304;
@@ -22,9 +22,20 @@ pub enum Command {
 }
 
 pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value> {
+    run_with_timeout(command, api, Duration::from_secs(86400))
+}
+pub(crate) fn run_with_timeout(
+    command: &Command,
+    api: &crate::ApiClient,
+    timeout: Duration,
+) -> crate::CliResult<Value> {
     match command {
         Command::Capture { output } => {
-            let bytes = api.raw_bytes_get("/api/v1/display/screen", MAX_RESPONSE_BYTES)?;
+            let bytes = api.raw_bytes_get_with_timeout(
+                "/api/v1/display/screen",
+                MAX_RESPONSE_BYTES,
+                timeout,
+            )?;
             let frame: Value = serde_json::from_slice(&bytes)
                 .map_err(|_| ("INVALID_RESPONSE", "invalid framebuffer JSON".into()))?;
             let width = frame

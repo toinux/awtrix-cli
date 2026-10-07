@@ -1239,6 +1239,534 @@ fn script_get_preserves_raw_source_and_script_put_reports_berry_error() {
 }
 
 #[test]
+fn script_verify_detects_runtime_error_with_cursor_diagnostics_and_nonzero_exit() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for (route, body) in [
+            ("/api/v1/system", r#"{"scriptingEnabled":true}"#),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ),
+            (
+                "/api/v1/logs?after=4",
+                r#"{"next":5,"lines":["demo failed"]}"#,
+            ),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":{"message":"late failure","line":12}}]"#,
+            ),
+        ] {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), route);
+            request.respond(Response::from_string(body)).unwrap();
+        }
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "verify",
+        "demo",
+        "--after",
+        "4",
+        "--duration-secs",
+        "1",
+        "--interval-ms",
+        "1",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["start_verified"], true);
+    assert_eq!(value["logs"]["next"], 5);
+    assert_eq!(value["runtime_error"]["line"], 12);
+    assert_eq!(value["runtime_state"]["error"]["message"], "late failure");
+    assert_eq!(value["observed_window"]["complete"], false);
+    assert_eq!(
+        value["observed_window"]["early_termination_reason"],
+        "berry_error"
+    );
+    assert!(value["observed_window"]["elapsed_ms"].is_number());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("BERRY_ERROR"));
+}
+
+#[test]
+fn script_verify_absent_or_disabled_returns_nonzero_without_logs() {
+    for (apps, reason) in [
+        ("[]", "script_absent"),
+        (
+            r#"[{"name":"demo","origin":"script","enabled":false,"error":null}]"#,
+            "script_disabled",
+        ),
+    ] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let apps = apps.to_owned();
+        let worker = thread::spawn(move || {
+            for (route, body) in [
+                ("/api/v1/system", r#"{"scriptingEnabled":true}"#.to_owned()),
+                ("/api/v1/apps", apps),
+            ] {
+                let request = server.recv().unwrap();
+                assert_eq!(request.url(), route);
+                request.respond(Response::from_string(body)).unwrap();
+            }
+        });
+        let output = run(&["--target", &url, "--json", "script", "verify", "demo"]);
+        worker.join().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["not_available"], reason);
+        assert_eq!(report["start_verified"], false);
+    }
+}
+
+#[test]
+fn script_verify_global_disable_and_initial_http_errors_return_reports() {
+    let disabled = Server::http("127.0.0.1:0").unwrap();
+    let disabled_url = format!("http://{}", disabled.server_addr());
+    let worker = thread::spawn(move || {
+        disabled
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":false}"#))
+            .unwrap()
+    });
+    let output = run(&[
+        "--target",
+        &disabled_url,
+        "--json",
+        "script",
+        "verify",
+        "demo",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["not_available"], "scripting_disabled");
+    assert_eq!(report["observed_window"]["complete"], false);
+
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":true}"#))
+            .unwrap();
+        server.recv().unwrap().respond(Response::from_string(r#"[{"name":"demo","origin":"script","enabled":true,"error":{"message":"compile failure","line":3}}]"#)).unwrap();
+    });
+    let output = run(&["--target", &url, "--json", "script", "verify", "demo"]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["runtime_error"]["line"], 3);
+    assert_eq!(
+        report["observed_window"]["early_termination_reason"],
+        "berry_error"
+    );
+
+    for (route, phase) in [("/api/v1/system", "system"), ("/api/v1/apps", "apps")] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let route = route.to_owned();
+        let phase = phase.to_owned();
+        let worker = thread::spawn(move || {
+            if route == "/api/v1/apps" {
+                server
+                    .recv()
+                    .unwrap()
+                    .respond(Response::from_string(r#"{"scriptingEnabled":true}"#))
+                    .unwrap();
+            }
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_string("private").with_status_code(500))
+                .unwrap();
+        });
+        let output = run(&["--target", &url, "--json", "script", "verify", "demo"]);
+        worker.join().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["not_available"]["code"], "HTTP");
+        assert_eq!(report["not_available"]["phase"], phase);
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("private"));
+    }
+}
+
+#[test]
+fn script_verify_initial_system_and_apps_timeouts_are_bounded_reports() {
+    for (slow_route, phase) in [("/api/v1/system", "system"), ("/api/v1/apps", "apps")] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let slow_route = slow_route.to_owned();
+        let worker = thread::spawn(move || {
+            if slow_route == "/api/v1/apps" {
+                server
+                    .recv()
+                    .unwrap()
+                    .respond(Response::from_string(r#"{"scriptingEnabled":true}"#))
+                    .unwrap();
+            }
+            let request = server.recv().unwrap();
+            thread::sleep(Duration::from_millis(1300));
+            let _ = request.respond(Response::from_string(if slow_route == "/api/v1/system" {
+                r#"{"scriptingEnabled":true}"#
+            } else {
+                "[]"
+            }));
+        });
+        let start = std::time::Instant::now();
+        let output = run(&[
+            "--target",
+            &url,
+            "--timeout",
+            "3000",
+            "--json",
+            "script",
+            "verify",
+            "demo",
+            "--duration-secs",
+            "1",
+        ]);
+        let elapsed = start.elapsed();
+        worker.join().unwrap();
+        assert!(
+            elapsed < Duration::from_millis(1250),
+            "request exceeded verify deadline: {elapsed:?}"
+        );
+        assert_eq!(output.status.code(), Some(1));
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["not_available"]["code"], "TIMEOUT");
+        assert_eq!(report["not_available"]["phase"], phase);
+    }
+}
+
+#[test]
+fn script_verify_reports_script_disappearance_or_disable_during_window() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":true}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"next":2,"lines":[]}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string("[]"))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "verify",
+        "demo",
+        "--duration-secs",
+        "1",
+        "--interval-ms",
+        "1",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["not_available"]["code"], "SCRIPT_NOT_RUNNING");
+    assert_eq!(report["observed_window"]["complete"], false);
+    assert_eq!(
+        report["observed_window"]["early_termination_reason"],
+        "script_not_running"
+    );
+}
+
+#[test]
+fn script_verify_deadline_bounds_slow_log_request() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":true}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ))
+            .unwrap();
+        let request = server.recv().unwrap();
+        thread::sleep(Duration::from_millis(1500));
+        let _ = request.respond(Response::from_string(r#"{"next":0,"lines":[]}"#));
+    });
+    let start = std::time::Instant::now();
+    let output = run(&[
+        "--target",
+        &url,
+        "--timeout",
+        "3000",
+        "--json",
+        "script",
+        "verify",
+        "demo",
+        "--duration-secs",
+        "1",
+        "--interval-ms",
+        "1",
+    ]);
+    let cli_elapsed = start.elapsed();
+    worker.join().unwrap();
+    assert!(cli_elapsed < Duration::from_millis(1300));
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["observed_window"]["complete"], false);
+    assert!(report["not_available"].is_object());
+}
+
+#[test]
+fn script_verify_reports_partial_state_collection_failure() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":true}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"next":8,"lines":["started"]}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string("private response").with_status_code(500))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "verify",
+        "demo",
+        "--duration-secs",
+        "1",
+        "--interval-ms",
+        "1",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["logs"]["next"], 8);
+    assert_eq!(report["not_available"]["code"], "HTTP");
+    assert_eq!(report["not_available"]["phase"], "state_observation");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private response"));
+}
+
+#[test]
+fn script_deploy_verify_conflict_does_not_start_verification() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{}"#).with_status_code(409))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "new",
+        "--expected-source",
+        "old",
+        "--verify-secs",
+        "1",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "CONFLICT"
+    );
+}
+
+#[test]
+fn script_deploy_verify_success_keeps_atomic_deploy_and_adds_observation() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for (route, body) in [
+            ("/api/v1/capabilities", r#"{"scriptUpdates":true}"#),
+            (
+                "/api/v1/apps/script-update/demo",
+                r#"{"ok":true,"error":null}"#,
+            ),
+            ("/api/v1/system", r#"{"scriptingEnabled":true}"#),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ),
+            ("/api/v1/system", r#"{"scriptingEnabled":true}"#),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ),
+            ("/api/v1/logs?after=0", r#"{"next":3,"lines":["started"]}"#),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ),
+        ] {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), route);
+            request.respond(Response::from_string(body)).unwrap();
+        }
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_millis(1200) {
+            if let Some(request) = server.recv_timeout(Duration::from_millis(20)).unwrap() {
+                if request.url().starts_with("/api/v1/logs?") {
+                    request
+                        .respond(Response::from_string(r#"{"next":3,"lines":[]}"#))
+                        .unwrap();
+                } else {
+                    request
+                        .respond(Response::from_string(
+                            r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+                        ))
+                        .unwrap();
+                }
+            }
+        }
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "new",
+        "--expected-source",
+        "old",
+        "--verify-secs",
+        "1",
+    ]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["source_saved"], true);
+    assert_eq!(result["verification"]["start_verified"], true);
+    assert_eq!(result["verification"]["logs"]["next"], 3);
+    assert_eq!(result["verification"]["observed_window"]["complete"], true);
+}
+
+#[test]
+fn script_verify_captures_png_inside_reserved_deadline_window() {
+    let path = std::env::temp_dir().join(format!("awtrix-verify-{}.png", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":true}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ))
+            .unwrap();
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_millis(1200) {
+            if let Some(request) = server.recv_timeout(Duration::from_millis(20)).unwrap() {
+                let body = match request.url() {
+                    url if url.starts_with("/api/v1/logs?") => r#"{"next":1,"lines":["ok"]}"#,
+                    "/api/v1/apps" => {
+                        r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#
+                    }
+                    "/api/v1/display/screen" => r#"{"width":1,"height":1,"pixels":[1122867]}"#,
+                    _ => panic!("unexpected route {}", request.url()),
+                };
+                request.respond(Response::from_string(body)).unwrap();
+            }
+        }
+    });
+    let path_arg = path.to_string_lossy().into_owned();
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "verify",
+        "demo",
+        "--duration-secs",
+        "1",
+        "--interval-ms",
+        "10",
+        "--capture",
+        &path_arg,
+    ]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["capture"]["format"], "png");
+    assert_eq!(result["capture"]["width"], 1);
+    assert_eq!(&std::fs::read(&path).unwrap()[..8], b"\x89PNG\r\n\x1a\n");
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn script_enable_uses_bare_boolean_and_script_state_exposes_only_observed_error_fields() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
