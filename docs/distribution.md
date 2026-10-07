@@ -24,15 +24,43 @@ target/x86_64-unknown-linux-gnu/release/awtrix-cli --version
 On macOS use `aarch64-apple-darwin` and on Windows use
 `x86_64-pc-windows-msvc`; install the Rust target with `rustup target add`
 before building on a different host. The matching native linker/SDK is
-required. `.github/workflows/verify.yml` runs on push and pull request and
-uploads one binary artifact per host. It does not publish a release or push to
-a remote. Workflow runs use the host-native runners: their help/version and
+required. `.github/workflows/verify.yml` runs on branch pushes and pull requests.
+Ordinary verification does not publish a release. Workflow runs use the
+host-native runners: their help/version and
 HTTP contract test executes the just-built release artifact (selected by
 `AWTRIX_DISTRIBUTION_BINARY`) against a local deterministic HTTP fixture; it
 does not substitute Cargo's debug test executable. Headless process control is
 Linux-only: on other hosts `headless stop` returns `UNSUPPORTED_HOST` before
 reading ownership state, while `headless status` continues to report the
 recorded process as not running when Linux process identity cannot be checked.
+
+## Tagged releases
+
+Pushing a tag whose name is exactly `v<package version>` (initially `v0.1.0`)
+starts the same three native verification jobs. Each job builds once with
+`--locked`, exercises the release executable, and uploads that verified binary;
+the release job reuses those artifacts rather than rebuilding. A tag that does
+not exactly match the `awtrix-cli` version in `Cargo.toml` fails before release
+publication. Wait for all native jobs to pass before considering the release
+available.
+
+On a green run, the workflow assembles exactly these assets:
+
+* `awtrix-cli-x86_64-unknown-linux-gnu`
+* `awtrix-cli-aarch64-apple-darwin`
+* `awtrix-cli-x86_64-pc-windows-msvc.exe`
+* `SHA256SUMS`
+
+`SHA256SUMS` is conventional `sha256sum` text, one line per binary in the form
+`<hex>  <asset basename>`. Verify downloads with `sha256sum -c SHA256SUMS` from
+the directory containing all three binaries. The workflow creates the release
+as a draft, attaches/replaces all assets and checksum first, then publishes it
+as the stable latest release. A rerun first returns an existing release to draft
+state, then replaces same-named assets before publishing again.
+
+To cut a release, update the package version and lockfile as appropriate, tag
+the matching commit (for example `git tag v0.1.0`), and push that tag. The
+workflow needs repository `contents: write` permission for its release job.
 
 The crate disables reqwest's default TLS backend and selects `rustls-tls`;
 blocking, JSON and multipart support remain enabled. Personal profile
