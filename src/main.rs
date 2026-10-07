@@ -791,7 +791,7 @@ fn command_description(name: &str, inputs: &str, outputs: &str, example: &str) -
 }
 
 // AWTRIX NG's device-state schema exposes boardType and soc; inspect only these identity fields.
-fn detect_variant(state: &Value) -> &'static str {
+pub(crate) fn detect_variant(state: &Value) -> &'static str {
     let board_type = state
         .get("boardType")
         .and_then(Value::as_str)

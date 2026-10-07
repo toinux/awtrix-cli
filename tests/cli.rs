@@ -816,11 +816,11 @@ fn pushed_apps_create_update_and_delete_use_documented_routes_and_payload() {
 }
 
 #[test]
-fn pushed_app_invalid_and_oversized_payloads_are_rejected_before_http() {
+fn pushed_app_invalid_payloads_are_rejected_before_http() {
     for payload in [
-        r#"{"text":""}"#,
+        r#"{"text":7}"#,
         r#"{"notAField":1}"#,
-        r#"{"text":"x","lifetimeMs":-1}"#,
+        r#"{"text":"x","lifetimeExpiry":"later"}"#,
     ] {
         let output = run(&[
             "--target",
@@ -843,22 +843,6 @@ fn pushed_app_invalid_and_oversized_payloads_are_rejected_before_http() {
             "ARGUMENT"
         );
     }
-    let large = format!(r#"{{"text":"{}"}}"#, "x".repeat(8192));
-    let output = run(&[
-        "--target",
-        "http://127.0.0.1:1",
-        "--json",
-        "apps",
-        "create",
-        "build",
-        "--payload",
-        &large,
-    ]);
-    assert_eq!(output.status.code(), Some(2));
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
-        "ARGUMENT"
-    );
 }
 
 #[test]
@@ -883,6 +867,10 @@ fn pushed_app_description_documents_json_fields_and_expiration() {
                 .as_str()
                 .unwrap()
                 .contains("lifetimeMs"));
+            assert!(value["parameters"]["--file"].as_str().is_some());
+            let help = run(&["apps", operation, "--help"]);
+            assert!(help.status.success());
+            assert!(String::from_utf8_lossy(&help.stdout).contains("upsert"));
         }
     }
 }
@@ -915,6 +903,131 @@ fn pushed_app_remote_capacity_rejection_is_reported_as_http_failure() {
         "HTTP_507"
     );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("private upstream detail"));
+}
+
+#[test]
+fn pushed_app_large_payload_uses_variant_specific_official_http_limit() {
+    for (variant, board, soc, should_write) in [
+        ("ESP32", "awtrixng", "esp32", false),
+        ("ESP32-S3", "awtrixng", "esp32s3", false),
+        ("TC002", "tc002", "esp32s3", true),
+    ] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            let identity = server
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                .unwrap();
+            assert_eq!(identity.url(), "/api/v1/device");
+            identity
+                .respond(Response::from_string(format!(
+                    r#"{{"boardType":"{board}","soc":"{soc}"}}"#
+                )))
+                .unwrap();
+            if should_write {
+                let mut mutation = server
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(mutation.url(), "/api/v1/apps/pushed/large");
+                let mut body = String::new();
+                mutation.as_reader().read_to_string(&mut body).unwrap();
+                assert!(body.len() > 8192);
+                mutation.respond(Response::from_string("{}")).unwrap();
+            }
+        });
+        let path = std::env::temp_dir().join(format!(
+            "awtrix-app-large-{}-{variant}.json",
+            std::process::id()
+        ));
+        let large_payload = format!(r#"{{"text":"{}"}}"#, "x".repeat(9000));
+        std::fs::write(&path, large_payload).unwrap();
+        let output = run(&[
+            "--target",
+            &url,
+            "--json",
+            "apps",
+            "create",
+            "large",
+            "--file",
+            path.to_str().unwrap(),
+        ]);
+        let _ = std::fs::remove_file(path);
+        worker.join().unwrap();
+        assert_eq!(
+            output.status.success(),
+            should_write,
+            "{variant}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        if !should_write {
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]
+                    ["code"],
+                "ARGUMENT"
+            );
+        }
+    }
+}
+
+#[test]
+fn pushed_app_body_above_largest_variant_limit_is_rejected_before_http() {
+    let path =
+        std::env::temp_dir().join(format!("awtrix-app-too-large-{}.json", std::process::id()));
+    let payload = format!(r#"{{"text":"{}"}}"#, "x".repeat(2 * 1024 * 1024));
+    std::fs::write(&path, payload).unwrap();
+    let output = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "--json",
+        "apps",
+        "create",
+        "large",
+        "--file",
+        path.to_str().unwrap(),
+    ]);
+    let _ = std::fs::remove_file(path);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "ARGUMENT"
+    );
+}
+
+#[test]
+fn pushed_app_large_payload_on_unknown_variant_fails_closed_after_identity() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let identity = server
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        assert_eq!(identity.url(), "/api/v1/device");
+        identity
+            .respond(Response::from_string(
+                r#"{"boardType":"future-board","soc":"unknown"}"#,
+            ))
+            .unwrap();
+    });
+    let payload = format!(r#"{{"text":"{}"}}"#, "x".repeat(9000));
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "apps",
+        "create",
+        "large",
+        "--payload",
+        &payload,
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(6));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "INCOMPATIBLE"
+    );
 }
 
 #[test]
