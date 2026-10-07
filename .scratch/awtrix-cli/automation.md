@@ -25,8 +25,10 @@ Verified unique IDs, existing references, acyclic graph (Luna preflight).
 | 10 | done | ticket/10-screen / .worktrees/ticket-10 | 02cf98c | 76abdab+af4fd8c+0dde76d+41b0444; final review clear; integrated240dab5 |
 | 08 | done | ticket/08-lifecycle / .worktrees/ticket-08 | c0dac40 | 7809dac+322528f; review clear; integrated102db6d |
 | 12 | done | ticket/12-resources / .worktrees/ticket-12 | c0dac40 | 40df070+1ed2174; review clear; integrated102db6d |
-| 11,15 | in-progress | ticket/11-verify, ticket/15-headless | next journal commit | pending |
-| 03–06,13–14,16–19 | ready-for-agent, dependencies enforced | unassigned | — | — |
+| 11 | done | ticket/11-verify / .worktrees/ticket-11 | 6d26718 | ed3f70c+95a61ee+f005294+d63840b; review clear; integrated5463ee7 |
+| 15 | done | ticket/15-headless / .worktrees/ticket-15 | 6d26718 | a7f43ae+67d3bb7+c3491b4; review clear; integrated5463ee7; realheadless passed |
+| 13,18 | in-progress | ticket/13-project, ticket/18-dist | next journal commit | pending |
+| 03–06,14,16–17,19 | ready-for-agent, dependencies enforced | unassigned | — | — |
 
 ## Shared contracts
 
@@ -39,7 +41,10 @@ Identity uses /device boardType+soc, not arbitrary strings. Describe offline and
 ## External prerequisites and blockers
 
 - Rust available: rustc/cargo 1.98.1.
-- Real AWTRIX Linux headless executable: acquisition/build feasibility not yet checked.
+- Real AWTRIX Linux headless executable: built /tmp/opencode/awtrix-ng-build/awtrix-linux,
+  official source a02f3ab66cd88cbf5c5f08f3dcc47eb231ae0188, version1.2.2.
+  CMake/platformio provided transiently via uv; required awtrix-linux target built.
+  Default upstream all-target build GCC16 Werror fails; selected executable target succeeds.
 - Physical ESP32, ESP32-S3, TC002 targets: none explicitly supplied; physical checks cannot be claimed.
 - Cross-host distribution validation requires suitable runners; local host is Linux.
 
@@ -60,3 +65,8 @@ Identity uses /device boardType+soc, not arbitrary strings. Describe offline and
   download absent from official API returns explicit UNSUPPORTED, no guessed endpoint.
   Resource worker root-stray edits confirmed/removed; assignment isolation reiterated.
   Integrated fmt/clippy pass, 2unit+61CLI tests. Luna review clear.
+- Tickets11/15 integrated5463ee7: bounded verification/partialreport and protecteddeploychain;
+  headless owns child listener+pidfd, cleans failures, preserves external services.
+  Required real AWTRIX1.2.2 start/HTTP/status/stop passed (documented provenance).
+  Integrated fmt/clippy pass, 2unit+80CLI tests; independent re-review clear.
+  Nonblocking stderr collection diagnostic label issue retained for final hardening.

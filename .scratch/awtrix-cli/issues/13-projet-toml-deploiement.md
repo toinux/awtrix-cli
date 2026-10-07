@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 — Gérer les profils et sélectionner la cible ; 07 — Lire et déployer un script avec protection contre les conflits ; 08 — Gérer le cycle de vie et la configuration des scripts ; 12 — Gérer les modules Berry et les ressources.
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 ## Acceptance criteria
 
