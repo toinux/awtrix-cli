@@ -184,7 +184,7 @@ awtrix-cli --profile desk --json logs follow --duration-secs 15
 
 For example, ask your shell-capable coding agent:
 
-> Use `awtrix` with the `desk` profile. Inspect its capabilities and the description
+> Use `awtrix-cli` with the `desk` profile. Inspect its capabilities and the description
 > of script verification, verify `main` for 10 seconds, save a screen capture, and
 > summarize any reported Berry errors.
 
