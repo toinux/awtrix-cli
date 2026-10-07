@@ -2,6 +2,7 @@
 use clap::{Args, Subcommand};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -12,6 +13,8 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+const MAX_IMAGE_PIXELS: u64 = 4_194_304;
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
@@ -75,6 +78,20 @@ pub(crate) fn validate_plan(plan: &TestPlan) -> crate::CliResult<()> {
                 return Err(("PROJECT_INVALID", "log_contains must not be empty".into()))
             }
             AssertionKind::Log { .. } => {}
+            AssertionKind::Visual {
+                reference,
+                max_channel_diff: _,
+                max_different_pixels,
+                ..
+            } => {
+                if reference.as_os_str().is_empty() || *max_different_pixels > MAX_IMAGE_PIXELS {
+                    return Err((
+                        "PROJECT_INVALID",
+                        "visual reference/tolerance is invalid or exceeds the supported image size"
+                            .into(),
+                    ));
+                }
+            }
         }
     }
     Ok(())
@@ -88,7 +105,7 @@ pub(crate) fn validate_scripts_declared(
         let name = match &assertion.kind {
             AssertionKind::Active { script_active } => Some(script_active.as_str()),
             AssertionKind::State { script, .. } => Some(script.as_str()),
-            AssertionKind::Log { .. } => None,
+            AssertionKind::Log { .. } | AssertionKind::Visual { .. } => None,
         };
         if name.is_some_and(|name| !scripts.iter().any(|script| script == name)) {
             return Err((
@@ -134,6 +151,77 @@ pub(crate) enum AssertionKind {
     Log {
         log_contains: String,
     },
+    Visual {
+        reference: PathBuf,
+        #[serde(default)]
+        max_channel_diff: u8,
+        #[serde(default)]
+        max_different_pixels: u64,
+        #[serde(default)]
+        select_app: Option<String>,
+    },
+}
+
+fn decode_png(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
+    let decoder = png::Decoder::new(
+        fs::File::open(path).map_err(|_| format!("cannot read PNG {}", path.display()))?,
+    );
+    let mut reader = decoder
+        .read_info()
+        .map_err(|_| format!("invalid PNG {}", path.display()))?;
+    let info = reader.info();
+    let (width, height) = (info.width, info.height);
+    let count = u64::from(width)
+        .checked_mul(u64::from(height))
+        .filter(|n| *n > 0 && *n <= MAX_IMAGE_PIXELS)
+        .ok_or_else(|| "PNG dimensions exceed supported pixel limit".to_owned())?;
+    let mut buffer = vec![0; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut buffer)
+        .map_err(|_| "invalid PNG pixel data".to_owned())?;
+    if info.width != width || info.height != height {
+        return Err("invalid PNG dimensions".into());
+    }
+    let pixels = match info.color_type {
+        #[expect(clippy::chunks_exact_to_as_chunks)]
+        png::ColorType::Rgba => buffer[..info.buffer_size()]
+            .chunks_exact(4)
+            .flat_map(|p| [p[0], p[1], p[2]])
+            .collect(),
+        png::ColorType::Rgb => buffer[..info.buffer_size()].to_vec(),
+        _ => return Err("visual PNG must be RGB or RGBA".into()),
+    };
+    if pixels.len() as u64 != count * 3 {
+        return Err("invalid PNG pixel buffer".into());
+    }
+    Ok((width, height, pixels))
+}
+
+fn compare_pixels(reference: &[u8], actual: &[u8], tolerance: u8) -> (u64, u8) {
+    let mut different = 0;
+    let mut maximum = 0;
+    #[expect(clippy::chunks_exact_to_as_chunks)]
+    for (expected, observed) in reference.chunks_exact(3).zip(actual.chunks_exact(3)) {
+        let delta = expected
+            .iter()
+            .zip(observed)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        maximum = maximum.max(delta);
+        if delta > tolerance {
+            different += 1;
+        }
+    }
+    (different, maximum)
+}
+
+fn artifact_path(reference: &Path, name: &str) -> PathBuf {
+    let stem = reference
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("reference");
+    reference.with_file_name(format!("{stem}.{name}.capture.png"))
 }
 
 pub(crate) fn run(command: &Command, cli: &crate::Cli) -> crate::CliResult<Value> {
@@ -173,7 +261,7 @@ pub(crate) fn run(command: &Command, cli: &crate::Cli) -> crate::CliResult<Value
                 .map(str::to_owned)
         })
         .collect::<Vec<_>>();
-    let plan: TestPlan = document
+    let mut plan: TestPlan = document
         .get("tests")
         .cloned()
         .ok_or((
@@ -188,6 +276,19 @@ pub(crate) fn run(command: &Command, cli: &crate::Cli) -> crate::CliResult<Value
             )
         })?;
     validate_plan(&plan)?;
+    let base = args.manifest.parent().unwrap_or_else(|| Path::new("."));
+    for assertion in &mut plan.assertion {
+        if let AssertionKind::Visual { reference, .. } = &mut assertion.kind {
+            if reference.is_absolute() {
+                return Err((
+                    "PROJECT_INVALID",
+                    "visual references must be relative to manifest".into(),
+                ));
+            }
+            *reference = base.join(&*reference);
+            decode_png(reference).map_err(|e| ("IMAGE_INVALID", e))?;
+        }
+    }
     let interrupted = Arc::new(AtomicBool::new(false));
     let signal = interrupted.clone();
     ctrlc::set_handler(move || signal.store(true, Ordering::SeqCst)).map_err(|e| {
@@ -293,6 +394,10 @@ fn validate_assertion_fields(document: &toml::Value) -> crate::CliResult<()> {
         "path",
         "equals",
         "log_contains",
+        "reference",
+        "max_channel_diff",
+        "max_different_pixels",
+        "select_app",
     ];
     for entry in entries {
         let table = entry.as_table().ok_or((
@@ -311,7 +416,21 @@ fn validate_assertion_fields(document: &toml::Value) -> crate::CliResult<()> {
         let valid = table.contains_key("name")
             && ((has_active && !has_log && state_count == 0)
                 || (has_log && !has_active && state_count == 0)
-                || (!has_active && !has_log && state_count == 3));
+                || (!has_active && !has_log && state_count == 3)
+                || (!has_active
+                    && !has_log
+                    && state_count == 0
+                    && table.contains_key("reference")
+                    && table.keys().all(|key| {
+                        [
+                            "name",
+                            "reference",
+                            "max_channel_diff",
+                            "max_different_pixels",
+                            "select_app",
+                        ]
+                        .contains(&key.as_str())
+                    })));
         if !valid {
             return Err((
                 "PROJECT_INVALID",
@@ -429,6 +548,22 @@ fn evaluate(
                     let matched = results[index]["passed"] == true || found;
                     (matched, json!({"contains":log_contains,"matched":matched,"observed_lines":evidence,"history_limit":34,"exhaustive":false}))
                 }),
+                AssertionKind::Visual { reference, max_channel_diff, max_different_pixels, select_app } => (|| {
+                    if let Some(name) = select_app {
+                        validate_script_name(name)?;
+                        api.mutate(reqwest::Method::PUT, &format!("/api/v1/apps/active/{name}"), &Value::Null)?;
+                    }
+                    let output = artifact_path(reference, &assertion.name);
+                    let capture = crate::screen::capture_png(api, &output, remaining)?;
+                    let actual = decode_png(&output).map_err(|e| ("IMAGE_INVALID", e))?;
+                    let expected = decode_png(reference).map_err(|e| ("IMAGE_INVALID", e))?;
+                    if (actual.0, actual.1) != (expected.0, expected.1) {
+                        return Err(("IMAGE_DIMENSIONS", format!("capture dimensions {}x{} differ from reference {}x{}", actual.0, actual.1, expected.0, expected.1)));
+                    }
+                    let (different, maximum) = compare_pixels(&expected.2, &actual.2, *max_channel_diff);
+                    let passed = different <= *max_different_pixels;
+                    Ok((passed, json!({"capture":capture,"reference":reference,"different_pixels":different,"max_channel_difference":maximum,"allowed_different_pixels":max_different_pixels,"allowed_channel_difference":max_channel_diff,"dimensions":{"width":actual.0,"height":actual.1}})))
+                })(),
             };
             match outcome {
                 Ok((passed, observed)) => {
