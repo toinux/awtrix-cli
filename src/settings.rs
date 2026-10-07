@@ -256,6 +256,10 @@ fn redact(value: &mut Value) {
         Value::Object(map) => {
             for (key, item) in map.iter_mut() {
                 let lower = key.to_ascii_lowercase();
+                let compact = lower
+                    .chars()
+                    .filter(char::is_ascii_alphanumeric)
+                    .collect::<String>();
                 if [
                     "password",
                     "passwd",
@@ -268,6 +272,7 @@ fn redact(value: &mut Value) {
                 ]
                 .iter()
                 .any(|needle| lower.contains(needle))
+                    || (compact.ends_with("pass") && compact != "compass")
                 {
                     *item = Value::String("[REDACTED]".into());
                 } else {
@@ -333,7 +338,7 @@ pub fn describe(topic: &str) -> Value {
         "settings patch" => json!({"brightness":"integer 0..255","autoBrightness":"boolean"}),
         "settings brightness" => json!({"level":"integer 0..255","--auto":"optional boolean"}),
         "settings display-patch" => {
-            json!({"power":"boolean","overlay":"string|null; string must be in capabilities.overlays","overlaySettings":"EffectSettings object"})
+            json!({"power":"boolean","overlay":"string|null; string must be in capabilities.overlays","overlaySettings":{"type":"object","properties":{"speed":{"type":"number","minimum":0.1,"maximum":10.0},"palette":{"type":"string|null","capability":"capabilities.palettes"},"blend":{"type":"boolean"}}}})
         }
         "settings power" => json!({"state":"on|off mapped to power:boolean"}),
         "settings reboot" => {

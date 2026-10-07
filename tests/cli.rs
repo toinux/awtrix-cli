@@ -95,6 +95,84 @@ fn system_read_recursively_redacts_secret_fields() {
 }
 
 #[test]
+fn system_redaction_covers_official_pass_keys_without_redacting_compass_or_leaking_errors() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/system");
+        request.respond(Response::from_string(r#"{"authPass":"secret-auth","wifiPass":{"bad":"secret-wifi"},"nested":{"mqttPass":["secret-mqtt"]},"compass":"north"}"#)).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/system");
+        request
+            .respond(
+                Response::from_string(r#"{"error":"secret-auth secret-wifi secret-mqtt"}"#)
+                    .with_status_code(500),
+            )
+            .unwrap();
+    });
+    let success = run(&["--json", "--target", &url, "settings", "system-get"]);
+    let failure = run(&["--json", "--target", &url, "settings", "system-get"]);
+    worker.join().unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&success.stdout).unwrap();
+    assert_eq!(result["authPass"], "[REDACTED]");
+    assert_eq!(result["wifiPass"], "[REDACTED]");
+    assert_eq!(result["nested"]["mqttPass"], "[REDACTED]");
+    assert_eq!(result["compass"], "north");
+    for output in [&success, &failure] {
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for secret in ["secret-auth", "secret-wifi", "secret-mqtt"] {
+            assert!(!combined.contains(secret), "secret leaked: {secret}");
+        }
+    }
+    let description = run(&["--json", "describe", "settings system-get"]);
+    let description = String::from_utf8_lossy(&description.stdout);
+    for secret in ["secret-auth", "secret-wifi", "secret-mqtt"] {
+        assert!(!description.contains(secret));
+    }
+}
+
+#[test]
+fn overlay_settings_description_and_validation_match_nested_contract() {
+    let description = run(&["--json", "describe", "settings display-patch"]);
+    let description: serde_json::Value = serde_json::from_slice(&description.stdout).unwrap();
+    assert_eq!(
+        description["schemas"]["overlaySettings"]["properties"]["speed"]["minimum"],
+        0.1
+    );
+    assert_eq!(
+        description["schemas"]["overlaySettings"]["properties"]["speed"]["maximum"],
+        10.0
+    );
+    assert_eq!(
+        description["schemas"]["overlaySettings"]["properties"]["palette"]["capability"],
+        "capabilities.palettes"
+    );
+    assert_eq!(
+        description["schemas"]["overlaySettings"]["properties"]["blend"]["type"],
+        "boolean"
+    );
+    let invalid = run(&[
+        "--json",
+        "--target",
+        "http://127.0.0.1:1",
+        "settings",
+        "display-patch",
+        "--values",
+        r#"{"overlaySettings":{"speed":10.1}}"#,
+    ]);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&invalid.stdout).unwrap()["error"]["code"],
+        "ARGUMENT"
+    );
+}
+
+#[test]
 fn display_power_sends_official_power_field() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
