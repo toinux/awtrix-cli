@@ -4596,10 +4596,12 @@ fn force_cannot_be_combined_with_create_or_expected_source() {
 }
 
 #[test]
+#[cfg(unix)]
 fn logs_follow_advances_api_cursor_and_emits_jsonl_without_duplicate_records() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
     let (third_response_sent, third_response_received) = std::sync::mpsc::channel();
+    let (stop_server, server_stopped) = std::sync::mpsc::channel();
     let worker = thread::spawn(move || {
         for (expected, body) in [
             (
@@ -4617,10 +4619,21 @@ fn logs_follow_advances_api_cursor_and_emits_jsonl_without_duplicate_records() {
             request.respond(Response::from_string(body)).unwrap();
         }
         third_response_sent.send(()).unwrap();
+        loop {
+            if server_stopped.try_recv().is_ok() {
+                break;
+            }
+            if let Some(request) = server.recv_timeout(Duration::from_millis(50)).unwrap() {
+                assert_eq!(request.url(), "/api/v1/logs?after=5");
+                request
+                    .respond(Response::from_string(r#"{"next":5,"lines":[]}"#))
+                    .unwrap();
+            }
+        }
     });
-    // End the follow only after the fixture has returned all cursor batches. This
-    // keeps the assertions about cursor advancement independent of host scheduling
-    // near the one-second deadline and avoids timing out an incidental final poll.
+    // End the follow only after the fixture has returned all cursor batches. Keep
+    // serving the unchanged cursor until the child exits, so delayed scheduling
+    // cannot turn an incidental poll into a transport failure.
     let child = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--target",
@@ -4642,10 +4655,9 @@ fn logs_follow_advances_api_cursor_and_emits_jsonl_without_duplicate_records() {
     third_response_received
         .recv_timeout(Duration::from_secs(5))
         .unwrap();
-    unsafe {
-        libc::kill(child.id() as i32, libc::SIGINT);
-    }
+    assert_eq!(unsafe { libc::kill(child.id() as i32, libc::SIGINT) }, 0);
     let output = child.wait_with_output().unwrap();
+    stop_server.send(()).unwrap();
     worker.join().unwrap();
     assert!(
         output.status.success(),
