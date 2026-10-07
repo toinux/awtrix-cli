@@ -1340,3 +1340,47 @@ fn screen_capture_output_failure_preserves_existing_directory() {
     assert!(path.is_dir());
     std::fs::remove_dir(path).unwrap();
 }
+
+#[test]
+fn screen_capture_replaces_same_destination_with_new_pixels() {
+    let path = std::env::temp_dir().join(format!("awtrix-recapture-{}.png", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for packed_pixel in [0x112233u32, 0xaabbcc] {
+            let body =
+                serde_json::json!({"width":1,"height":1,"pixels":[packed_pixel]}).to_string();
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_string(body))
+                .unwrap();
+        }
+    });
+    let output_path = path.to_string_lossy().into_owned();
+    for _ in 0..2 {
+        let output = run(&[
+            "--target",
+            &url,
+            "--json",
+            "screen",
+            "capture",
+            "--output",
+            &output_path,
+        ]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    worker.join().unwrap();
+    let mut reader = png::Decoder::new(std::fs::File::open(&path).unwrap())
+        .read_info()
+        .unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut pixels).unwrap();
+    assert_eq!(&pixels[..info.buffer_size()], &[0xaa, 0xbb, 0xcc]);
+    std::fs::remove_file(path).unwrap();
+}

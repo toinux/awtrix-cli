@@ -1,17 +1,12 @@
 //! Save the AWTRIX framebuffer as an RGB PNG without returning pixel data.
 use clap::Subcommand;
 use serde_json::{json, Value};
-use std::{
-    fs::{self, OpenOptions},
-    io::Write,
-    path::PathBuf,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{io::Write, path::PathBuf};
+use tempfile::NamedTempFile;
 
 const MAX_PIXELS: u64 = 4_194_304;
 // Ten bytes per possible packed decimal pixel (digits plus separator), plus bounded object overhead.
 const MAX_RESPONSE_BYTES: u64 = MAX_PIXELS * 10 + 4096;
-static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -92,71 +87,35 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
     }
 }
 
-/// Persist a fully encoded PNG through a sibling temporary and rename.
-/// Rename replacement is atomic on Unix; on Windows rename over an existing destination may
-/// fail, in which case the original destination is preserved and the temporary is removed.
+/// Persist a fully encoded PNG through tempfile's cross-platform atomic replacement operation.
 fn persist_sibling(path: &PathBuf, bytes: &[u8]) -> crate::CliResult<()> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| std::path::Path::new("."));
-    let name = path
-        .file_name()
-        .ok_or(("FILE_WRITE", "output path must name a file".into()))?;
-    let mut temp_path = None;
-    let mut temp_file = None;
-    for _ in 0..16 {
-        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let candidate = parent.join(format!(
-            ".{}.{}.{}.tmp",
-            name.to_string_lossy(),
-            std::process::id(),
-            sequence
-        ));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(file) => {
-                temp_path = Some(candidate);
-                temp_file = Some(file);
-                break;
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(_) => {
-                return Err((
-                    "FILE_WRITE",
-                    format!(
-                        "could not create temporary output beside {}",
-                        path.display()
-                    ),
-                ))
-            }
-        }
-    }
-    let temp_path = temp_path.ok_or((
-        "FILE_WRITE",
-        "could not allocate a unique temporary output file".into(),
-    ))?;
-    let write_result = (|| {
-        let mut file =
-            temp_file.ok_or(("FILE_WRITE", "temporary output was unavailable".into()))?;
-        file.write_all(bytes)
-            .map_err(|_| ("FILE_WRITE", "could not write temporary PNG".into()))?;
-        file.sync_all()
-            .map_err(|_| ("FILE_WRITE", "could not flush temporary PNG".into()))?;
-        fs::rename(&temp_path, path).map_err(|_| {
-            (
-                "FILE_WRITE",
-                format!("could not atomically persist PNG at {}", path.display()),
-            )
-        })
-    })();
-    if write_result.is_err() {
-        let _ = fs::remove_file(temp_path);
-    }
-    write_result
+    let mut temporary = NamedTempFile::new_in(parent).map_err(|_| {
+        (
+            "FILE_WRITE",
+            format!(
+                "could not create temporary output beside {}",
+                path.display()
+            ),
+        )
+    })?;
+    temporary
+        .write_all(bytes)
+        .map_err(|_| ("FILE_WRITE", "could not write temporary PNG".into()))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|_| ("FILE_WRITE", "could not flush temporary PNG".into()))?;
+    temporary.persist(path).map_err(|_| {
+        (
+            "FILE_WRITE",
+            format!("could not atomically persist PNG at {}", path.display()),
+        )
+    })?;
+    Ok(())
 }
 
 pub fn describe() -> Value {
