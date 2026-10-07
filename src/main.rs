@@ -164,7 +164,7 @@ impl ApiClient {
         )
         .map_err(|_| ("INVALID_RESPONSE", "script source is not UTF-8".into()))
     }
-    pub(crate) fn raw_bytes_get(&self, path: &str) -> CliResult<Vec<u8>> {
+    pub(crate) fn raw_bytes_get(&self, path: &str, max_bytes: u64) -> CliResult<Vec<u8>> {
         let response = self
             .authorized(self.client.get(format!("{}{path}", self.base)))
             .send()
@@ -187,12 +187,31 @@ impl ApiClient {
                 format!("device returned HTTP {}", response.status().as_u16()),
             ));
         }
-        response.bytes().map(|bytes| bytes.to_vec()).map_err(|_| {
+        if response
+            .content_length()
+            .is_some_and(|length| length > max_bytes)
+        {
+            return Err((
+                "RESPONSE_TOO_LARGE",
+                "framebuffer response exceeds the safe size limit".into(),
+            ));
+        }
+        use std::io::Read;
+        let mut limited = response.take(max_bytes.saturating_add(1));
+        let mut bytes = Vec::new();
+        limited.read_to_end(&mut bytes).map_err(|_| {
             (
-                "INVALID_RESPONSE",
-                "could not read framebuffer response".into(),
+                "TRANSPORT",
+                "failed while reading framebuffer response".into(),
             )
-        })
+        })?;
+        if bytes.len() as u64 > max_bytes {
+            return Err((
+                "RESPONSE_TOO_LARGE",
+                "framebuffer response exceeds the safe size limit".into(),
+            ));
+        }
+        Ok(bytes)
     }
     pub(crate) fn raw_put(&self, path: &str, source: &str) -> CliResult<Value> {
         let response = self

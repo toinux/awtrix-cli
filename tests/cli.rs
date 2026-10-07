@@ -1103,6 +1103,14 @@ fn screen_capture_accepts_dynamic_dimensions_and_rejects_inconsistent_or_oversiz
             r#"{"width":1,"height":1,"pixels":[16777216]}"#,
             Some("INVALID_RESPONSE"),
         ),
+        (
+            r#"{"width":0,"height":1,"pixels":[]}"#,
+            Some("INVALID_RESPONSE"),
+        ),
+        (
+            r#"{"width":-1,"height":1,"pixels":[]}"#,
+            Some("INVALID_RESPONSE"),
+        ),
     ] {
         let server = Server::http("127.0.0.1:0").unwrap();
         let url = format!("http://{}", server.server_addr());
@@ -1219,4 +1227,116 @@ fn screen_capture_handles_representative_awtrix_matrix_sizes() {
             .all(|rgb| rgb == [0x12, 0x34, 0x56]));
         std::fs::remove_file(path).unwrap();
     }
+}
+
+#[test]
+fn screen_capture_preserves_existing_destination_on_invalid_or_oversized_response() {
+    let path = std::env::temp_dir().join(format!("awtrix-preserve-{}.png", std::process::id()));
+    for (body, expected) in [
+        ("{truncated".to_owned(), "INVALID_RESPONSE"),
+        (" ".repeat(42 * 1024 * 1024), "RESPONSE_TOO_LARGE"),
+    ] {
+        std::fs::write(&path, b"previous valid image").unwrap();
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_string(body))
+                .unwrap()
+        });
+        let path_arg = path.to_string_lossy().into_owned();
+        let output = run(&[
+            "--target", &url, "--json", "screen", "capture", "--output", &path_arg,
+        ]);
+        worker.join().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous valid image");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+            expected
+        );
+    }
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn screen_capture_http_failures_are_structured_and_do_not_touch_destination() {
+    let path = std::env::temp_dir().join(format!("awtrix-network-{}.png", std::process::id()));
+    {
+        let status = 500;
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_string("private detail").with_status_code(status))
+                .unwrap()
+        });
+        std::fs::write(&path, b"keep me").unwrap();
+        let output = run(&[
+            "--target",
+            &url,
+            "--json",
+            "screen",
+            "capture",
+            "--output",
+            &path.to_string_lossy(),
+        ]);
+        worker.join().unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+            "HTTP"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"keep me");
+    }
+    std::fs::remove_file(&path).unwrap();
+    let output = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "--json",
+        "screen",
+        "capture",
+        "--output",
+        "/tmp/never-created-awtrix-screen.png",
+    ]);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "TRANSPORT"
+    );
+}
+
+#[test]
+fn screen_capture_output_failure_preserves_existing_directory() {
+    let path = std::env::temp_dir().join(format!("awtrix-screen-dir-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir(&path).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"{"width":1,"height":1,"pixels":[0]}"#,
+            ))
+            .unwrap()
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "screen",
+        "capture",
+        "--output",
+        &path.to_string_lossy(),
+    ]);
+    worker.join().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "FILE_WRITE"
+    );
+    assert!(path.is_dir());
+    std::fs::remove_dir(path).unwrap();
 }
