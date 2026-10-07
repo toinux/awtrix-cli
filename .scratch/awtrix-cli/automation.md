@@ -29,8 +29,10 @@ Verified unique IDs, existing references, acyclic graph (Luna preflight).
 | 15 | done | ticket/15-headless / .worktrees/ticket-15 | 6d26718 | a7f43ae+67d3bb7+c3491b4; review clear; integrated5463ee7; realheadless passed |
 | 13 | done | ticket/13-project / .worktrees/ticket-13 | 445270f | 8380053+fcea5b1+e36b6b4; preflight review clear; real protected example create/update/conflict passed; integrated |
 | 18 | in-progress (external blocker) | ticket/18-dist / .worktrees/ticket-18 | 445270f | 41af415; software review clear; Linux release/HTTP checks pass; integratedf27aa33; native macOS/Windows pending |
-| 03,14 | in-progress | ticket/03-pushed, ticket/14-tracking | next journal commit | pending |
-| 04–06,16–17,19 | ready-for-agent, dependencies enforced | unassigned | — | — |
+| 03 | done | ticket/03-pushed / .worktrees/ticket-03 | 6ac6db5 | 98ba2df+519ce6c; review clear; realheadless pushed create/update/delete; integrated |
+| 14 | done | ticket/14-tracking / .worktrees/ticket-14 | 6ac6db5 | c97c366+1ba7e44+e9a36c1; review clear; integratedffff1a5 |
+| 04,16 | in-progress | ticket/04-notify, ticket/16-tests | next journal commit | pending |
+| 05–06,17,19 | ready-for-agent, dependencies enforced | unassigned | — | — |
 
 ## Shared contracts
 
@@ -80,3 +82,7 @@ Identity uses /device boardType+soc, not arbitrary strings. Describe offline and
   class/draw/terminalreturn initializer+example. Exactsource update and stale conflict proven.
   Ticket18 pipeline integratedf27aa33, not declared done. Rustls replaces nativeOpenSSL.
   Lockfile merge resolved; integrated fmt/clippy pass,2unit+87CLI+2distribution tests.
+- Tickets03/14 integratedffff1a5: pushed upserts with pervariantlimits, 35fieldkind validators;
+  durable perproject/endpoint/device ownership, pruneonlymanaged and conservative explicit
+  uncertainty recovery releases ownership without remote mutation. Final Luna review clear.
+  Integrated fmt/clippy pass,6unit+99CLI+2distribution tests.
