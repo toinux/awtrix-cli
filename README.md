@@ -7,19 +7,19 @@ Send notifications, display live status, manage apps, and develop persistent Ber
 scripts from the same tool. Go from a local project to deployment, runtime logs,
 and a PNG screen capture without assembling your own HTTP client.
 
-The executable is `awtrix`. It is built in Rust, with readable output for people
+The executable is `awtrix-cli`. It is built in Rust, with readable output for people
 and structured JSON for scripts and AI agents that can run shell commands.
 
 ```sh
 # Tell your display that a build has finished
-awtrix --target http://awtrix.local notify send --payload '{"text":"Build passed"}'
+awtrix-cli --target http://awtrix.local notify send --payload '{"text":"Build passed"}'
 
 # Add a temporary status app to the rotation
-awtrix --target http://awtrix.local apps create build \
+awtrix-cli --target http://awtrix.local apps create build \
   --payload '{"text":"Tests: OK","lifetimeMs":60000}'
 
 # Save the current framebuffer as a PNG
-awtrix --target http://awtrix.local screen capture --output screen.png
+awtrix-cli --target http://awtrix.local screen capture --output screen.png
 ```
 
 [Quick start](#quick-start) · [Features](#features) · [Examples](#everyday-examples) ·
@@ -51,11 +51,11 @@ With a stable [Rust toolchain](https://rustup.rs/) installed:
 
 ```sh
 cargo install --path . --locked
-awtrix --help
+awtrix-cli --help
 ```
 
 To build without installing, use `cargo build --release --locked` and run
-`./target/release/awtrix` instead. See [distribution](docs/distribution.md) for
+`./target/release/awtrix-cli` instead. See [distribution](docs/distribution.md) for
 standalone artifact names and the Linux, macOS, and Windows build matrix.
 
 ### Connect your display
@@ -65,17 +65,17 @@ URL with your device's address.
 
 ```sh
 # Save a personal device profile
-awtrix profile add desk --target http://awtrix.local
+awtrix-cli profile add desk --target http://awtrix.local
 
 # Inspect the device and its advertised capabilities
-awtrix --profile desk device diagnose
+awtrix-cli --profile desk device diagnose
 
 # Send your first notification
-awtrix --profile desk notify send --payload '{"text":"Hello from the terminal"}'
+awtrix-cli --profile desk notify send --payload '{"text":"Hello from the terminal"}'
 ```
 
 Use `--profile desk` to select this device, or make it the default with
-`awtrix profile set-default desk`. For one-off commands, use `--target URL`;
+`awtrix-cli profile set-default desk`. For one-off commands, use `--target URL`;
 `AWTRIX_URL` is also supported.
 
 If HTTP Basic authentication is enabled, supply `AWTRIX_USERNAME` and
@@ -108,10 +108,10 @@ The examples below use the `desk` profile created in the quick start.
 ### Display progress, then announce completion
 
 ```sh
-awtrix --profile desk apps create build --payload '{"text":"Building..."}'
-awtrix --profile desk apps update build --payload '{"text":"Tests: OK"}'
-awtrix --profile desk notify send --payload '{"text":"Ready to ship"}' --stack --wakeup
-awtrix --profile desk apps delete build
+awtrix-cli --profile desk apps create build --payload '{"text":"Building..."}'
+awtrix-cli --profile desk apps update build --payload '{"text":"Tests: OK"}'
+awtrix-cli --profile desk notify send --payload '{"text":"Ready to ship"}' --stack --wakeup
+awtrix-cli --profile desk apps delete build
 ```
 
 Pushed apps are temporary: they can expire and are lost on reboot. Both `create`
@@ -121,25 +121,25 @@ use a persistent Berry script.
 ### Adjust the display
 
 ```sh
-awtrix --profile desk settings brightness 80 --auto false
-awtrix --profile desk settings power off
-awtrix --profile desk settings power on
+awtrix-cli --profile desk settings brightness 80 --auto false
+awtrix-cli --profile desk settings power off
+awtrix-cli --profile desk settings power on
 ```
 
 ### Deploy a new script and inspect it
 
 ```sh
 # Create a local project with a starter Berry script
-awtrix project init ./demo
+awtrix-cli project init ./demo
 
 # Create the script only if its name is absent, then observe it for 10 seconds
-awtrix --profile desk script deploy main --file ./demo/src/main.be \
+awtrix-cli --profile desk script deploy main --file ./demo/src/main.be \
   --create --verify-secs 10
 
 # Inspect stored data and collect runtime feedback
-awtrix --profile desk --json script data main
-awtrix --profile desk logs follow --duration-secs 15
-awtrix --profile desk script verify main --duration-secs 10 --capture main.png
+awtrix-cli --profile desk --json script data main
+awtrix-cli --profile desk logs follow --duration-secs 15
+awtrix-cli --profile desk script verify main --duration-secs 10 --capture main.png
 ```
 
 Protected deployment requires the device's `scriptUpdates` capability. For an
@@ -155,22 +155,22 @@ operation, inspect the target, perform it, and collect runtime evidence:
 
 ```sh
 # Discover an operation without contacting a device
-awtrix --json describe "script verify"
+awtrix-cli --json describe "script verify"
 
 # Inspect live capabilities and a focused app inventory
-awtrix --profile desk --json device capabilities
-awtrix --profile desk --json --fields apps apps list
+awtrix-cli --profile desk --json device capabilities
+awtrix-cli --profile desk --json --fields apps apps list
 
 # Observe a script and return a structured report plus a PNG
-awtrix --profile desk --json script verify main \
+awtrix-cli --profile desk --json script verify main \
   --duration-secs 10 --capture main.png
 
 # Stream bounded runtime logs as JSONL
-awtrix --profile desk --json logs follow --duration-secs 15
+awtrix-cli --profile desk --json logs follow --duration-secs 15
 ```
 
-- **Discoverable commands:** `awtrix --help` lists command families;
-  `awtrix describe "<topic>"` describes an operation offline. Pass an explicit
+- **Discoverable commands:** `awtrix-cli --help` lists command families;
+  `awtrix-cli describe "<topic>"` describes an operation offline. Pass an explicit
   `--target` to refine the description with the connected device's capabilities.
 - **Predictable output:** `--json` requests compact JSON independently of terminal
   detection. `logs follow --json` streams typed JSONL records. `--fields a,b`
@@ -184,7 +184,7 @@ awtrix --profile desk --json logs follow --duration-secs 15
 
 For example, ask your shell-capable coding agent:
 
-> Use `awtrix` with the `desk` profile. Inspect its capabilities and the description
+> Use `awtrix-cli` with the `desk` profile. Inspect its capabilities and the description
 > of script verification, verify `main` for 10 seconds, save a screen capture, and
 > summarize any reported Berry errors.
 
@@ -196,9 +196,9 @@ selection, and exit-code semantics.
 Keep your display code and its dependencies together in a versionable project:
 
 ```sh
-awtrix project init ./demo
-awtrix project validate --manifest ./demo/awtrix.toml
-awtrix --profile desk --json project deploy --manifest ./demo/awtrix.toml
+awtrix-cli project init ./demo
+awtrix-cli project validate --manifest ./demo/awtrix.toml
+awtrix-cli --profile desk --json project deploy --manifest ./demo/awtrix.toml
 ```
 
 An `awtrix.toml` manifest declares scripts, Berry modules, resources, configuration
@@ -216,7 +216,7 @@ remote source.
 Preview obsolete, previously tracked project entries before pruning them:
 
 ```sh
-awtrix --profile desk project prune --manifest ./demo/awtrix.toml --dry-run
+awtrix-cli --profile desk project prune --manifest ./demo/awtrix.toml --dry-run
 ```
 
 ### Test in an isolated Linux instance
@@ -225,7 +225,7 @@ Provide the AWTRIX Linux executable yourself; it is separate from this CLI and i
 not bundled or downloaded. For a project with test assertions:
 
 ```sh
-awtrix --json test project --manifest examples/project/awtrix.toml \
+awtrix-cli --json test project --manifest examples/project/awtrix.toml \
   --binary /path/to/awtrix-linux --webui /path/to/webui/index.html
 ```
 
@@ -239,7 +239,7 @@ pixel-count tolerances; captures are not synchronized to an exact animation fram
 To deploy and run those tests on an existing device, select its URL explicitly:
 
 ```sh
-awtrix --target http://awtrix.local --json test project \
+awtrix-cli --target http://awtrix.local --json test project \
   --manifest examples/project/awtrix.toml
 ```
 

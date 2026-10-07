@@ -6,7 +6,7 @@ use std::{
 use tiny_http::{Header, Response, Server};
 
 fn run(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(args)
         .output()
         .unwrap()
@@ -44,6 +44,23 @@ fn settings_brightness_uses_settings_patch_and_rejects_bad_values_before_http() 
         serde_json::from_slice::<serde_json::Value>(&invalid.stdout).unwrap()["error"]["code"],
         "ARGUMENT"
     );
+}
+
+#[test]
+fn executable_help_and_version_use_the_published_binary_name() {
+    let help = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .arg("--help")
+        .output()
+        .unwrap();
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("Usage: awtrix-cli"));
+
+    let version = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(version.status.success());
+    assert!(String::from_utf8_lossy(&version.stdout).starts_with("awtrix-cli "));
 }
 
 #[test]
@@ -516,7 +533,7 @@ fn settings_descriptions_and_help_expose_each_command_schema_and_globals() {
 }
 
 fn run_with_url_env(args: &[&str], url: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(args)
         .env("AWTRIX_URL", url)
         .output()
@@ -524,7 +541,7 @@ fn run_with_url_env(args: &[&str], url: &str) -> Output {
 }
 
 fn run_with_env(args: &[&str], key: &str, value: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(args)
         .env(key, value)
         .output()
@@ -532,7 +549,7 @@ fn run_with_env(args: &[&str], key: &str, value: &str) -> Output {
 }
 
 fn run_with_binary_env(args: &[&str], binary: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(args)
         .env("AWTRIX_LINUX_BIN", binary)
         .output()
@@ -959,7 +976,7 @@ fn isolated_declarative_test_ctrl_c_stops_only_its_child_and_preserves_user_reco
     std::fs::write(&binary, format!("#!/usr/bin/env python3\nimport argparse,json\nfrom http.server import BaseHTTPRequestHandler,HTTPServer\np=argparse.ArgumentParser();p.add_argument('--data');p.add_argument('--port',type=int);p.add_argument('--width');p.add_argument('--height');p.add_argument('--webui');a=p.parse_args()\nopen({:?},'w').write(str(__import__('os').getpid()))\nopen({:?},'w').write(a.data)\nclass H(BaseHTTPRequestHandler):\n def do_GET(self):\n  b=(json.dumps({{'uid':'test-child'}}) if self.path.startswith('/api/v1/device') else json.dumps({{'next':0,'lines':[]}})).encode();self.send_response(200);self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b)\n def log_message(self,*args): pass\nHTTPServer(('127.0.0.1',a.port),H).serve_forever()\n", pid_file, data_file)).unwrap();
     std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::write(root.path().join("awtrix.toml"), "[project]\nname='interrupt-test'\nversion='1'\n[tests]\nwindow_secs=30\n[[tests.assertion]]\nname='wait-for-interrupt'\nlog_contains='never'\n").unwrap();
-    let cli = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let cli = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--json",
             "test",
@@ -1010,7 +1027,7 @@ fn isolated_declarative_test_ctrl_c_stops_only_its_child_and_preserves_user_reco
 }
 
 fn run_with_config(args: &[&str], config: &std::path::Path) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(args)
         .env("AWTRIX_CONFIG", config)
         .env_remove("AWTRIX_URL")
@@ -1039,7 +1056,7 @@ fn project_init_creates_discoverable_manifest_and_valid_berry_entrypoint() {
     assert!(source.contains("return ProjectApp()"));
     let description = run(&["--json", "describe", "project"]);
     assert!(description.status.success());
-    assert!(String::from_utf8_lossy(&description.stdout).contains("awtrix project init"));
+    assert!(String::from_utf8_lossy(&description.stdout).contains("awtrix-cli project init"));
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -1766,7 +1783,7 @@ fn project_profile_is_used_below_explicit_and_environment_targets() {
         assert_eq!(r.url(), "/api/v1/apps/script/helper");
         r.respond(Response::from_string("{}")).unwrap();
     });
-    let project = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let project = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--json",
             "project",
@@ -1792,7 +1809,7 @@ fn project_profile_is_used_below_explicit_and_environment_targets() {
         let r = env_server.recv().unwrap();
         r.respond(Response::from_string("{}")).unwrap();
     });
-    let env_out = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let env_out = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--json",
             "project",
@@ -1818,7 +1835,7 @@ fn project_profile_is_used_below_explicit_and_environment_targets() {
         let r = explicit_server.recv().unwrap();
         r.respond(Response::from_string("{}")).unwrap();
     });
-    let explicit = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let explicit = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--json",
             "--target",
@@ -1951,7 +1968,7 @@ fn selected_profile_credentials_are_sent_and_explicit_credentials_override_them(
         }
     });
     let path = std::env::temp_dir().join(format!("awtrix-auth-{}.json", std::process::id()));
-    let output = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "profile",
             "add",
@@ -1968,7 +1985,7 @@ fn selected_profile_credentials_are_sent_and_explicit_credentials_override_them(
         .output()
         .unwrap();
     assert!(output.status.success());
-    let rejected = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let rejected = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--profile", "auth", "device", "state"])
         .env("AWTRIX_CONFIG", &path)
         .env_remove("AWTRIX_URL")
@@ -1980,7 +1997,7 @@ fn selected_profile_credentials_are_sent_and_explicit_credentials_override_them(
         String::from_utf8_lossy(&rejected.stderr)
     );
     assert!(!rejection_text.contains("profile-password"));
-    let overridden = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let overridden = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--profile",
             "auth",
@@ -2015,7 +2032,7 @@ fn diagnose_reports_target_origin_for_environment_selection() {
             request.respond(Response::from_string(body)).unwrap();
         }
     });
-    let output = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--json", "device", "diagnose"])
         .env("AWTRIX_URL", url)
         .env_remove("AWTRIX_CONFIG")
@@ -2084,28 +2101,28 @@ fn explicit_url_precedes_environment_and_profile_then_environment_precedes_profi
         let r = c.recv().unwrap();
         r.respond(Response::from_string("{}")).unwrap();
     });
-    let explicit = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let explicit = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--target", &c_url, "--profile", "chosen", "device", "state"])
         .env("AWTRIX_URL", &a_url)
         .env("AWTRIX_CONFIG", &config)
         .output()
         .unwrap();
     assert!(explicit.status.success());
-    let selected = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let selected = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--profile", "chosen", "device", "state"])
         .env("AWTRIX_CONFIG", &config)
         .env_remove("AWTRIX_URL")
         .output()
         .unwrap();
     assert!(selected.status.success());
-    let environment = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let environment = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["device", "state"])
         .env("AWTRIX_URL", &a_url)
         .env("AWTRIX_CONFIG", &config)
         .output()
         .unwrap();
     assert!(environment.status.success());
-    let default = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let default = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--json", "device", "diagnose"])
         .env("AWTRIX_CONFIG", &config)
         .env_remove("AWTRIX_URL")
@@ -2162,7 +2179,7 @@ fn environment_credentials_override_profile_and_profile_credentials_do_not_follo
         &config,
     );
     assert!(added.status.success());
-    let selected = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let selected = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--profile", "secret-profile", "device", "state"])
         .env("AWTRIX_CONFIG", &config)
         .env("AWTRIX_USERNAME", "env-user")
@@ -2171,7 +2188,7 @@ fn environment_credentials_override_profile_and_profile_credentials_do_not_follo
         .output()
         .unwrap();
     assert!(selected.status.success());
-    let explicit = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let explicit = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--target", &url, "device", "state"])
         .env("AWTRIX_CONFIG", &config)
         .env_remove("AWTRIX_USERNAME")
@@ -2180,7 +2197,7 @@ fn environment_credentials_override_profile_and_profile_credentials_do_not_follo
         .output()
         .unwrap();
     assert!(explicit.status.success());
-    let env_target = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let env_target = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["device", "state"])
         .env("AWTRIX_CONFIG", &config)
         .env("AWTRIX_URL", &url)
@@ -2199,7 +2216,7 @@ fn missing_profile_and_credential_bearing_urls_fail_without_secret_disclosure() 
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let config = dir.join("config.json");
-    let missing = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let missing = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--json", "--profile", "absent", "device", "state"])
         .env("AWTRIX_CONFIG", &config)
         .env_remove("AWTRIX_URL")
@@ -2216,7 +2233,7 @@ fn missing_profile_and_credential_bearing_urls_fail_without_secret_disclosure() 
         let r = server.recv().unwrap();
         r.respond(Response::from_string("{}")).unwrap();
     });
-    let explicit = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let explicit = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--target", &url, "--profile", "absent", "device", "state"])
         .env("AWTRIX_CONFIG", &config)
         .env_remove("AWTRIX_URL")
@@ -2766,7 +2783,7 @@ fn headless_start_reports_missing_binary_without_creating_state() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let config = root.join("config.json");
-    let output = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--json",
             "headless",
@@ -2804,7 +2821,7 @@ fn headless_refuses_occupied_port_before_spawning_child_or_claiming_external_ser
     )
     .unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--json",
             "headless",
@@ -2826,7 +2843,7 @@ fn headless_refuses_occupied_port_before_spawning_child_or_claiming_external_ser
         "occupied-port rejection must happen before child spawn"
     );
     assert!(!root.join("headless.json").exists());
-    let stop = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let stop = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--json", "headless", "stop"])
         .env("AWTRIX_CONFIG", &config)
         .output()
@@ -2863,7 +2880,7 @@ fn headless_never_claims_or_stops_an_external_http_listener_winning_spawn_race()
     std::fs::write(&fake,format!("#!/bin/sh\necho $$ > '{}'\ntouch '{}'\nwhile [ ! -e '{}' ]; do sleep 0.02; done\nexec sleep 30\n",child_pid_file.display(),spawned.display(),release.display())).unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
     let config = root.join("config.json");
-    let cli = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let cli = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--json",
             "headless",
@@ -2954,7 +2971,7 @@ fn headless_fake_process_start_status_stop_and_isolated_cleanup() {
         .unwrap()
         .port()
         .to_string();
-    let output = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--json",
             "headless",
@@ -2976,7 +2993,7 @@ fn headless_fake_process_start_status_stop_and_isolated_cleanup() {
     assert_eq!(started["owned"], true);
     let data = std::path::PathBuf::from(started["data"].as_str().unwrap());
     assert!(data.exists());
-    let status = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let status = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--json", "headless", "status"])
         .env("AWTRIX_CONFIG", &config)
         .output()
@@ -2986,7 +3003,7 @@ fn headless_fake_process_start_status_stop_and_isolated_cleanup() {
         serde_json::from_slice::<serde_json::Value>(&status.stdout).unwrap()["running"],
         true
     );
-    let stopped = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let stopped = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--json", "headless", "stop"])
         .env("AWTRIX_CONFIG", &config)
         .output()
@@ -3005,7 +3022,7 @@ fn headless_fake_process_start_status_stop_and_isolated_cleanup() {
         .unwrap()
         .port()
         .to_string();
-    let persistent_start = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let persistent_start = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--json",
             "headless",
@@ -3030,7 +3047,7 @@ fn headless_fake_process_start_status_stop_and_isolated_cleanup() {
             ["temporary_data"],
         false
     );
-    let persistent_stop = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let persistent_stop = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--json", "headless", "stop"])
         .env("AWTRIX_CONFIG", &config)
         .output()
@@ -3068,7 +3085,7 @@ fn headless_start_timeout_reaps_its_child_and_preserves_external_processes() {
         .unwrap()
         .port()
         .to_string();
-    let output = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--json",
             "headless",
@@ -3102,7 +3119,7 @@ fn headless_start_timeout_reaps_its_child_and_preserves_external_processes() {
         .arg("30")
         .spawn()
         .unwrap();
-    let stop = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let stop = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--json", "headless", "stop"])
         .env("AWTRIX_CONFIG", &config)
         .output()
@@ -3144,7 +3161,7 @@ fn headless_ctrl_c_during_readiness_stops_child_and_cleans_isolated_data() {
         .unwrap()
         .port()
         .to_string();
-    let cli = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let cli = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--json",
             "headless",
@@ -3216,7 +3233,7 @@ fn headless_stop_rejects_a_stale_pid_identity_without_signaling_it() {
         .parse()
         .unwrap();
     std::fs::write(root.join("headless.json"),serde_json::json!({"pid":std::process::id(),"start_time":start+1,"url":"http://127.0.0.1:8080","data":root,"temporary":true}).to_string()).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(["--json", "headless", "stop"])
         .env("AWTRIX_CONFIG", &config)
         .output()
@@ -4779,7 +4796,7 @@ fn logs_follow_filters_by_literal_text_and_ctrl_c_emits_interrupted_end() {
                 .unwrap();
         }
     });
-    let child = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+    let child = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
             "--target",
             &url,
