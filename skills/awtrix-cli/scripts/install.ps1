@@ -9,6 +9,8 @@ $repo = 'toinux/awtrix-cli'
 if (Get-Command awtrix-cli -ErrorAction SilentlyContinue) {
     $existing = & awtrix-cli --version 2>$null
     if ($LASTEXITCODE -eq 0 -and $existing -match '^awtrix-cli\s') {
+        & awtrix-cli --help *> $null
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         Write-Host 'awtrix-cli is already installed; using the existing command.'
         Write-Host $existing
         exit 0
@@ -59,6 +61,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Downloaded binary failed --version; installation was not changed.' }
     $expectedVersion = "awtrix-cli $($Version.TrimStart('v'))"
     if ($reportedVersion -ne $expectedVersion) { throw "Unexpected binary version '$reportedVersion' (expected '$expectedVersion'); installation was not changed." }
+    & $staged --help *> $null
+    if ($LASTEXITCODE -ne 0) { throw 'Downloaded binary failed --help; installation was not changed.' }
     if (Test-Path -LiteralPath $destination) {
         [IO.File]::Replace($staged, $destination, $null)
     } else {
