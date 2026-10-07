@@ -3878,6 +3878,49 @@ fn script_verify_reports_partial_state_collection_failure() {
 }
 
 #[test]
+fn script_verify_reports_http_log_collection_failure_as_structured_diagnostic() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":true}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string("private log diagnostic").with_status_code(500))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "verify",
+        "demo",
+        "--duration-secs",
+        "1",
+        "--interval-ms",
+        "1",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["not_available"]["code"], "HTTP");
+    assert_eq!(report["not_available"]["phase"], "log_collection");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private log diagnostic"));
+}
+
+#[test]
 fn script_deploy_verify_conflict_does_not_start_verification() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());

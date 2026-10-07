@@ -429,6 +429,9 @@ pub(crate) fn run(command: &Command, cli: &crate::Cli) -> crate::CliResult<Value
             return Err(("INTERRUPTED", "declarative test interrupted after deployment; owned headless child will be stopped".into()));
         }
         let mut result = evaluate(&api, &plan, &project_scripts, &interrupted)?;
+        if interrupted.load(Ordering::SeqCst) {
+            return Err(("INTERRUPTED", "declarative test interrupted before reporting; owned headless child will be stopped".into()));
+        }
         result["target"] = json!(target);
         result["target_mode"] = json!("isolated-headless");
         result["deployment"] = deploy;
@@ -458,6 +461,12 @@ pub(crate) fn run(command: &Command, cli: &crate::Cli) -> crate::CliResult<Value
         ));
     }
     let mut result = evaluate(&api, &plan, &project_scripts, &interrupted)?;
+    if interrupted.load(Ordering::SeqCst) {
+        return Err((
+            "INTERRUPTED",
+            "declarative test interrupted before reporting".into(),
+        ));
+    }
     result["target"] = json!(target);
     result["target_mode"] = json!("external-reuse");
     result["deployment"] = deploy;
