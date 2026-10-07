@@ -76,12 +76,12 @@ fn config_path(
     }
     match platform {
         Platform::Windows => appdata
-            .map(|root| root.join("awtrix").join("config.json"))
+            .map(|root| root.join("awtrix-cli").join("config.json"))
             .or_else(|| {
                 home.map(|root| {
                     root.join("AppData")
                         .join("Roaming")
-                        .join("awtrix")
+                        .join("awtrix-cli")
                         .join("config.json")
                 })
             })
@@ -91,7 +91,7 @@ fn config_path(
                     .into(),
             )),
         Platform::Unix => home
-            .map(|root| root.join(".config").join("awtrix").join("config.json"))
+            .map(|root| root.join(".config").join("awtrix-cli").join("config.json"))
             .ok_or((
                 "CONFIG_INVALID",
                 "set AWTRIX_CONFIG or HOME to locate the personal configuration".into(),
@@ -99,7 +99,7 @@ fn config_path(
     }
 }
 
-fn path() -> Result<PathBuf> {
+pub(crate) fn path() -> Result<PathBuf> {
     let override_path = std::env::var_os("AWTRIX_CONFIG").map(PathBuf::from);
     #[cfg(windows)]
     {
@@ -465,7 +465,7 @@ mod tests {
                 Platform::Windows
             )
             .unwrap(),
-            PathBuf::from("C:/Users/A/AppData/Roaming/awtrix/config.json")
+            PathBuf::from("C:/Users/A/AppData/Roaming/awtrix-cli/config.json")
         );
         assert_eq!(
             config_path(
@@ -475,7 +475,7 @@ mod tests {
                 Platform::Windows
             )
             .unwrap(),
-            PathBuf::from("C:/Users/A/AppData/Roaming/awtrix/config.json")
+            PathBuf::from("C:/Users/A/AppData/Roaming/awtrix-cli/config.json")
         );
     }
 
@@ -493,8 +493,25 @@ mod tests {
         );
         assert_eq!(
             config_path(None, None, Some(PathBuf::from("/home/a")), Platform::Unix).unwrap(),
-            PathBuf::from("/home/a/.config/awtrix/config.json")
+            PathBuf::from("/home/a/.config/awtrix-cli/config.json")
         );
         assert!(config_path(None, None, None, Platform::Unix).is_err());
+    }
+
+    #[test]
+    fn explicit_config_file_is_authoritative_on_all_platforms() {
+        let selected = PathBuf::from("custom/location/profiles.json");
+        for platform in [Platform::Windows, Platform::Unix] {
+            assert_eq!(
+                config_path(
+                    Some(selected.clone()),
+                    Some(PathBuf::from("C:/Users/A/AppData/Roaming")),
+                    Some(PathBuf::from("/home/a")),
+                    platform,
+                )
+                .unwrap(),
+                selected
+            );
+        }
     }
 }
