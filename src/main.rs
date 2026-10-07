@@ -11,6 +11,7 @@ mod project;
 mod resources;
 mod screen;
 mod scripts;
+mod settings;
 mod tests;
 
 #[derive(Parser)]
@@ -86,6 +87,11 @@ enum Command {
     Notify {
         #[command(subcommand)]
         action: notifications::Command,
+    },
+    /// Read and modify device/display settings, and request reboot.
+    Settings {
+        #[command(subcommand)]
+        action: settings::Command,
     },
 }
 
@@ -524,6 +530,14 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
         Ok(value)
+            if value.pointer("/error/code").and_then(Value::as_str) == Some("REBOOT_TIMEOUT") =>
+        {
+            let rendered = render(value, &cli.fields, cli.json).unwrap_or_else(|_| "{}".into());
+            println!("{rendered}");
+            eprintln!("awtrix: REBOOT_TIMEOUT: reboot was accepted but offline-to-online recovery was not observed");
+            ExitCode::from(4)
+        }
+        Ok(value)
             if value
                 .get("runtime_error")
                 .is_some_and(|error| !error.is_null())
@@ -667,6 +681,9 @@ fn run(cli: &Cli) -> CliResult<Value> {
     if let Command::Notify { action } = &cli.command {
         notifications::validate(action).map_err(|message| ("ARGUMENT", message))?;
     }
+    if let Command::Settings { action } = &cli.command {
+        settings::validate(action).map_err(|message| ("ARGUMENT", message))?;
+    }
     let explicit_target =
         std::env::args().any(|arg| arg == "--target" || arg.starts_with("--target="));
     let resolved = profiles::resolve(
@@ -688,6 +705,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
     match &cli.command {
         Command::Apps { action } => apps::run(action, &api),
         Command::Notify { action } => notifications::run(action, &api),
+        Command::Settings { action } => settings::run(action, &api, cli.timeout),
         Command::Device {
             action: DeviceCommand::State,
         } => api.get("/api/v1/device"),
@@ -798,6 +816,16 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
         "notify" | "notify send" | "notify delete" | "notify delete-active" => {
             notifications::describe(topic)
         }
+        "settings"
+        | "settings get"
+        | "settings patch"
+        | "settings display"
+        | "settings display-get"
+        | "settings display-patch"
+        | "settings brightness"
+        | "settings power"
+        | "settings system-get"
+        | "settings reboot" => settings::describe(topic),
         "project" | "project init" | "project validate" | "project deploy" | "project prune"
         | "project reconcile" => project::describe(topic),
         "test" | "test project" => tests::describe(),

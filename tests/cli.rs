@@ -12,6 +12,509 @@ fn run(args: &[&str]) -> Output {
         .unwrap()
 }
 
+#[test]
+fn settings_brightness_uses_settings_patch_and_rejects_bad_values_before_http() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Patch);
+        assert_eq!(request.url(), "/api/v1/settings");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"brightness":80})
+        );
+        request.respond(Response::from_string("{}")).unwrap();
+    });
+    let output = run(&["--json", "--target", &url, "settings", "brightness", "80"]);
+    worker.join().unwrap();
+    assert!(output.status.success());
+    let invalid = run(&[
+        "--json",
+        "--target",
+        "http://127.0.0.1:1",
+        "settings",
+        "brightness",
+        "256",
+    ]);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&invalid.stdout).unwrap()["error"]["code"],
+        "ARGUMENT"
+    );
+}
+
+#[test]
+fn settings_patch_invalid_field_does_not_send_http() {
+    let output = run(&[
+        "--json",
+        "--target",
+        "http://127.0.0.1:1",
+        "settings",
+        "patch",
+        "--values",
+        r#"{"mqttPassword":"secret"}"#,
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "ARGUMENT"
+    );
+    let invalid_type = run(&[
+        "--json",
+        "--target",
+        "http://127.0.0.1:1",
+        "settings",
+        "display-patch",
+        "--values",
+        r#"{"power":"off"}"#,
+    ]);
+    assert_eq!(invalid_type.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&invalid_type.stdout).unwrap()["error"]["code"],
+        "ARGUMENT"
+    );
+}
+
+#[test]
+fn system_read_recursively_redacts_secret_fields() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/system");
+        request.respond(Response::from_string(r#"{"mqtt":{"password":{"unexpected":"malformed-secret-value"},"enabled":true},"tokens":[{"api_key":"hidden-too"}]}"#)).unwrap();
+    });
+    let output = run(&["--json", "--target", &url, "settings", "system-get"]);
+    worker.join().unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["mqtt"]["password"], "[REDACTED]");
+    assert_eq!(result["tokens"], "[REDACTED]");
+}
+
+#[test]
+fn system_redaction_covers_official_pass_keys_without_redacting_compass_or_leaking_errors() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/system");
+        request.respond(Response::from_string(r#"{"authPass":"secret-auth","wifiPass":{"bad":"secret-wifi"},"nested":{"mqttPass":["secret-mqtt"]},"compass":"north"}"#)).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/system");
+        request
+            .respond(
+                Response::from_string(r#"{"error":"secret-auth secret-wifi secret-mqtt"}"#)
+                    .with_status_code(500),
+            )
+            .unwrap();
+    });
+    let success = run(&["--json", "--target", &url, "settings", "system-get"]);
+    let failure = run(&["--json", "--target", &url, "settings", "system-get"]);
+    worker.join().unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&success.stdout).unwrap();
+    assert_eq!(result["authPass"], "[REDACTED]");
+    assert_eq!(result["wifiPass"], "[REDACTED]");
+    assert_eq!(result["nested"]["mqttPass"], "[REDACTED]");
+    assert_eq!(result["compass"], "north");
+    for output in [&success, &failure] {
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for secret in ["secret-auth", "secret-wifi", "secret-mqtt"] {
+            assert!(!combined.contains(secret), "secret leaked: {secret}");
+        }
+    }
+    let description = run(&["--json", "describe", "settings system-get"]);
+    let description = String::from_utf8_lossy(&description.stdout);
+    for secret in ["secret-auth", "secret-wifi", "secret-mqtt"] {
+        assert!(!description.contains(secret));
+    }
+}
+
+#[test]
+fn overlay_settings_description_and_validation_match_nested_contract() {
+    let description = run(&["--json", "describe", "settings display-patch"]);
+    let description: serde_json::Value = serde_json::from_slice(&description.stdout).unwrap();
+    assert_eq!(
+        description["schemas"]["overlaySettings"]["properties"]["speed"]["minimum"],
+        0.1
+    );
+    assert_eq!(
+        description["schemas"]["overlaySettings"]["properties"]["speed"]["maximum"],
+        10.0
+    );
+    assert_eq!(
+        description["schemas"]["overlaySettings"]["properties"]["palette"]["capability"],
+        "capabilities.palettes"
+    );
+    assert_eq!(
+        description["schemas"]["overlaySettings"]["properties"]["blend"]["type"],
+        "boolean"
+    );
+    let invalid = run(&[
+        "--json",
+        "--target",
+        "http://127.0.0.1:1",
+        "settings",
+        "display-patch",
+        "--values",
+        r#"{"overlaySettings":{"speed":10.1}}"#,
+    ]);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&invalid.stdout).unwrap()["error"]["code"],
+        "ARGUMENT"
+    );
+}
+
+#[test]
+fn display_power_sends_official_power_field() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Patch);
+        assert_eq!(request.url(), "/api/v1/display");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"power":false})
+        );
+        request.respond(Response::from_string("{}")).unwrap();
+    });
+    let output = run(&["--json", "--target", &url, "settings", "power", "off"]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn settings_and_display_reads_use_their_official_get_routes() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for (route, body) in [
+            (
+                "/api/v1/settings",
+                r#"{"brightness":42,"autoBrightness":false}"#,
+            ),
+            (
+                "/api/v1/display",
+                r#"{"power":true,"brightness":42,"overlay":null,"overlaySettings":{}}"#,
+            ),
+        ] {
+            let request = server.recv().unwrap();
+            assert_eq!(request.method(), &tiny_http::Method::Get);
+            assert_eq!(request.url(), route);
+            request.respond(Response::from_string(body)).unwrap();
+        }
+    });
+    let settings = run(&["--json", "--target", &url, "settings", "get"]);
+    let display = run(&["--json", "--target", &url, "settings", "display-get"]);
+    worker.join().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&settings.stdout).unwrap()["brightness"],
+        42
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&display.stdout).unwrap()["power"],
+        true
+    );
+}
+
+#[test]
+fn display_overlay_requires_live_advertised_capability_before_patch() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/capabilities");
+        request
+            .respond(Response::from_string(r#"{"overlays":["rain"]}"#))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/display");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"overlay":"RAIN"})
+        );
+        request.respond(Response::from_string("{}")).unwrap();
+    });
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "settings",
+        "display-patch",
+        "--values",
+        r#"{"overlay":"RAIN"}"#,
+    ]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn display_overlay_absent_capability_refuses_patch() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/capabilities");
+        request
+            .respond(Response::from_string(r#"{"overlays":["fog"]}"#))
+            .unwrap();
+        // No display PATCH is expected for an unadvertised overlay.
+        assert!(server
+            .recv_timeout(Duration::from_millis(150))
+            .unwrap()
+            .is_none());
+    });
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "settings",
+        "display-patch",
+        "--values",
+        r#"{"overlay":"rain"}"#,
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(6));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+        "INCOMPATIBLE"
+    );
+}
+
+#[test]
+fn settings_patch_http_422_rejects_entire_patch_without_success_claim() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Patch);
+        assert_eq!(request.url(), "/api/v1/settings");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"brightness":50,"autoBrightness":false})
+        );
+        request
+            .respond(
+                Response::from_string(r#"{"error":"validationFailed","field":"brightness"}"#)
+                    .with_status_code(422),
+            )
+            .unwrap();
+    });
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "settings",
+        "patch",
+        "--values",
+        r#"{"brightness":50,"autoBrightness":false}"#,
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(5));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "HTTP");
+    assert!(result.get("accepted").is_none());
+    assert!(result.get("applied").is_none());
+}
+
+#[test]
+fn settings_507_reports_application_and_persistence_as_unknown() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/settings");
+        request
+            .respond(Response::from_string("private server details").with_status_code(507))
+            .unwrap();
+    });
+    let output = run(&["--json", "--target", &url, "settings", "brightness", "100"]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "APPLIED_STATE_UNKNOWN");
+    assert!(result["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("resulting state is unknown"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private server details"));
+}
+
+#[test]
+fn reboot_wait_requires_offline_then_online_and_uses_official_route() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request
+            .respond(Response::from_string(r#"{"uid":"u1"}"#))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Post);
+        assert_eq!(request.url(), "/api/v1/device/reboot");
+        request.respond(Response::from_string("{}")).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request
+            .respond(Response::from_string("offline").with_status_code(503))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request
+            .respond(Response::from_string(r#"{"uid":"u1"}"#))
+            .unwrap();
+    });
+    let output = run(&[
+        "--json",
+        "--timeout",
+        "1000",
+        "--target",
+        &url,
+        "settings",
+        "reboot",
+        "--wait-secs",
+        "2",
+    ]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["accepted"], true);
+    assert_eq!(result["offline_observed"], true);
+    assert_eq!(result["online_observed"], true);
+}
+
+#[test]
+fn reboot_lost_response_is_uncertain_and_never_retried() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request.respond(Response::from_string("{}")).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device/reboot");
+        drop(request); // Simulate an accepted request whose response connection is lost.
+        thread::sleep(Duration::from_millis(250));
+    });
+    let output = run(&[
+        "--json",
+        "--timeout",
+        "1000",
+        "--target",
+        &url,
+        "settings",
+        "reboot",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "OUTCOME_UNKNOWN");
+}
+
+#[test]
+fn reboot_wait_timeout_is_nonzero_and_does_not_claim_reappearance() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request.respond(Response::from_string("{}")).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device/reboot");
+        request.respond(Response::from_string("{}")).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request
+            .respond(Response::from_string("offline").with_status_code(503))
+            .unwrap();
+        // Do not make a successful post-reboot device response available.
+    });
+    let output = run(&[
+        "--json",
+        "--timeout",
+        "100",
+        "--target",
+        &url,
+        "settings",
+        "reboot",
+        "--wait-secs",
+        "1",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["accepted"], true);
+    assert_eq!(result["offline_observed"], true);
+    assert_eq!(result["online_observed"], false);
+    assert_eq!(result["error"]["code"], "REBOOT_TIMEOUT");
+}
+
+#[test]
+fn settings_descriptions_and_help_expose_each_command_schema_and_globals() {
+    for topic in [
+        "settings get",
+        "settings patch",
+        "settings display-get",
+        "settings display-patch",
+        "settings brightness",
+        "settings power",
+        "settings system-get",
+        "settings reboot",
+    ] {
+        let output = run(&["--json", "describe", topic]);
+        assert!(
+            output.status.success(),
+            "{topic}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let description: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            !description["output_fields"].as_array().unwrap().is_empty(),
+            "{topic}"
+        );
+        assert!(
+            !description["examples"].as_array().unwrap().is_empty(),
+            "{topic}"
+        );
+        assert!(
+            description["parameters"].get("--target").is_some(),
+            "{topic}"
+        );
+        assert!(description["parameters"].get("--json").is_some(), "{topic}");
+    }
+    let help = run(&["settings", "brightness", "--help"]);
+    let text = String::from_utf8_lossy(&help.stdout);
+    assert!(text.contains("--auto"));
+    assert!(text.contains("LEVEL"));
+}
+
 fn run_with_url_env(args: &[&str], url: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_awtrix"))
         .args(args)
