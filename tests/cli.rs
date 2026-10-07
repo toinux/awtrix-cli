@@ -223,6 +223,41 @@ fn project_deployment_orders_dependencies_and_reports_partial_failure_additively
     let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(report["additive"], true);
     assert_eq!(report["target_origin"], "command-line");
+    let tracking: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(root.join(".awtrix-tracking.json")).unwrap())
+            .unwrap();
+    assert_eq!(tracking["project"], "sample");
+    assert_eq!(tracking["target"], url);
+    assert_eq!(tracking["entries"].as_array().unwrap().len(), 3);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn project_prune_refuses_tracking_for_another_endpoint_before_http_or_deletion() {
+    let root = std::env::temp_dir().join(format!(
+        "awtrix-project-foreign-track-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("awtrix.toml"),
+        "[project]\nname='sample'\nversion='1'\n",
+    )
+    .unwrap();
+    std::fs::write(root.join(".awtrix-tracking.json"), r#"{"version":1,"project":"sample","target":"http://127.0.0.1:1/","entries":["script:foreign"]}"#).unwrap();
+    let out = run(&[
+        "--target",
+        "http://127.0.0.1:2",
+        "--json",
+        "project",
+        "prune",
+        "--manifest",
+        root.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    assert!(!out.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "TRACKING_INVALID");
     let _ = std::fs::remove_dir_all(root);
 }
 
