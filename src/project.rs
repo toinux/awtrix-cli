@@ -63,6 +63,9 @@ struct Manifest {
     resources: Vec<Resource>,
     #[serde(default)]
     config: Vec<Config>,
+    /// Optional declarative assertions consumed by `awtrix test project`.
+    #[serde(default)]
+    tests: Option<crate::tests::TestPlan>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -238,6 +241,16 @@ fn load(path: &Path) -> Result<Loaded> {
             "manifest TOML or schema is invalid".into(),
         )
     })?;
+    crate::tests::validate_test_fields(text)?;
+    if let Some(tests) = &manifest.tests {
+        crate::tests::validate_plan(tests)?;
+        let script_names = manifest
+            .scripts
+            .iter()
+            .map(|script| script.name.clone())
+            .collect::<Vec<_>>();
+        crate::tests::validate_scripts_declared(tests, &script_names)?;
+    }
     if manifest.project.name.trim().is_empty() || manifest.project.version.trim().is_empty() {
         return Err((
             "PROJECT_INVALID",
@@ -387,7 +400,9 @@ pub fn run(command: &Command, cli: &crate::Cli) -> Result<Value> {
                 json!({"valid":true,"project":p.manifest.project.name,"scripts":p.sources.len(),"modules":p.modules.len(),"resources":p.resources.len(),"config":p.configs.len()}),
             )
         }
-        Command::Deploy { manifest, force } => deploy(load(manifest)?, manifest, cli, *force),
+        Command::Deploy { manifest, force } => {
+            deploy(load(manifest)?, manifest, cli, *force, None, None)
+        }
         Command::Prune { manifest, dry_run } => prune(load(manifest)?, manifest, cli, *dry_run),
         Command::Reconcile {
             manifest,
@@ -421,15 +436,38 @@ fn init(path: &Path, requested: Option<&str>) -> Result<Value> {
     )
 }
 
-fn deploy(p: Loaded, manifest_path: &Path, cli: &crate::Cli, force: bool) -> Result<Value> {
+pub(crate) fn deploy_test_project(
+    manifest: &Path,
+    cli: &crate::Cli,
+    target: &str,
+    tracking_root: &Path,
+) -> Result<Value> {
+    deploy(
+        load(manifest)?,
+        manifest,
+        cli,
+        false,
+        Some(target),
+        Some(tracking_root),
+    )
+}
+
+fn deploy(
+    p: Loaded,
+    manifest_path: &Path,
+    cli: &crate::Cli,
+    force: bool,
+    target_override: Option<&str>,
+    tracking_root: Option<&Path>,
+) -> Result<Value> {
     // The entire project has been loaded and validated before target resolution or the first mutation.
     let explicit = std::env::args().any(|a| a == "--target" || a.starts_with("--target="));
     let selected = crate::profiles::resolve_project(
-        if explicit {
+        target_override.or(if explicit {
             cli.target.as_deref()
         } else {
             None
-        },
+        }),
         cli.profile.as_deref(),
         p.manifest.target.profile.as_deref(),
         cli.username.as_deref(),
@@ -447,7 +485,10 @@ fn deploy(p: Loaded, manifest_path: &Path, cli: &crate::Cli, force: bool) -> Res
         .trim_end_matches('/')
         .to_owned();
     let device_id = device_id(&api)?;
-    let state_path = tracking_path(manifest_path, &p.manifest.project.name, &target);
+    let project_tracking_path = tracking_path(manifest_path, &p.manifest.project.name, &target);
+    let state_path = tracking_root.map_or(project_tracking_path.clone(), |root| {
+        root.join(project_tracking_path.file_name().unwrap_or_default())
+    });
     let mut entries = match fs::read(&state_path) {
         Ok(_) => {
             read_tracking(

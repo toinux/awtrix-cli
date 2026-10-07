@@ -1,0 +1,15 @@
+[project]
+name = "berry-error-check"
+version = "0.1.0"
+
+[[scripts]]
+name = "broken"
+file = "broken.be"
+create = true
+
+[tests]
+window_secs = 1
+
+[[tests.assertion]]
+name = "must-not-pass"
+script_active = "broken"

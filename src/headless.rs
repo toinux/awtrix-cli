@@ -205,6 +205,58 @@ fn open_owned_process(
 }
 
 fn start(args: &StartArgs) -> Result<Value, (&'static str, String)> {
+    let (value, _child) = launch(args, true, None)?;
+    Ok(value)
+}
+
+/// A transient test-owned AWTRIX process. Unlike the interactive lifecycle, it never
+/// reads or writes the user's ownership record and always kills only its child on drop.
+pub(crate) struct IsolatedSession {
+    child: Option<Child>,
+    pub(crate) target: String,
+    pub(crate) data: PathBuf,
+}
+
+impl Drop for IsolatedSession {
+    fn drop(&mut self) {
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+pub(crate) fn start_isolated(
+    binary: PathBuf,
+    webui: Option<PathBuf>,
+    data: PathBuf,
+    port: u16,
+    ready_timeout_secs: u64,
+    interrupted: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Result<IsolatedSession, (&'static str, String)> {
+    let data_dir = data.clone();
+    let args = StartArgs {
+        binary: Some(binary),
+        port,
+        width: 52,
+        height: 16,
+        data: Some(data),
+        webui,
+        ready_timeout_secs,
+    };
+    let (value, child) = launch(&args, false, Some(interrupted))?;
+    Ok(IsolatedSession {
+        child: Some(child),
+        target: value["target"].as_str().unwrap_or_default().to_owned(),
+        data: data_dir,
+    })
+}
+
+fn launch(
+    args: &StartArgs,
+    persist_ownership: bool,
+    cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<(Value, Child), (&'static str, String)> {
     if !cfg!(target_os = "linux") {
         return Err(error(
             "UNSUPPORTED_HOST",
@@ -234,16 +286,18 @@ fn start(args: &StartArgs) -> Result<Value, (&'static str, String)> {
             format!("AWTRIX executable not found: {}", binary.display()),
         ));
     }
-    if let Ok(existing) = read_state() {
-        if existing["pid"]
-            .as_u64()
-            .and_then(|pid| process_start(pid as u32))
-            == existing["start_time"].as_u64()
-        {
-            return Err(error(
-                "ALREADY_RUNNING",
-                "a CLI-owned headless process is already recorded",
-            ));
+    if persist_ownership {
+        if let Ok(existing) = read_state() {
+            if existing["pid"]
+                .as_u64()
+                .and_then(|pid| process_start(pid as u32))
+                == existing["start_time"].as_u64()
+            {
+                return Err(error(
+                    "ALREADY_RUNNING",
+                    "a CLI-owned headless process is already recorded",
+                ));
+            }
         }
     }
     let reservation = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, args.port))
@@ -307,7 +361,14 @@ fn start(args: &StartArgs) -> Result<Value, (&'static str, String)> {
             ));
         }
     };
-    await_ready(child, &data, temporary, args)
+    await_ready(
+        child,
+        &data,
+        temporary,
+        args,
+        persist_ownership,
+        cancellation,
+    )
 }
 
 fn await_ready(
@@ -315,7 +376,9 @@ fn await_ready(
     data: &std::path::Path,
     temporary: bool,
     args: &StartArgs,
-) -> Result<Value, (&'static str, String)> {
+    persist_ownership: bool,
+    cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<(Value, Child), (&'static str, String)> {
     let mut startup = StartupGuard::new(child, data, temporary);
     let pid = startup.child_mut().id();
     let deadline = Instant::now() + Duration::from_secs(args.ready_timeout_secs);
@@ -329,16 +392,21 @@ fn await_ready(
             return Err(error("HTTP", e.to_string()));
         }
     };
-    let interrupted = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let interrupt_flag = interrupted.clone();
-    if let Err(e) =
-        ctrlc::set_handler(move || interrupt_flag.store(true, std::sync::atomic::Ordering::SeqCst))
-    {
-        return Err(error(
-            "SIGNAL",
-            format!("cannot install startup interrupt handler: {e}"),
-        ));
-    }
+    let interrupted = if let Some(flag) = cancellation {
+        flag
+    } else {
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let interrupt_flag = flag.clone();
+        if let Err(e) = ctrlc::set_handler(move || {
+            interrupt_flag.store(true, std::sync::atomic::Ordering::SeqCst)
+        }) {
+            return Err(error(
+                "SIGNAL",
+                format!("cannot install startup interrupt handler: {e}"),
+            ));
+        }
+        flag
+    };
     loop {
         if interrupted.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(error(
@@ -381,11 +449,18 @@ fn await_ready(
             let Some(started) = process_start(pid) else {
                 return Err(error("OWNERSHIP", "cannot verify spawned process identity"));
             };
-            write_state(pid, started, &url, data, temporary)?;
+            if persist_ownership {
+                write_state(pid, started, &url, data, temporary)?;
+            }
+            let child = startup
+                .child
+                .take()
+                .ok_or_else(|| error("PROCESS", "owned process disappeared during startup"))?;
             startup.disarm();
-            return Ok(
+            return Ok((
                 json!({"running":true,"pid":pid,"target":url,"data":data,"temporary_data":temporary,"owned":true}),
-            );
+                child,
+            ));
         }
         if Instant::now() >= deadline {
             return Err(error("TIMEOUT",format!("AWTRIX HTTP readiness timed out after {} seconds; child stopped and temporary data removed",args.ready_timeout_secs)));

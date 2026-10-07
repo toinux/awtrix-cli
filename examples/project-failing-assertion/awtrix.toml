@@ -1,0 +1,15 @@
+[project]
+name = "failed-assertion-check"
+version = "0.1.0"
+
+[[scripts]]
+name = "main"
+file = "main.be"
+create = true
+
+[tests]
+window_secs = 1
+
+[[tests.assertion]]
+name = "deliberately-failing-log"
+log_contains = "this marker is not emitted"

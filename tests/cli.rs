@@ -20,6 +20,296 @@ fn run_with_url_env(args: &[&str], url: &str) -> Output {
         .unwrap()
 }
 
+fn run_with_env(args: &[&str], key: &str, value: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args(args)
+        .env(key, value)
+        .output()
+        .unwrap()
+}
+
+fn run_with_binary_env(args: &[&str], binary: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args(args)
+        .env("AWTRIX_LINUX_BIN", binary)
+        .output()
+        .unwrap()
+}
+
+fn declarative_project(root: &std::path::Path, assertion: &str) {
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/main.be"), "# @name main\nclass Main\n  def init()\n    print(\"expected marker\")\n  end\n  def draw()\n  end\n  def loop()\n    return true\n  end\nend\nreturn Main()\n").unwrap();
+    std::fs::write(root.join("awtrix.toml"), format!("[project]\nname='declarative-test'\nversion='1'\n[[scripts]]\nname='main'\nfile='src/main.be'\ncreate=true\n\n[tests]\nwindow_secs=1\n\n{assertion}\n")).unwrap();
+}
+
+fn test_http_server(runtime_error: bool) -> (String, thread::JoinHandle<()>) {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let apps = if runtime_error {
+            r#"[{"name":"main","origin":"script","enabled":true,"error":{"message":"runtime boom","hook":"loop"}}]"#
+        } else {
+            r#"[{"name":"main","origin":"script","enabled":true,"error":null}]"#
+        };
+        loop {
+            let Some(request) = server.recv_timeout(Duration::from_millis(500)).unwrap() else {
+                break;
+            };
+            let body = match request.url().split('?').next().unwrap() {
+                "/api/v1/device" => r#"{"uid":"declarative-test-device"}"#,
+                "/api/v1/capabilities" => r#"{"scriptUpdates":true}"#,
+                "/api/v1/apps/script-update/main" => r#"{}"#,
+                "/api/v1/system" => r#"{"scriptingEnabled":true}"#,
+                "/api/v1/apps" => apps,
+                "/api/v1/apps/main/data" => r#"{"count":7}"#,
+                "/api/v1/logs" => r#"{"next":1,"lines":["expected marker"]}"#,
+                other => panic!("unexpected declarative test HTTP route: {other}"),
+            };
+            let _ = request.respond(Response::from_string(body));
+        }
+    });
+    (url, worker)
+}
+
+#[test]
+fn declarative_project_tests_deploy_and_report_assertions_over_the_requested_window() {
+    let root = tempfile::tempdir().unwrap();
+    declarative_project(root.path(), "[[tests.assertion]]\nname='active'\nscript_active='main'\n\n[[tests.assertion]]\nname='state'\nscript='main'\npath='count'\nequals=7\n\n[[tests.assertion]]\nname='log'\nlog_contains='expected marker'");
+    let (url, worker) = test_http_server(false);
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "test",
+        "project",
+        "--manifest",
+        root.path().join("awtrix.toml").to_str().unwrap(),
+    ]);
+    assert!(
+        reqwest::blocking::get(format!("{url}/api/v1/device"))
+            .unwrap()
+            .status()
+            .is_success(),
+        "explicitly reused target remains available after the CLI exits"
+    );
+    worker.join().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["target_mode"], "external-reuse");
+    assert_eq!(result["deployment"]["succeeded"][0], "script:main");
+    assert_eq!(result["observed_window"]["complete"], true);
+    assert_eq!(result["assertions"].as_array().unwrap().len(), 3);
+    assert!(result["assertions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|assertion| assertion["passed"] == true));
+    assert_eq!(result["logs"]["exhaustive"], false);
+}
+
+#[test]
+fn explicit_external_target_takes_precedence_over_configured_headless_binary() {
+    let root = tempfile::tempdir().unwrap();
+    declarative_project(
+        root.path(),
+        "[[tests.assertion]]\nname='active'\nscript_active='main'",
+    );
+    let (url, worker) = test_http_server(false);
+    let output = run_with_binary_env(
+        &[
+            "--json",
+            "--target",
+            &url,
+            "test",
+            "project",
+            "--manifest",
+            root.path().join("awtrix.toml").to_str().unwrap(),
+        ],
+        "/does/not/exist/awtrix-linux",
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["target_mode"], "external-reuse");
+    worker.join().unwrap();
+}
+
+#[test]
+fn declarative_failed_assertion_has_a_report_and_nonzero_exit() {
+    let root = tempfile::tempdir().unwrap();
+    declarative_project(
+        root.path(),
+        "[[tests.assertion]]\nname='missing-log'\nlog_contains='not present'",
+    );
+    let (url, worker) = test_http_server(false);
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "test",
+        "project",
+        "--manifest",
+        root.path().join("awtrix.toml").to_str().unwrap(),
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["passed"], false);
+    assert_eq!(result["assertions"][0]["passed"], false);
+}
+
+#[test]
+fn declarative_runtime_berry_error_is_reported_and_fails_assertion() {
+    let root = tempfile::tempdir().unwrap();
+    declarative_project(
+        root.path(),
+        "[[tests.assertion]]\nname='active'\nscript_active='main'",
+    );
+    let (url, worker) = test_http_server(true);
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "test",
+        "project",
+        "--manifest",
+        root.path().join("awtrix.toml").to_str().unwrap(),
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["errors"][0]["code"], "BERRY_ERROR");
+    assert_eq!(
+        result["errors"][0]["runtime_error"]["message"],
+        "runtime boom"
+    );
+}
+
+#[test]
+fn declarative_external_tests_never_take_target_from_environment_or_default_profile() {
+    let output = run_with_env(
+        &["--json", "test", "project"],
+        "AWTRIX_URL",
+        "http://127.0.0.1:1",
+    );
+    assert_eq!(output.status.code(), Some(2));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "TARGET_REQUIRED");
+}
+
+#[test]
+fn declarative_tests_do_not_use_a_configured_default_profile_as_physical_target() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("config.json");
+    std::fs::write(
+        &config,
+        r#"{"profiles":{"desk":{"target":"http://127.0.0.1:1"}},"default":"desk"}"#,
+    )
+    .unwrap();
+    let output = run_with_config(&["--json", "test", "project"], &config);
+    assert_eq!(output.status.code(), Some(2));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "TARGET_REQUIRED");
+}
+
+#[test]
+fn declarative_schema_rejects_arbitrary_command_fields_before_any_http_request() {
+    let root = tempfile::tempdir().unwrap();
+    declarative_project(
+        root.path(),
+        "[[tests.assertion]]\nname='not-a-hook'\nlog_contains='marker'\ncommand='echo unsafe'",
+    );
+    let output = run(&[
+        "--json",
+        "--target",
+        "http://127.0.0.1:1",
+        "test",
+        "project",
+        "--manifest",
+        root.path().join("awtrix.toml").to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "PROJECT_INVALID");
+    assert!(result["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("commands"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn isolated_declarative_test_ctrl_c_stops_only_its_child_and_preserves_user_record() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("config.json");
+    let ownership = config.with_file_name("headless.json");
+    std::fs::write(&ownership, b"user-owned-record").unwrap();
+    let binary = root.path().join("fake-awtrix");
+    let pid_file = root.path().join("child.pid");
+    let data_file = root.path().join("child-data");
+    std::fs::write(&binary, format!("#!/usr/bin/env python3\nimport argparse,json\nfrom http.server import BaseHTTPRequestHandler,HTTPServer\np=argparse.ArgumentParser();p.add_argument('--data');p.add_argument('--port',type=int);p.add_argument('--width');p.add_argument('--height');p.add_argument('--webui');a=p.parse_args()\nopen({:?},'w').write(str(__import__('os').getpid()))\nopen({:?},'w').write(a.data)\nclass H(BaseHTTPRequestHandler):\n def do_GET(self):\n  b=(json.dumps({{'uid':'test-child'}}) if self.path.startswith('/api/v1/device') else json.dumps({{'next':0,'lines':[]}})).encode();self.send_response(200);self.send_header('Content-Length',str(len(b)));self.end_headers();self.wfile.write(b)\n def log_message(self,*args): pass\nHTTPServer(('127.0.0.1',a.port),H).serve_forever()\n", pid_file, data_file)).unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(root.path().join("awtrix.toml"), "[project]\nname='interrupt-test'\nversion='1'\n[tests]\nwindow_secs=30\n[[tests.assertion]]\nname='wait-for-interrupt'\nlog_contains='never'\n").unwrap();
+    let cli = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args([
+            "--json",
+            "test",
+            "project",
+            "--manifest",
+            root.path().join("awtrix.toml").to_str().unwrap(),
+            "--binary",
+            binary.to_str().unwrap(),
+            "--webui",
+            "unused.html",
+        ])
+        .env("AWTRIX_CONFIG", &config)
+        .env_remove("AWTRIX_URL")
+        .env_remove("AWTRIX_LINUX_BIN")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !pid_file.exists() && std::time::Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+    }
+    assert!(pid_file.exists(), "headless child did not start");
+    let child_pid: u32 = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+    let data = std::fs::read_to_string(&data_file).unwrap();
+    assert!(std::path::Path::new(&data).exists());
+    unsafe {
+        libc::kill(cli.id() as i32, libc::SIGINT);
+    }
+    let output = cli.wait_with_output().unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["error"]["code"], "INTERRUPTED");
+    assert!(
+        !std::path::Path::new(&format!("/proc/{child_pid}")).exists(),
+        "test-owned headless process must be reaped"
+    );
+    assert!(
+        !std::path::Path::new(&data).exists(),
+        "isolated data tree must be removed"
+    );
+    assert_eq!(std::fs::read(&ownership).unwrap(), b"user-owned-record");
+}
+
 fn run_with_config(args: &[&str], config: &std::path::Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_awtrix"))
         .args(args)
