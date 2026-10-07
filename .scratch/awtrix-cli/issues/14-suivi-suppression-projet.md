@@ -4,7 +4,7 @@
 
 **Blocked by:** 13 — Initialiser et déployer un projet TOML.
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 ## Acceptance criteria
 

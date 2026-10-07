@@ -27,8 +27,10 @@ Verified unique IDs, existing references, acyclic graph (Luna preflight).
 | 12 | done | ticket/12-resources / .worktrees/ticket-12 | c0dac40 | 40df070+1ed2174; review clear; integrated102db6d |
 | 11 | done | ticket/11-verify / .worktrees/ticket-11 | 6d26718 | ed3f70c+95a61ee+f005294+d63840b; review clear; integrated5463ee7 |
 | 15 | done | ticket/15-headless / .worktrees/ticket-15 | 6d26718 | a7f43ae+67d3bb7+c3491b4; review clear; integrated5463ee7; realheadless passed |
-| 13,18 | in-progress | ticket/13-project, ticket/18-dist | next journal commit | pending |
-| 03–06,14,16–17,19 | ready-for-agent, dependencies enforced | unassigned | — | — |
+| 13 | done | ticket/13-project / .worktrees/ticket-13 | 445270f | 8380053+fcea5b1+e36b6b4; preflight review clear; real protected example create/update/conflict passed; integrated |
+| 18 | in-progress (external blocker) | ticket/18-dist / .worktrees/ticket-18 | 445270f | 41af415; software review clear; Linux release/HTTP checks pass; integratedf27aa33; native macOS/Windows pending |
+| 03,14 | in-progress | ticket/03-pushed, ticket/14-tracking | next journal commit | pending |
+| 04–06,16–17,19 | ready-for-agent, dependencies enforced | unassigned | — | — |
 
 ## Shared contracts
 
@@ -47,6 +49,9 @@ Identity uses /device boardType+soc, not arbitrary strings. Describe offline and
   Default upstream all-target build GCC16 Werror fails; selected executable target succeeds.
 - Physical ESP32, ESP32-S3, TC002 targets: none explicitly supplied; physical checks cannot be claimed.
 - Cross-host distribution validation requires suitable runners; local host is Linux.
+- Ticket18 external blocker: native macOS ARM64 and Windows x86_64 MSVC help/version/HTTP/artifact
+  execution pending. CI workflow prepared but not triggered (no remote publication authorized).
+  Ticket19 cannot start until18 actually accepted. Continue other independent tickets.
 
 ## Progress log
 
@@ -70,3 +75,8 @@ Identity uses /device boardType+soc, not arbitrary strings. Describe offline and
   Required real AWTRIX1.2.2 start/HTTP/status/stop passed (documented provenance).
   Integrated fmt/clippy pass, 2unit+80CLI tests; independent re-review clear.
   Nonblocking stderr collection diagnostic label issue retained for final hardening.
+- Ticket13 integrated after preflight corrections and real protectedheadless checks.
+  Initial real422 diagnosed as invalid Berry starter (return true,1000); corrected app
+  class/draw/terminalreturn initializer+example. Exactsource update and stale conflict proven.
+  Ticket18 pipeline integratedf27aa33, not declared done. Rustls replaces nativeOpenSSL.
+  Lockfile merge resolved; integrated fmt/clippy pass,2unit+87CLI+2distribution tests.

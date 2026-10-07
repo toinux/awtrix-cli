@@ -6,6 +6,8 @@
 
 **Status:** in-progress
 
+**Blocker:** Native macOS ARM64 and Windows MSVC runtime/CI artifact checks require runners unavailable locally. Software pipeline and Linux validation integrated; no remote publication authorized.
+
 ## Acceptance criteria
 
 - [ ] Les systèmes et architectures hôtes pris en charge sont explicitement définis ; les artefacts correspondants sont générés de façon reproductible par un processus documenté.
