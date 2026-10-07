@@ -1,0 +1,16 @@
+[project]
+name = "example-project"
+version = "0.1.0"
+
+[[modules]]
+name = "helpers"
+file = "src/helpers.be"
+
+[[resources]]
+path = "/ICONS/project.gif"
+file = "assets/project.gif"
+
+[[scripts]]
+name = "main"
+file = "src/main.be"
+create = true

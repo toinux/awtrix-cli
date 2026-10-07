@@ -33,6 +33,329 @@ fn run_with_config(args: &[&str], config: &std::path::Path) -> Output {
 }
 
 #[test]
+fn project_init_creates_discoverable_manifest_and_valid_berry_entrypoint() {
+    let root = std::env::temp_dir().join(format!("awtrix-project-init-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let output = run(&["--json", "project", "init", root.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(root.join("awtrix.toml").exists());
+    let source = std::fs::read_to_string(root.join("src/main.be")).unwrap();
+    assert!(source.contains("# @name main"));
+    assert!(source.contains("def loop()"));
+    assert!(source.contains("def draw()"));
+    assert!(source.contains("return ProjectApp()"));
+    let description = run(&["--json", "describe", "project"]);
+    assert!(description.status.success());
+    assert!(String::from_utf8_lossy(&description.stdout).contains("awtrix project init"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn checked_in_project_example_preflights_its_gif_module_and_script() {
+    let output = run(&[
+        "--json",
+        "project",
+        "validate",
+        "--manifest",
+        "examples/project/awtrix.toml",
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["valid"], true);
+    assert_eq!(result["modules"], 1);
+    assert_eq!(result["resources"], 1);
+    assert_eq!(result["scripts"], 1);
+}
+
+#[test]
+fn project_validation_checks_all_local_files_before_any_remote_request() {
+    let root = std::env::temp_dir().join(format!("awtrix-project-invalid-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("awtrix.toml"), "[project]\nname='broken'\nversion='1'\n[[scripts]]\nname='main'\nfile='missing.be'\ncreate=true\n").unwrap();
+    let output = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "--json",
+        "project",
+        "deploy",
+        "--manifest",
+        root.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["error"]["code"], "PROJECT_INVALID");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn project_preflight_rejects_conflicting_create_config_targets_icon_magic_and_module_tokens() {
+    let root =
+        std::env::temp_dir().join(format!("awtrix-project-contracts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("main.be"), "print(1)\n").unwrap();
+    std::fs::write(root.join("expected.be"), "before\n").unwrap();
+    std::fs::write(root.join("one.json"), "{}\n").unwrap();
+    std::fs::write(root.join("two.json"), "{}\n").unwrap();
+    std::fs::write(root.join("icon.gif"), b"not a GIF").unwrap();
+    std::fs::write(root.join("bad-module.be"), "# @modulex\n").unwrap();
+    let cases = [
+        ("create-reference", "[project]\nname='x'\nversion='1'\n[[scripts]]\nname='main'\nfile='main.be'\ncreate=true\nexpected_source_file='expected.be'\n", "PROJECT_INVALID"),
+        ("duplicate-config", "[project]\nname='x'\nversion='1'\n[[scripts]]\nname='main'\nfile='main.be'\ncreate=true\n[[config]]\nscript='main'\nfile='one.json'\n[[config]]\nscript='main'\nfile='two.json'\n", "PROJECT_INVALID"),
+        ("icon-magic", "[project]\nname='x'\nversion='1'\n[[resources]]\npath='/ICONS/bad.gif'\nfile='icon.gif'\n", "INVALID_RESOURCE"),
+        ("module-token", "[project]\nname='x'\nversion='1'\n[[modules]]\nname='broken'\nfile='bad-module.be'\n", "PROJECT_INVALID"),
+    ];
+    for (name, manifest, expected_code) in cases {
+        let manifest_path = root.join(format!("{name}.toml"));
+        std::fs::write(&manifest_path, manifest).unwrap();
+        let output = run(&[
+            "--target",
+            "http://127.0.0.1:1",
+            "--json",
+            "project",
+            "deploy",
+            "--manifest",
+            manifest_path.to_str().unwrap(),
+        ]);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{name}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(value["error"]["code"], expected_code, "{name}");
+    }
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn project_deployment_orders_dependencies_and_reports_partial_failure_additively() {
+    let root = std::env::temp_dir().join(format!("awtrix-project-deploy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(
+        root.join("src/helpers.be"),
+        "# @module helpers\ndef value()\n return 1\nend\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("src/main.be"),
+        "# @name main\ndef loop()\n return true\nend\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("src/expected.be"), "old source\n").unwrap();
+    std::fs::write(root.join("icon.bin"), b"asset").unwrap();
+    std::fs::write(root.join("awtrix.toml"), "[project]\nname='sample'\nversion='1'\n[[modules]]\nname='helpers'\nfile='src/helpers.be'\n[[resources]]\npath='/FILES/icon.bin'\nfile='icon.bin'\n[[scripts]]\nname='main'\nfile='src/main.be'\nexpected_source_file='src/expected.be'\n").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut routes = Vec::new();
+        for _ in 0..6 {
+            let mut r = server.recv().unwrap();
+            routes.push((r.method().to_string(), r.url().to_owned()));
+            match routes.last().unwrap().1.as_str() {
+                "/api/v1/apps/script/helpers" => {
+                    let _ = r.respond(Response::from_string("{}"));
+                }
+                "/api/v1/files?dir=/FILES" => {
+                    let _ = r.respond(Response::from_string("{}"));
+                }
+                "/api/v1/capabilities" => {
+                    let _ = r.respond(Response::from_string("{\"scriptUpdates\":true}"));
+                }
+                "/api/v1/apps/script-update/main" => {
+                    let mut body = String::new();
+                    r.as_reader().read_to_string(&mut body).unwrap();
+                    assert_eq!(
+                        serde_json::from_str::<serde_json::Value>(&body).unwrap()
+                            ["expected_source"],
+                        "old source\n"
+                    );
+                    let _ = r.respond(Response::from_string("{}"));
+                }
+                "/api/v1/system" => {
+                    let _ = r.respond(Response::from_string("{\"scriptingEnabled\":true}"));
+                }
+                "/api/v1/apps" => {
+                    let _=r.respond(Response::from_string("[{\"name\":\"main\",\"origin\":\"script\",\"enabled\":true,\"error\":null}]"));
+                }
+                other => panic!("unexpected route {other}"),
+            }
+        }
+        routes
+    });
+    let out = run(&[
+        "--target",
+        &url,
+        "--json",
+        "project",
+        "deploy",
+        "--manifest",
+        root.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    let routes = worker.join().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(
+        routes.iter().map(|(_, u)| u.as_str()).collect::<Vec<_>>(),
+        vec![
+            "/api/v1/apps/script/helpers",
+            "/api/v1/files?dir=/FILES",
+            "/api/v1/capabilities",
+            "/api/v1/apps/script-update/main",
+            "/api/v1/system",
+            "/api/v1/apps"
+        ]
+    );
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["additive"], true);
+    assert_eq!(report["target_origin"], "command-line");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn project_stops_on_first_remote_error_and_reports_unrun_work_without_deleting_foreign_items() {
+    let root = std::env::temp_dir().join(format!("awtrix-project-partial-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("module.be"), "# @module helpers\n").unwrap();
+    std::fs::write(root.join("main.be"), "print(1)\n").unwrap();
+    std::fs::write(root.join("asset"), b"asset").unwrap();
+    std::fs::write(root.join("awtrix.toml"),"[project]\nname='partial'\nversion='1'\n[[modules]]\nname='helpers'\nfile='module.be'\n[[resources]]\npath='/FILES/a.bin'\nfile='asset'\n[[scripts]]\nname='main'\nfile='main.be'\ncreate=true\n").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let r = server.recv().unwrap();
+        assert_eq!(r.url(), "/api/v1/apps/script/helpers");
+        r.respond(Response::from_string("{}").with_status_code(500))
+            .unwrap();
+    });
+    let out = run(&[
+        "--target",
+        &url,
+        "--json",
+        "project",
+        "deploy",
+        "--manifest",
+        root.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    worker.join().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["error"]["code"], "PROJECT_DEPLOY_FAILED");
+    assert_eq!(report["report"]["succeeded"], serde_json::json!([]));
+    assert_eq!(report["report"]["failed_operation"], "module:helpers");
+    assert_eq!(
+        report["report"]["not_run"],
+        serde_json::json!(["resource:/FILES/a.bin", "script:main"])
+    );
+    assert_eq!(report["report"]["transactional"], false);
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn project_profile_is_used_below_explicit_and_environment_targets() {
+    let root = std::env::temp_dir().join(format!("awtrix-project-targets-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let config = root.join("config.json");
+    let project_server = Server::http("127.0.0.1:0").unwrap();
+    let project_url = format!("http://{}", project_server.server_addr());
+    assert!(run_with_config(
+        &["profile", "add", "project-device", "--target", &project_url],
+        &config
+    )
+    .status
+    .success());
+    std::fs::write(root.join("module.be"), "# @module helper\n").unwrap();
+    std::fs::write(root.join("awtrix.toml"), "[project]\nname='targets'\nversion='1'\n[target]\nprofile='project-device'\n[[modules]]\nname='helper'\nfile='module.be'\n").unwrap();
+    let project_worker = thread::spawn(move || {
+        let r = project_server.recv().unwrap();
+        assert_eq!(r.url(), "/api/v1/apps/script/helper");
+        r.respond(Response::from_string("{}")).unwrap();
+    });
+    let project = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args([
+            "--json",
+            "project",
+            "deploy",
+            "--manifest",
+            root.join("awtrix.toml").to_str().unwrap(),
+        ])
+        .env("AWTRIX_CONFIG", &config)
+        .env_remove("AWTRIX_URL")
+        .output()
+        .unwrap();
+    project_worker.join().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&project.stdout).unwrap()["target_origin"],
+        "project-profile"
+    );
+    let env_server = Server::http("127.0.0.1:0").unwrap();
+    let env_url = format!("http://{}", env_server.server_addr());
+    let env_worker = thread::spawn(move || {
+        let r = env_server.recv().unwrap();
+        r.respond(Response::from_string("{}")).unwrap();
+    });
+    let env_out = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args([
+            "--json",
+            "project",
+            "deploy",
+            "--manifest",
+            root.join("awtrix.toml").to_str().unwrap(),
+        ])
+        .env("AWTRIX_CONFIG", &config)
+        .env("AWTRIX_URL", &env_url)
+        .output()
+        .unwrap();
+    env_worker.join().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&env_out.stdout).unwrap()["target_origin"],
+        "environment"
+    );
+    let explicit_server = Server::http("127.0.0.1:0").unwrap();
+    let explicit_url = format!("http://{}", explicit_server.server_addr());
+    let explicit_worker = thread::spawn(move || {
+        let r = explicit_server.recv().unwrap();
+        r.respond(Response::from_string("{}")).unwrap();
+    });
+    let explicit = Command::new(env!("CARGO_BIN_EXE_awtrix"))
+        .args([
+            "--json",
+            "--target",
+            &explicit_url,
+            "project",
+            "deploy",
+            "--manifest",
+            root.join("awtrix.toml").to_str().unwrap(),
+        ])
+        .env("AWTRIX_CONFIG", &config)
+        .env("AWTRIX_URL", &env_url)
+        .output()
+        .unwrap();
+    explicit_worker.join().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&explicit.stdout).unwrap()["target_origin"],
+        "command-line"
+    );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn profile_crud_persists_isolated_config_and_never_displays_secrets() {
     let dir = std::env::temp_dir().join(format!("awtrix-profile-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

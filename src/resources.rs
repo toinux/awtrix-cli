@@ -84,7 +84,7 @@ fn validate_module(name: &str) -> crate::CliResult<()> {
         ))
     }
 }
-fn declares_module(source: &str) -> bool {
+pub(crate) fn declares_module(source: &str) -> bool {
     for line in source.lines() {
         let trimmed = line.trim_start();
         if trimmed.is_empty() {
@@ -100,7 +100,7 @@ fn declares_module(source: &str) -> bool {
     }
     false
 }
-fn validate_icon(dir: &str, path: &Path, bytes: &[u8]) -> crate::CliResult<()> {
+pub(crate) fn validate_icon(dir: &str, path: &Path, bytes: &[u8]) -> crate::CliResult<()> {
     if dir == "/ICONS" {
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let gif = bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a");

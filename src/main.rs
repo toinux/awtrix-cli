@@ -5,6 +5,7 @@ use std::{process::ExitCode, time::Duration};
 mod headless;
 mod logs;
 mod profiles;
+mod project;
 mod resources;
 mod screen;
 mod scripts;
@@ -63,6 +64,10 @@ enum Command {
     Headless {
         #[command(subcommand)]
         action: headless::Command,
+    },
+    Project {
+        #[command(subcommand)]
+        action: project::Command,
     },
 }
 
@@ -573,6 +578,18 @@ fn exit_code(code: &str) -> u8 {
 
 fn emit_error(code: &str, message: &str, machine: bool) {
     if machine {
+        if code == "PROJECT_DEPLOY_FAILED" {
+            if let Some((text, report)) = message.rsplit_once("; deployment report: ") {
+                if let Ok(report) = serde_json::from_str::<Value>(report) {
+                    println!(
+                        "{}",
+                        json!({"error":{"code":code,"message":text},"report":report})
+                    );
+                    eprintln!("awtrix: {code}: {text}");
+                    return;
+                }
+            }
+        }
         println!("{}", json!({"error":{"code":code,"message":message}}));
         eprintln!("awtrix: {code}: {message}");
     } else {
@@ -601,6 +618,9 @@ fn run(cli: &Cli) -> CliResult<Value> {
     }
     if let Command::Headless { action } = &cli.command {
         return headless::run(action);
+    }
+    if let Command::Project { action } = &cli.command {
+        return project::run(action, cli);
     }
     let explicit_target =
         std::env::args().any(|arg| arg == "--target" || arg.starts_with("--target="));
@@ -656,6 +676,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
         Command::Screen { action } => screen::run(action, &api),
         Command::Resources { action } => resources::run(action, &api),
         Command::Headless { .. } => unreachable!(),
+        Command::Project { .. } => unreachable!(),
     }
 }
 
@@ -721,6 +742,9 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
         "resources" | "resources files" | "resources modules" => resources::describe(None),
         "headless" | "headless start" | "headless stop" | "headless status" => {
             headless::describe(topic)
+        }
+        "project" | "project init" | "project validate" | "project deploy" => {
+            project::describe(topic)
         }
         "resources files list"
         | "resources files upload"

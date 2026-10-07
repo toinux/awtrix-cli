@@ -417,6 +417,39 @@ pub fn resolve(
     })
 }
 
+/// Resolve a project target between environment and the global default profile.
+pub fn resolve_project(
+    explicit: Option<&str>,
+    profile: Option<&str>,
+    project: Option<&str>,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> Result<Resolved> {
+    if explicit.is_some() || std::env::var("AWTRIX_URL").is_ok() || profile.is_some() {
+        return resolve(explicit, profile, username, password);
+    }
+    if let Some(name) = project {
+        let c = load()?;
+        let entry = c.profiles.get(name).ok_or((
+            "PROFILE_NOT_FOUND",
+            format!("project profile '{name}' does not exist"),
+        ))?;
+        return Ok(Resolved {
+            target: Some(entry.target.clone()),
+            origin: "project-profile",
+            username: username
+                .map(str::to_owned)
+                .or_else(|| std::env::var("AWTRIX_USERNAME").ok())
+                .or_else(|| entry.username.clone()),
+            password: password
+                .map(str::to_owned)
+                .or_else(|| std::env::var("AWTRIX_PASSWORD").ok())
+                .or_else(|| entry.password.clone()),
+        });
+    }
+    resolve(explicit, profile, username, password)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{config_path, Platform};
