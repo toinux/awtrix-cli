@@ -11,15 +11,18 @@ Scaffold a new local project in an unused directory, then validate offline:
 awtrix-cli project init ./demo
 awtrix-cli --json project validate --manifest ./demo/awtrix.toml
 awtrix-cli --target http://awtrix.local --json script deploy main \
-  --file ./demo/src/main.be --create --verify-secs 10
+  --file ./demo/src/main.ax --create --verify-secs 10
 ```
+
+AWTRIX scripts use the `.ax` filename extension. Berry modules remain `.be`
+files and are declared separately under `[[modules]]`.
 
 `--create` fails if the script already exists. For an update, read the remote
 source **before editing** with `script get NAME`, retain its exact bytes, and
 pass that original text as `--expected-source` when deploying the modified file.
 Use `script deploy --help` for syntax. Human-mode `script get` writes exact
 source to stdout; JSON mode returns a `source` string. POSIX command substitution
-strips trailing newlines, so `--expected-source "$(cat original.be)"` is not a
+strips trailing newlines, so `--expected-source "$(cat original.ax)"` is not a
 reliable exact-byte reference. Prefer project `expected_source_file` for file-based
 updates instead of manufacturing a shell-string reference.
 
@@ -54,7 +57,7 @@ awtrix-cli --target http://awtrix.local --json project deploy \
 
 A project manifest declares scripts, modules, resource files, configuration,
 and optional tests. Local paths are relative to the manifest. Scripts declare
-either `create = true` or `expected_source_file = "original/main.be"` containing
+either `create = true` or `expected_source_file = "original/main.ax"` containing
 the exact original remote source (a project-relative file captured before edits).
 For an update replace the create-only declaration with that reference; do not
 refresh the reference immediately before deployment to bypass a conflict.

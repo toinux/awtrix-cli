@@ -4,7 +4,7 @@ version = "0.1.0"
 
 [[scripts]]
 name = "broken"
-file = "broken.be"
+file = "broken.ax"
 create = true
 
 [tests]

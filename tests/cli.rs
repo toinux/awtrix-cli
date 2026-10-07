@@ -558,8 +558,8 @@ fn run_with_binary_env(args: &[&str], binary: &str) -> Output {
 
 fn declarative_project(root: &std::path::Path, assertion: &str) {
     std::fs::create_dir_all(root.join("src")).unwrap();
-    std::fs::write(root.join("src/main.be"), "# @name main\nclass Main\n  def init()\n    print(\"expected marker\")\n  end\n  def draw()\n  end\n  def loop()\n    return true\n  end\nend\nreturn Main()\n").unwrap();
-    std::fs::write(root.join("awtrix.toml"), format!("[project]\nname='declarative-test'\nversion='1'\n[[scripts]]\nname='main'\nfile='src/main.be'\ncreate=true\n\n[tests]\nwindow_secs=1\n\n{assertion}\n")).unwrap();
+    std::fs::write(root.join("src/main.ax"), "# @name main\nclass Main\n  def init()\n    print(\"expected marker\")\n  end\n  def draw()\n  end\n  def loop()\n    return true\n  end\nend\nreturn Main()\n").unwrap();
+    std::fs::write(root.join("awtrix.toml"), format!("[project]\nname='declarative-test'\nversion='1'\n[[scripts]]\nname='main'\nfile='src/main.ax'\ncreate=true\n\n[tests]\nwindow_secs=1\n\n{assertion}\n")).unwrap();
 }
 
 fn test_http_server(runtime_error: bool) -> (String, thread::JoinHandle<()>) {
@@ -663,11 +663,11 @@ fn run_visual_case(
     );
     std::fs::create_dir_all(root.path().join("src")).unwrap();
     std::fs::write(
-        root.path().join("src/main.be"),
+        root.path().join("src/main.ax"),
         "# @name main\nclass Main\n  def draw()\n    clear()\n  end\nend\nreturn Main()\n",
     )
     .unwrap();
-    std::fs::write(root.path().join("awtrix.toml"), format!("[project]\nname='visual-test'\nversion='1'\n[[scripts]]\nname='main'\nfile='src/main.be'\ncreate=true\n[tests]\nwindow_secs=1\n[[tests.assertion]]\nname='frame'\nreference='visual/reference.png'\nmax_channel_diff={max_channel_diff}\nmax_different_pixels={max_different_pixels}\nselect_app='main'\n")).unwrap();
+    std::fs::write(root.path().join("awtrix.toml"), format!("[project]\nname='visual-test'\nversion='1'\n[[scripts]]\nname='main'\nfile='src/main.ax'\ncreate=true\n[tests]\nwindow_secs=1\n[[tests.assertion]]\nname='frame'\nreference='visual/reference.png'\nmax_channel_diff={max_channel_diff}\nmax_different_pixels={max_different_pixels}\nselect_app='main'\n")).unwrap();
     let (url, worker) = visual_server(capture_size.0, capture_size.1, capture_pixel);
     let output = run(&[
         "--json",
@@ -1039,7 +1039,7 @@ fn run_with_config(args: &[&str], config: &std::path::Path) -> Output {
 }
 
 #[test]
-fn project_init_creates_discoverable_manifest_and_valid_berry_entrypoint() {
+fn project_init_creates_discoverable_manifest_and_valid_ax_entrypoint() {
     let root = std::env::temp_dir().join(format!("awtrix-project-init-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let output = run(&["--json", "project", "init", root.to_str().unwrap()]);
@@ -1049,14 +1049,39 @@ fn project_init_creates_discoverable_manifest_and_valid_berry_entrypoint() {
         String::from_utf8_lossy(&output.stdout)
     );
     assert!(root.join("awtrix.toml").exists());
-    let source = std::fs::read_to_string(root.join("src/main.be")).unwrap();
+    assert!(root.join("src/main.ax").is_file());
+    assert!(!root.join("src/main.be").exists());
+    let initialized: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(initialized["script"]
+        .as_str()
+        .unwrap()
+        .ends_with("src/main.ax"));
+    let source = std::fs::read_to_string(root.join("src/main.ax")).unwrap();
     assert!(source.contains("# @name main"));
     assert!(source.contains("def loop()"));
     assert!(source.contains("def draw()"));
     assert!(source.contains("return ProjectApp()"));
+    let validation = run(&[
+        "--json",
+        "project",
+        "validate",
+        "--manifest",
+        root.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    assert!(
+        validation.status.success(),
+        "{}",
+        String::from_utf8_lossy(&validation.stdout)
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&validation.stdout).unwrap()["valid"],
+        true
+    );
     let description = run(&["--json", "describe", "project"]);
     assert!(description.status.success());
     assert!(String::from_utf8_lossy(&description.stdout).contains("awtrix-cli project init"));
+    let script_description = run(&["--json", "describe", "script"]);
+    assert!(String::from_utf8_lossy(&script_description.stdout).contains("main.ax"));
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -1108,15 +1133,15 @@ fn project_preflight_rejects_conflicting_create_config_targets_icon_magic_and_mo
         std::env::temp_dir().join(format!("awtrix-project-contracts-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    std::fs::write(root.join("main.be"), "print(1)\n").unwrap();
+    std::fs::write(root.join("main.ax"), "print(1)\n").unwrap();
     std::fs::write(root.join("expected.be"), "before\n").unwrap();
     std::fs::write(root.join("one.json"), "{}\n").unwrap();
     std::fs::write(root.join("two.json"), "{}\n").unwrap();
     std::fs::write(root.join("icon.gif"), b"not a GIF").unwrap();
     std::fs::write(root.join("bad-module.be"), "# @modulex\n").unwrap();
     let cases = [
-        ("create-reference", "[project]\nname='x'\nversion='1'\n[[scripts]]\nname='main'\nfile='main.be'\ncreate=true\nexpected_source_file='expected.be'\n", "PROJECT_INVALID"),
-        ("duplicate-config", "[project]\nname='x'\nversion='1'\n[[scripts]]\nname='main'\nfile='main.be'\ncreate=true\n[[config]]\nscript='main'\nfile='one.json'\n[[config]]\nscript='main'\nfile='two.json'\n", "PROJECT_INVALID"),
+        ("create-reference", "[project]\nname='x'\nversion='1'\n[[scripts]]\nname='main'\nfile='main.ax'\ncreate=true\nexpected_source_file='expected.be'\n", "PROJECT_INVALID"),
+        ("duplicate-config", "[project]\nname='x'\nversion='1'\n[[scripts]]\nname='main'\nfile='main.ax'\ncreate=true\n[[config]]\nscript='main'\nfile='one.json'\n[[config]]\nscript='main'\nfile='two.json'\n", "PROJECT_INVALID"),
         ("icon-magic", "[project]\nname='x'\nversion='1'\n[[resources]]\npath='/ICONS/bad.gif'\nfile='icon.gif'\n", "INVALID_RESOURCE"),
         ("module-token", "[project]\nname='x'\nversion='1'\n[[modules]]\nname='broken'\nfile='bad-module.be'\n", "PROJECT_INVALID"),
     ];
@@ -1155,13 +1180,13 @@ fn project_deployment_orders_dependencies_and_reports_partial_failure_additively
     )
     .unwrap();
     std::fs::write(
-        root.join("src/main.be"),
+        root.join("src/main.ax"),
         "# @name main\ndef loop()\n return true\nend\n",
     )
     .unwrap();
     std::fs::write(root.join("src/expected.be"), "old source\n").unwrap();
     std::fs::write(root.join("icon.bin"), b"asset").unwrap();
-    std::fs::write(root.join("awtrix.toml"), "[project]\nname='sample'\nversion='1'\n[[modules]]\nname='helpers'\nfile='src/helpers.be'\n[[resources]]\npath='/FILES/icon.bin'\nfile='icon.bin'\n[[scripts]]\nname='main'\nfile='src/main.be'\nexpected_source_file='src/expected.be'\n").unwrap();
+    std::fs::write(root.join("awtrix.toml"), "[project]\nname='sample'\nversion='1'\n[[modules]]\nname='helpers'\nfile='src/helpers.be'\n[[resources]]\npath='/FILES/icon.bin'\nfile='icon.bin'\n[[scripts]]\nname='main'\nfile='src/main.ax'\nexpected_source_file='src/expected.be'\n").unwrap();
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
     let worker = thread::spawn(move || {
@@ -1506,9 +1531,9 @@ fn project_stops_on_first_remote_error_and_reports_unrun_work_without_deleting_f
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("module.be"), "# @module helpers\n").unwrap();
-    std::fs::write(root.join("main.be"), "print(1)\n").unwrap();
+    std::fs::write(root.join("main.ax"), "print(1)\n").unwrap();
     std::fs::write(root.join("asset"), b"asset").unwrap();
-    std::fs::write(root.join("awtrix.toml"),"[project]\nname='partial'\nversion='1'\n[[modules]]\nname='helpers'\nfile='module.be'\n[[resources]]\npath='/FILES/a.bin'\nfile='asset'\n[[scripts]]\nname='main'\nfile='main.be'\ncreate=true\n").unwrap();
+    std::fs::write(root.join("awtrix.toml"),"[project]\nname='partial'\nversion='1'\n[[modules]]\nname='helpers'\nfile='module.be'\n[[resources]]\npath='/FILES/a.bin'\nfile='asset'\n[[scripts]]\nname='main'\nfile='main.ax'\ncreate=true\n").unwrap();
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
     let worker = thread::spawn(move || {

@@ -170,7 +170,7 @@ fn real_awtrix_headless_declarative_runs_cover_success_failure_berry_error_and_i
     let visual = root.path().join("visual-project");
     std::fs::create_dir_all(visual.join("src")).unwrap();
     std::fs::create_dir_all(visual.join("reference")).unwrap();
-    std::fs::write(visual.join("src/main.be"), "# @name main\nclass Main\n  def draw()\n    clear()\n    pixel(0, 0, 0xFF0000)\n  end\nend\nreturn Main()\n").unwrap();
+    std::fs::write(visual.join("src/main.ax"), "# @name main\nclass Main\n  def draw()\n    clear()\n    pixel(0, 0, 0xFF0000)\n  end\nend\nreturn Main()\n").unwrap();
     let reference = visual.join("reference/red-pixel.png");
     let mut rgb = vec![0_u8; 52 * 16 * 3];
     rgb[..3].copy_from_slice(&[255, 0, 0]);
@@ -183,7 +183,7 @@ fn real_awtrix_headless_declarative_runs_cover_success_failure_berry_error_and_i
         .unwrap()
         .write_image_data(&rgb)
         .unwrap();
-    std::fs::write(visual.join("awtrix.toml"), "[project]\nname='visual-headless'\nversion='1'\n[[scripts]]\nname='main'\nfile='src/main.be'\ncreate=true\n[tests]\nwindow_secs=2\n[[tests.assertion]]\nname='stable-red-pixel'\nreference='reference/red-pixel.png'\nmax_channel_diff=0\nmax_different_pixels=0\nselect_app='main'\n").unwrap();
+    std::fs::write(visual.join("awtrix.toml"), "[project]\nname='visual-headless'\nversion='1'\n[[scripts]]\nname='main'\nfile='src/main.ax'\ncreate=true\n[tests]\nwindow_secs=2\n[[tests.assertion]]\nname='stable-red-pixel'\nreference='reference/red-pixel.png'\nmax_channel_diff=0\nmax_different_pixels=0\nselect_app='main'\n").unwrap();
     let visual_manifest = visual.join("awtrix.toml");
     let visual_output = run(visual_manifest.to_str().unwrap(), &binary, &webui, &config);
     assert_eq!(

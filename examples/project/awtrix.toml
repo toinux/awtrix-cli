@@ -12,7 +12,7 @@ file = "assets/project.gif"
 
 [[scripts]]
 name = "main"
-file = "src/main.be"
+file = "src/main.ax"
 create = true
 
 [tests]

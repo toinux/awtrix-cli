@@ -412,7 +412,7 @@ pub fn run(command: &Command, cli: &crate::Cli) -> Result<Value> {
 }
 
 fn init(path: &Path, requested: Option<&str>) -> Result<Value> {
-    if path.join("awtrix.toml").exists() || path.join("src/main.be").exists() {
+    if path.join("awtrix.toml").exists() || path.join("src/main.ax").exists() {
         return Err((
             "PROJECT_EXISTS",
             "refusing to overwrite an existing project manifest or starter script".into(),
@@ -424,15 +424,15 @@ fn init(path: &Path, requested: Option<&str>) -> Result<Value> {
         .map(str::to_owned)
         .or_else(|| path.file_name().and_then(|s| s.to_str()).map(str::to_owned))
         .unwrap_or_else(|| "awtrix-project".into());
-    let manifest = format!("[project]\nname = {name:?}\nversion = \"0.1.0\"\n\n[target]\n# profile = \"desk\"\n\n[[scripts]]\nname = \"main\"\nfile = \"src/main.be\"\ncreate = true\n");
+    let manifest = format!("[project]\nname = {name:?}\nversion = \"0.1.0\"\n\n[target]\n# profile = \"desk\"\n\n[[scripts]]\nname = \"main\"\nfile = \"src/main.ax\"\ncreate = true\n");
     fs::create_dir_all(path.join("src"))
         .map_err(|_| ("FILE_WRITE", "cannot create source directory".into()))?;
     fs::write(path.join("awtrix.toml"), manifest)
         .map_err(|_| ("FILE_WRITE", "cannot write manifest".into()))?;
-    fs::write(path.join("src/main.be"), "# @name main\nclass ProjectApp\n  def init()\n    print(\"project ready\")\n  end\n  def draw()\n  end\n  def loop()\n    return true\n  end\nend\nreturn ProjectApp()\n").map_err(|_| ("FILE_WRITE", "cannot write Berry script".into()))?;
+    fs::write(path.join("src/main.ax"), "# @name main\nclass ProjectApp\n  def init()\n    print(\"project ready\")\n  end\n  def draw()\n  end\n  def loop()\n    return true\n  end\nend\nreturn ProjectApp()\n").map_err(|_| ("FILE_WRITE", "cannot write Berry script".into()))?;
     load(&path.join("awtrix.toml"))?;
     Ok(
-        json!({"path":path,"manifest":path.join("awtrix.toml"),"script":path.join("src/main.be"),"valid":true}),
+        json!({"path":path,"manifest":path.join("awtrix.toml"),"script":path.join("src/main.ax"),"valid":true}),
     )
 }
 

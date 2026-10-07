@@ -159,7 +159,7 @@ awtrix-cli --profile desk settings power on
 awtrix-cli project init ./demo
 
 # Create the script only if its name is absent, then observe it for 10 seconds
-awtrix-cli --profile desk script deploy main --file ./demo/src/main.be \
+awtrix-cli --profile desk script deploy main --file ./demo/src/main.ax \
   --create --verify-secs 10
 
 # Inspect stored data and collect runtime feedback
