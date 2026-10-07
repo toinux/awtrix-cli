@@ -98,8 +98,20 @@ pub(crate) fn run_with_timeout(
     }
 }
 
+/// Capture one bounded framebuffer to a durable caller-selected PNG path.
+pub(crate) fn capture_png(
+    api: &crate::ApiClient,
+    output: &std::path::Path,
+    timeout: Duration,
+) -> crate::CliResult<Value> {
+    let command = Command::Capture {
+        output: output.to_path_buf(),
+    };
+    run_with_timeout(&command, api, timeout)
+}
+
 /// Persist a fully encoded PNG through tempfile's cross-platform atomic replacement operation.
-fn persist_sibling(path: &PathBuf, bytes: &[u8]) -> crate::CliResult<()> {
+pub(crate) fn persist_sibling(path: &PathBuf, bytes: &[u8]) -> crate::CliResult<()> {
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())

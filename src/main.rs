@@ -380,7 +380,19 @@ impl ApiClient {
         path: &str,
         body: &Value,
     ) -> CliResult<Value> {
-        let mut request = self.client.request(method, format!("{}{path}", self.base));
+        self.mutate_with_timeout(method, path, body, self.timeout)
+    }
+    pub(crate) fn mutate_with_timeout(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: &Value,
+        timeout: Duration,
+    ) -> CliResult<Value> {
+        let mut request = self
+            .client
+            .request(method, format!("{}{path}", self.base))
+            .timeout(timeout.min(self.timeout));
         if let Some(username) = &self.username {
             request = request.basic_auth(username, self.password.as_deref());
         }

@@ -2,6 +2,7 @@
 use clap::{Args, Subcommand};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -13,9 +14,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+const MAX_IMAGE_PIXELS: u64 = 4_194_304;
+
 #[derive(Subcommand)]
 pub(crate) enum Command {
     /// Deploy a project, then evaluate its declared assertions.
+    #[command(
+        long_about = "Deploy a project and evaluate its assertions over a bounded window. Visual assertions use manifest-relative 8-bit RGB/RGBA PNG references (RGBA alpha is ignored) and explicit max_channel_diff and max_different_pixels tolerances. They may select a known app before capture, but capture is not synchronized to an exact animation frame. Clock, animations and network activity can vary. Framebuffer output does not include physical brightness, LED color correction, or other physical display effects; headless visual checks are not physical validation."
+    )]
     Project(ArgsProject),
 }
 
@@ -54,7 +60,13 @@ pub(crate) fn validate_plan(plan: &TestPlan) -> crate::CliResult<()> {
     }
     let mut names = std::collections::HashSet::new();
     for assertion in &plan.assertion {
-        if assertion.name.trim().is_empty() || !names.insert(assertion.name.as_str()) {
+        if assertion.name.trim().is_empty()
+            || !assertion
+                .name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+            || !names.insert(assertion.name.as_str())
+        {
             return Err((
                 "PROJECT_INVALID",
                 "assertion names must be non-empty and unique".into(),
@@ -75,6 +87,23 @@ pub(crate) fn validate_plan(plan: &TestPlan) -> crate::CliResult<()> {
                 return Err(("PROJECT_INVALID", "log_contains must not be empty".into()))
             }
             AssertionKind::Log { .. } => {}
+            AssertionKind::Visual {
+                reference,
+                max_channel_diff: _,
+                max_different_pixels,
+                select_app,
+            } => {
+                if reference.as_os_str().is_empty() || *max_different_pixels > MAX_IMAGE_PIXELS {
+                    return Err((
+                        "PROJECT_INVALID",
+                        "visual reference/tolerance is invalid or exceeds the supported image size"
+                            .into(),
+                    ));
+                }
+                if let Some(name) = select_app {
+                    validate_script_name(name)?;
+                }
+            }
         }
     }
     Ok(())
@@ -88,7 +117,7 @@ pub(crate) fn validate_scripts_declared(
         let name = match &assertion.kind {
             AssertionKind::Active { script_active } => Some(script_active.as_str()),
             AssertionKind::State { script, .. } => Some(script.as_str()),
-            AssertionKind::Log { .. } => None,
+            AssertionKind::Log { .. } | AssertionKind::Visual { .. } => None,
         };
         if name.is_some_and(|name| !scripts.iter().any(|script| script == name)) {
             return Err((
@@ -134,6 +163,120 @@ pub(crate) enum AssertionKind {
     Log {
         log_contains: String,
     },
+    Visual {
+        reference: PathBuf,
+        #[serde(default)]
+        max_channel_diff: u8,
+        #[serde(default)]
+        max_different_pixels: u64,
+        #[serde(default)]
+        select_app: Option<String>,
+    },
+}
+
+fn decode_png(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
+    let decoder = png::Decoder::new(
+        fs::File::open(path).map_err(|_| format!("cannot read PNG {}", path.display()))?,
+    );
+    let mut reader = decoder
+        .read_info()
+        .map_err(|_| format!("invalid PNG {}", path.display()))?;
+    let info = reader.info();
+    let (width, height, color_type, bit_depth) =
+        (info.width, info.height, info.color_type, info.bit_depth);
+    let count = u64::from(width)
+        .checked_mul(u64::from(height))
+        .filter(|n| *n > 0 && *n <= MAX_IMAGE_PIXELS)
+        .ok_or_else(|| "PNG dimensions exceed supported pixel limit".to_owned())?;
+    if !matches!(color_type, png::ColorType::Rgb | png::ColorType::Rgba)
+        || bit_depth != png::BitDepth::Eight
+    {
+        return Err("visual PNG must be 8-bit RGB or RGBA".into());
+    }
+    let expected_size = usize::try_from(count)
+        .map_err(|_| "PNG dimensions overflow".to_owned())?
+        .checked_mul(if color_type == png::ColorType::Rgba {
+            4
+        } else {
+            3
+        })
+        .ok_or_else(|| "PNG decoded size overflow".to_owned())?;
+    if reader.output_buffer_size() > expected_size {
+        return Err("PNG decoded buffer exceeds dimensions".into());
+    }
+    let mut buffer = vec![0; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut buffer)
+        .map_err(|_| "invalid PNG pixel data".to_owned())?;
+    if info.width != width || info.height != height {
+        return Err("invalid PNG dimensions".into());
+    }
+    let pixels = match info.color_type {
+        #[expect(clippy::chunks_exact_to_as_chunks)]
+        png::ColorType::Rgba => buffer[..info.buffer_size()]
+            .chunks_exact(4)
+            .flat_map(|p| [p[0], p[1], p[2]])
+            .collect(),
+        png::ColorType::Rgb => buffer[..info.buffer_size()].to_vec(),
+        _ => return Err("visual PNG must be RGB or RGBA".into()),
+    };
+    if pixels.len() as u64 != count * 3 {
+        return Err("invalid PNG pixel buffer".into());
+    }
+    Ok((width, height, pixels))
+}
+
+fn compare_pixels(reference: &[u8], actual: &[u8], tolerance: u8) -> (u64, u8) {
+    let mut different = 0;
+    let mut maximum = 0;
+    #[expect(clippy::chunks_exact_to_as_chunks)]
+    for (expected, observed) in reference.chunks_exact(3).zip(actual.chunks_exact(3)) {
+        let delta = expected
+            .iter()
+            .zip(observed)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        maximum = maximum.max(delta);
+        if delta > tolerance {
+            different += 1;
+        }
+    }
+    (different, maximum)
+}
+
+fn artifact_path(reference: &Path, name: &str) -> PathBuf {
+    let stem = reference
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("reference");
+    reference.with_file_name(format!("{stem}.{name}.capture.png"))
+}
+
+fn write_difference_png(
+    path: &Path,
+    width: u32,
+    height: u32,
+    expected: &[u8],
+    actual: &[u8],
+) -> crate::CliResult<()> {
+    let difference: Vec<u8> = expected
+        .iter()
+        .zip(actual)
+        .map(|(a, b)| a.abs_diff(*b))
+        .collect();
+    let mut encoded = Vec::new();
+    let mut encoder = png::Encoder::new(&mut encoded, width, height);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder
+        .write_header()
+        .map_err(|_| ("FILE_WRITE", "cannot encode visual diff PNG header".into()))?;
+    writer
+        .write_image_data(&difference)
+        .map_err(|_| ("FILE_WRITE", "cannot encode visual diff PNG pixels".into()))?;
+    drop(writer);
+    crate::screen::persist_sibling(&path.to_path_buf(), &encoded)
 }
 
 pub(crate) fn run(command: &Command, cli: &crate::Cli) -> crate::CliResult<Value> {
@@ -173,7 +316,7 @@ pub(crate) fn run(command: &Command, cli: &crate::Cli) -> crate::CliResult<Value
                 .map(str::to_owned)
         })
         .collect::<Vec<_>>();
-    let plan: TestPlan = document
+    let mut plan: TestPlan = document
         .get("tests")
         .cloned()
         .ok_or((
@@ -188,6 +331,50 @@ pub(crate) fn run(command: &Command, cli: &crate::Cli) -> crate::CliResult<Value
             )
         })?;
     validate_plan(&plan)?;
+    let base = args.manifest.parent().unwrap_or_else(|| Path::new("."));
+    let mut reference_paths = Vec::new();
+    for assertion in &mut plan.assertion {
+        if let AssertionKind::Visual { reference, .. } = &mut assertion.kind {
+            if reference.is_absolute() {
+                return Err((
+                    "PROJECT_INVALID",
+                    "visual references must be relative to manifest".into(),
+                ));
+            }
+            *reference = base.join(&*reference);
+            decode_png(reference).map_err(|e| ("IMAGE_INVALID", e))?;
+            reference_paths.push(fs::canonicalize(&*reference).map_err(|_| {
+                (
+                    "IMAGE_INVALID",
+                    format!("cannot resolve reference PNG {}", reference.display()),
+                )
+            })?);
+        }
+    }
+    for assertion in &plan.assertion {
+        if let AssertionKind::Visual { reference, .. } = &assertion.kind {
+            for artifact in [
+                artifact_path(reference, &assertion.name),
+                artifact_path(reference, &assertion.name).with_extension("diff.png"),
+            ] {
+                let parent = artifact.parent().unwrap_or_else(|| Path::new("."));
+                let canonical_artifact = fs::canonicalize(parent)
+                    .map_err(|_| {
+                        (
+                            "FILE_WRITE",
+                            "cannot resolve visual artifact directory".into(),
+                        )
+                    })?
+                    .join(artifact.file_name().unwrap_or_default());
+                if reference_paths.contains(&canonical_artifact) {
+                    return Err((
+                        "PROJECT_INVALID",
+                        "visual artifact path would overwrite a reference PNG".into(),
+                    ));
+                }
+            }
+        }
+    }
     let interrupted = Arc::new(AtomicBool::new(false));
     let signal = interrupted.clone();
     ctrlc::set_handler(move || signal.store(true, Ordering::SeqCst)).map_err(|e| {
@@ -293,6 +480,10 @@ fn validate_assertion_fields(document: &toml::Value) -> crate::CliResult<()> {
         "path",
         "equals",
         "log_contains",
+        "reference",
+        "max_channel_diff",
+        "max_different_pixels",
+        "select_app",
     ];
     for entry in entries {
         let table = entry.as_table().ok_or((
@@ -311,7 +502,21 @@ fn validate_assertion_fields(document: &toml::Value) -> crate::CliResult<()> {
         let valid = table.contains_key("name")
             && ((has_active && !has_log && state_count == 0)
                 || (has_log && !has_active && state_count == 0)
-                || (!has_active && !has_log && state_count == 3));
+                || (!has_active && !has_log && state_count == 3)
+                || (!has_active
+                    && !has_log
+                    && state_count == 0
+                    && table.contains_key("reference")
+                    && table.keys().all(|key| {
+                        [
+                            "name",
+                            "reference",
+                            "max_channel_diff",
+                            "max_different_pixels",
+                            "select_app",
+                        ]
+                        .contains(&key.as_str())
+                    })));
         if !valid {
             return Err((
                 "PROJECT_INVALID",
@@ -429,6 +634,33 @@ fn evaluate(
                     let matched = results[index]["passed"] == true || found;
                     (matched, json!({"contains":log_contains,"matched":matched,"observed_lines":evidence,"history_limit":34,"exhaustive":false}))
                 }),
+                AssertionKind::Visual { reference, max_channel_diff, max_different_pixels, select_app } => (|| {
+                    if results[index]["passed"] == true {
+                        return Ok((true, results[index]["observed"].clone()));
+                    }
+                    if let Some(name) = select_app {
+                        validate_script_name(name)?;
+                        let left = deadline.saturating_sub(started.elapsed());
+                        if left.is_zero() { return Err(("TIMEOUT", "visual assertion deadline expired before app selection".into())); }
+                        // AWTRIX NG OpenAPI: PUT /api/v1/apps/active accepts {name, fast}.
+                        api.mutate_with_timeout(reqwest::Method::PUT, "/api/v1/apps/active", &json!({"name":name,"fast":true}), left)?;
+                    }
+                    let output = artifact_path(reference, &assertion.name);
+                    if output == *reference { return Err(("PROJECT_INVALID", "visual capture must not overwrite its reference image".into())); }
+                    let left = deadline.saturating_sub(started.elapsed());
+                    if left.is_zero() { return Err(("TIMEOUT", "visual assertion deadline expired before capture".into())); }
+                    let capture = crate::screen::capture_png(api, &output, left)?;
+                    let actual = decode_png(&output).map_err(|e| ("IMAGE_INVALID", e))?;
+                    let expected = decode_png(reference).map_err(|e| ("IMAGE_INVALID", e))?;
+                    if (actual.0, actual.1) != (expected.0, expected.1) {
+                        return Err(("IMAGE_DIMENSIONS", format!("capture dimensions {}x{} differ from reference {}x{}", actual.0, actual.1, expected.0, expected.1)));
+                    }
+                    let (different, maximum) = compare_pixels(&expected.2, &actual.2, *max_channel_diff);
+                    let diff_path = output.with_extension("diff.png");
+                    write_difference_png(&diff_path, actual.0, actual.1, &expected.2, &actual.2)?;
+                    let passed = different <= *max_different_pixels;
+                    Ok((passed, json!({"capture":capture,"diff":{"path":diff_path,"format":"png"},"reference":reference,"different_pixels":different,"max_channel_difference":maximum,"allowed_different_pixels":max_different_pixels,"allowed_channel_difference":max_channel_diff,"dimensions":{"width":actual.0,"height":actual.1}})))
+                })(),
             };
             match outcome {
                 Ok((passed, observed)) => {
@@ -466,6 +698,9 @@ fn evaluate(
     )
 }
 
+#[allow(unreachable_code)]
 pub(crate) fn describe() -> Value {
+    // Kept here so offline structured discovery has the same visual contract as the runner.
+    return json!({"command":"test project","parameters":{"--manifest":"project TOML path","--target":"explicit external target, never stopped","--binary":"caller-supplied AWTRIX Linux executable","--webui":"optional Web UI asset path","--ready-timeout-secs":"1..300 seconds"},"outputs":{"passed":"overall boolean","assertions":[{"name":"safe unique assertion name","passed":"boolean","observed":"metrics plus capture and diff artifact paths; no pixel arrays"}],"errors":[{"code":"IMAGE_INVALID, IMAGE_DIMENSIONS, or collection error; distinct from render mismatch"}]},"schema":{"[tests]":{"window_secs":"integer 1..3600; bounds all observation requests including app selection and capture"},"[[tests.assertion]] visual":{"name":"unique alphanumeric/underscore/hyphen name","reference":"required 8-bit RGB/RGBA PNG path relative to manifest; RGBA alpha is ignored","max_channel_diff":"0..255, default 0; pixel differs if any RGB channel absolute difference is greater than this","max_different_pixels":"0..4,194,304, default 0; maximum differing pixel count","select_app":"optional app name; PUT /api/v1/apps/active with {name,fast:true} before capture"},"artifact":"<reference stem>.<assertion name>.capture.png plus same stem .diff.png beside reference; reference is never overwritten"},"examples":["[[tests.assertion]]\nname='berry-display'\nreference='visual/berry.png'\nmax_channel_diff=2\nmax_different_pixels=1\nselect_app='main'"],"limitations":["No exact-frame synchronization is promised. Clock, animation and network activity affect captures. Framebuffer PNGs do not model physical brightness or LED corrections."]});
     json!({"command":"test project","parameters":{"--manifest":"project TOML path (default awtrix.toml)","--target":"explicit external HTTP target; required in reuse mode; never stopped","--binary":"caller-provided AWTRIX Linux executable for isolated tests (or AWTRIX_LINUX_BIN)","--webui":"optional AWTRIX web UI asset path; only valid with --binary","--ready-timeout-secs":"isolated readiness bound 1..300 seconds (default 15)","--username":"HTTP Basic username, or AWTRIX_USERNAME","--password":"HTTP Basic password, or AWTRIX_PASSWORD","--timeout":"maximum HTTP request time in milliseconds (default 3000)","--json":"compact JSON result","--fields":"comma-separated output fields","--profile":"not used to select external test target"},"inputs":["project TOML and relative script/module/resource/config files","bounded AWTRIX NG HTTP state, app inventory and log routes"],"outputs":{"passed":"boolean","assertions":[{"name":"string","passed":"boolean","observed":"assertion-specific evidence"}],"errors":[{"assertion":"name","code":"Berry or collection error","runtime_error":"reported device diagnostic when available"}],"deployment":"ordinary additive project deployment report","isolation":{"data_path":"fresh temporary data directory (isolated mode)","project_tracking_path":"temporary project tracking state (isolated mode)","removed_after_command":true},"observed_window":{"requested_secs":"integer","duration_secs":"number","complete":"boolean"},"logs":{"history_limit":34,"exhaustive":false},"runtime_success_guaranteed":false},"schema":{"[tests]":{"window_secs":"integer 1..3600, default 10"},"[[tests.assertion]]":{"name":"string","script_active":"script name; must remain enabled with origin=script and explicit error=null at every poll","script + path + equals":"script data value equals JSON value at least once during the window","log_contains":"literal substring observed in current bounded log buffer during the window"}},"examples":["awtrix --json test project --manifest awtrix.toml --binary ./awtrix-linux","awtrix --json --target http://192.0.2.1 test project --manifest awtrix.toml"],"prerequisites":["test plan with at least one assertion","caller-provided AWTRIX Linux executable for isolated mode; or explicit --target URL for external reuse"],"limitations":["log ring buffer retains at most 34 lines; historical completeness is not guaranteed","active means no error observed at each poll, not proof of general correctness","headless does not validate sensors, audio, or physical ESP32 resource budgets"]})
 }
