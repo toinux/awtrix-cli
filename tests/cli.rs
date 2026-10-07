@@ -1402,6 +1402,141 @@ fn pushed_app_remote_capacity_rejection_is_reported_as_http_failure() {
 }
 
 #[test]
+fn notifications_send_named_delete_active_and_uncertain_post_follow_documented_routes() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Post);
+        assert_eq!(request.url(), "/api/v1/notifications");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["hold"], true);
+        assert_eq!(body["stack"], true);
+        assert_eq!(body["wakeup"], true);
+        assert_eq!(body["name"], "build");
+        assert_eq!(body["text"], "ready");
+        request.respond(Response::from_string("{}")).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Delete);
+        assert_eq!(request.url(), "/api/v1/notifications/active");
+        request.respond(Response::from_string("{}")).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Delete);
+        assert_eq!(request.url(), "/api/v1/notifications/build");
+        request.respond(Response::from_string("{}")).unwrap();
+    });
+    let sent = run(&[
+        "--target",
+        &url,
+        "--json",
+        "notify",
+        "send",
+        "--payload",
+        r#"{"text":"ready"}"#,
+        "--hold",
+        "--stack",
+        "--wakeup",
+        "--name",
+        "build",
+    ]);
+    assert!(
+        sent.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sent.stdout)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&sent.stdout).unwrap();
+    assert_eq!(result["visibility"], "unknown");
+    assert!(
+        run(&["--target", &url, "--json", "notify", "delete-active"])
+            .status
+            .success()
+    );
+    assert!(
+        run(&["--target", &url, "--json", "notify", "delete", "build"])
+            .status
+            .success()
+    );
+    worker.join().unwrap();
+
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Post);
+        thread::sleep(Duration::from_millis(200));
+        let _ = request.respond(Response::from_string("{}"));
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "--timeout",
+        "50",
+        "notify",
+        "send",
+        "--payload",
+        r#"{"text":"maybe"}"#,
+    ]);
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "OUTCOME_UNKNOWN");
+    assert_eq!(output.status.code(), Some(1));
+    worker.join().unwrap();
+}
+
+#[test]
+fn notifications_validate_locally_and_report_queue_full_without_leaking_remote_body() {
+    let invalid = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "--json",
+        "notify",
+        "send",
+        "--payload",
+        r#"{"text":7}"#,
+    ]);
+    assert_eq!(invalid.status.code(), Some(2));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&invalid.stdout).unwrap()["error"]["code"],
+        "ARGUMENT"
+    );
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Post);
+        request
+            .respond(Response::from_string("private queue details").with_status_code(507))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "notify",
+        "send",
+        "--payload",
+        r#"{"text":"queued?"}"#,
+    ]);
+    worker.join().unwrap();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["error"]["code"], "QUEUE_FULL");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private queue details"));
+    for topic in ["notify send", "notify delete-active", "notify delete"] {
+        let description = run(&["--json", "describe", topic]);
+        assert!(
+            description.status.success(),
+            "{}",
+            String::from_utf8_lossy(&description.stderr)
+        );
+        let schema: serde_json::Value = serde_json::from_slice(&description.stdout).unwrap();
+        assert!(schema["parameters"].is_object());
+        assert!(!schema["output_fields"].as_array().unwrap().is_empty());
+    }
+}
+
+#[test]
 fn pushed_app_large_payload_uses_variant_specific_official_http_limit() {
     for (variant, board, soc, should_write) in [
         ("ESP32", "awtrixng", "esp32", false),

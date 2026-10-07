@@ -5,6 +5,7 @@ use std::{process::ExitCode, time::Duration};
 mod apps;
 mod headless;
 mod logs;
+mod notifications;
 mod profiles;
 mod project;
 mod resources;
@@ -74,6 +75,11 @@ enum Command {
     Apps {
         #[command(subcommand)]
         action: apps::Command,
+    },
+    /// Send or dismiss a temporary notification.
+    Notify {
+        #[command(subcommand)]
+        action: notifications::Command,
     },
 }
 
@@ -631,6 +637,9 @@ fn run(cli: &Cli) -> CliResult<Value> {
     if let Command::Apps { action } = &cli.command {
         apps::validate(action).map_err(|message| ("ARGUMENT", message))?;
     }
+    if let Command::Notify { action } = &cli.command {
+        notifications::validate(action).map_err(|message| ("ARGUMENT", message))?;
+    }
     let explicit_target =
         std::env::args().any(|arg| arg == "--target" || arg.starts_with("--target="));
     let resolved = profiles::resolve(
@@ -651,6 +660,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
     )?;
     match &cli.command {
         Command::Apps { action } => apps::run(action, &api),
+        Command::Notify { action } => notifications::run(action, &api),
         Command::Device {
             action: DeviceCommand::State,
         } => api.get("/api/v1/device"),
@@ -754,6 +764,9 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
             headless::describe(topic)
         }
         "apps" | "apps create" | "apps update" | "apps delete" => apps::describe(topic),
+        "notify" | "notify send" | "notify delete" | "notify delete-active" => {
+            notifications::describe(topic)
+        }
         "project" | "project init" | "project validate" | "project deploy" | "project prune"
         | "project reconcile" => project::describe(topic),
         "resources files list"
