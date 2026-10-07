@@ -8,6 +8,7 @@ mod logs;
 mod notifications;
 mod profiles;
 mod project;
+mod release_notice;
 mod resources;
 mod screen;
 mod scripts;
@@ -508,6 +509,10 @@ fn main() -> ExitCode {
             };
         }
     };
+    let notice = release_notice::notice();
+    if let Some(notice) = notice {
+        eprintln!("awtrix: {notice}");
+    }
     match run(&cli) {
         Ok(_)
             if matches!(

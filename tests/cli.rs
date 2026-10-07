@@ -64,6 +64,151 @@ fn executable_help_and_version_use_the_published_binary_name() {
 }
 
 #[test]
+fn release_notice_is_stable_cached_and_best_effort_at_the_cli_boundary() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/releases", server.server_addr());
+    let root = tempfile::tempdir().unwrap();
+    let cache = root.path().join("release-cache.json");
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/releases");
+        request.respond(Response::from_string(r#"[{"tag_name":"v99.0.0","prerelease":false},{"tag_name":"v100.0.0-rc.1","prerelease":true}]"#)).unwrap();
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .arg("describe")
+        .arg("device")
+        .env("AWTRIX_RELEASE_API_URL", endpoint)
+        .env("AWTRIX_RELEASE_CACHE", &cache)
+        .env_remove("AWTRIX_NO_UPDATE_CHECK")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("99.0.0"));
+    assert!(output.stdout.starts_with(b"{"));
+    assert!(cache.exists());
+
+    let cached = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["describe", "device"])
+        .env("AWTRIX_RELEASE_API_URL", "http://127.0.0.1:1/releases")
+        .env("AWTRIX_RELEASE_CACHE", &cache)
+        .env_remove("AWTRIX_NO_UPDATE_CHECK")
+        .output()
+        .unwrap();
+    assert!(cached.status.success());
+    assert!(!String::from_utf8_lossy(&cached.stderr).contains("newer stable"));
+}
+
+#[test]
+fn release_notice_does_not_notify_for_exact_current_version() {
+    let body = format!(
+        r#"[{{"tag_name":"v{}","prerelease":false}}]"#,
+        env!("CARGO_PKG_VERSION")
+    );
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/releases", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(body))
+            .unwrap()
+    });
+    let root = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "describe", "device"])
+        .env("AWTRIX_RELEASE_API_URL", endpoint)
+        .env("AWTRIX_RELEASE_CACHE", root.path().join("cache"))
+        .env_remove("AWTRIX_NO_UPDATE_CHECK")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("newer stable"));
+}
+
+#[test]
+fn release_notice_ignores_prereleases() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/releases", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"[{"tag_name":"v99.0.0-rc.1","prerelease":true}]"#,
+            ))
+            .unwrap()
+    });
+    let root = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["describe", "device"])
+        .env("AWTRIX_RELEASE_API_URL", endpoint)
+        .env("AWTRIX_RELEASE_CACHE", root.path().join("cache"))
+        .env_remove("AWTRIX_NO_UPDATE_CHECK")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("newer stable"));
+}
+
+#[test]
+fn release_notice_opt_out_makes_no_request() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    assert!(Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["describe", "device"])
+        .env(
+            "AWTRIX_RELEASE_API_URL",
+            format!("http://{}/releases", server.server_addr())
+        )
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap()
+        .status
+        .success());
+    assert!(server
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn release_notice_skips_request_when_attempt_cannot_be_cached() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/releases", server.server_addr());
+    let root = tempfile::tempdir().unwrap();
+    let blocker = root.path().join("not-a-directory");
+    std::fs::write(&blocker, "file").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "describe", "device"])
+        .env("AWTRIX_RELEASE_API_URL", endpoint)
+        .env("AWTRIX_RELEASE_CACHE", blocker.join("cache"))
+        .env_remove("AWTRIX_NO_UPDATE_CHECK")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(server
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn release_notice_outage_preserves_success_and_json_stdout() {
+    let root = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "describe", "device"])
+        .env("AWTRIX_RELEASE_API_URL", "http://127.0.0.1:1/releases")
+        .env("AWTRIX_RELEASE_CACHE", root.path().join("cache"))
+        .env_remove("AWTRIX_NO_UPDATE_CHECK")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(serde_json::from_slice::<serde_json::Value>(&output.stdout).is_ok());
+}
+
+#[test]
 fn settings_patch_invalid_field_does_not_send_http() {
     let output = run(&[
         "--json",
