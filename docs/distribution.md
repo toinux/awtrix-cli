@@ -79,8 +79,10 @@ not the symlink entry. The validated file is staged beside that executable and
 `self-replace` performs the platform-specific handoff, including Windows locking
 and delayed cleanup. Windows also keeps a temporary recovery copy while the
 handoff runs and restores it if replacement fails before the new executable is
-installed. A failure reports the release page/manual next step; regular
-release-notice checks never install anything.
+installed. If the new executable is installed but backup cleanup fails, the
+command still reports successful installation with a cleanup warning. Other
+failures report the release page/manual next step; regular release-notice checks
+never install anything.
 
 In debug builds only, `AWTRIX_UPDATE_API_URL`, `AWTRIX_UPDATE_ASSET_BASE_URL`,
 and `AWTRIX_UPDATE_EXECUTABLE` allow local fixture servers and temporary target

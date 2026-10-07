@@ -83,11 +83,15 @@ fn run_for(target: PathBuf) -> Result<String, (&'static str, String)> {
                 .into(),
         ));
     }
-    replace(&target, &bytes)?;
-    Ok(format!(
+    let cleanup_warning = replace(&target, &bytes)?;
+    let message = format!(
         "Updated to {}. Restart awtrix-cli to use the new version.",
         release.tag_name
-    ))
+    );
+    Ok(match cleanup_warning {
+        Some(warning) => format!("{message} Warning: {warning}"),
+        None => message,
+    })
 }
 
 fn endpoints() -> (String, String) {
@@ -193,7 +197,10 @@ fn current_exe() -> Result<PathBuf, (&'static str, String)> {
     std::env::current_exe().map_err(|_| manual("the running executable path could not be resolved"))
 }
 
-fn replace(target: &std::path::Path, bytes: &[u8]) -> Result<(), (&'static str, String)> {
+fn replace(
+    target: &std::path::Path,
+    bytes: &[u8],
+) -> Result<Option<String>, (&'static str, String)> {
     let parent = target
         .parent()
         .ok_or_else(|| manual("the executable has no safe parent directory"))?;
@@ -269,19 +276,18 @@ fn replace(target: &std::path::Path, bytes: &[u8]) -> Result<(), (&'static str, 
         }
 
         #[cfg(windows)]
-        {
+        let cleanup_warning = {
             let backup_path = backup.path().to_path_buf();
-            backup.close().map_err(|error| {
-                (
-                    "UPDATE_CLEANUP",
-                    format!(
-                        "update installed, but the previous executable backup at {} could not be removed ({error})",
-                        backup_path.display()
-                    ),
+            backup.close().err().map(|error| {
+                format!(
+                    "the update installed successfully, but the previous executable backup at {} could not be removed ({error})",
+                    backup_path.display()
                 )
-            })?;
-        }
-        return Ok(());
+            })
+        };
+        #[cfg(not(windows))]
+        let cleanup_warning = None;
+        return Ok(cleanup_warning);
     }
 
     #[cfg(not(debug_assertions))]
@@ -290,7 +296,7 @@ fn replace(target: &std::path::Path, bytes: &[u8]) -> Result<(), (&'static str, 
     ));
 
     #[cfg(debug_assertions)]
-    replace_fixture_target(target, temporary)
+    replace_fixture_target(target, temporary).map(|()| None)
 }
 
 #[cfg(debug_assertions)]
