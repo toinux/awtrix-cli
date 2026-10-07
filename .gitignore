@@ -3,3 +3,7 @@
 /.automation-runtime/
 *.log
 .awtrix-tracking-*.json
+
+# Local tracker archives migrated to GitHub Issues
+/.scratch/awtrix-cli/spec.md
+/.scratch/awtrix-cli/issues/

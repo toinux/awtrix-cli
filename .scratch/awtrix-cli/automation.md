@@ -36,7 +36,7 @@ Verified unique IDs, existing references, acyclic graph (Luna preflight).
 | 05 | done | ticket/05-rotation / .worktrees/ticket-05 | c3ccad8 | 8e8f136+f07565a; finalreview clear; integratedad44a83 |
 | 17 | done | ticket/17-visual / .worktrees/ticket-17 | c3ccad8 | 0b27e36+b4ba2d3; finalreview clear; integratedad44a83; actualrealvisualtest passed |
 | 06 | done | ticket/06-settings / .worktrees/ticket-06 | 8ed1bb2 | c2f6ac5+ccea906+07c9311; secretredactionfixed; finalreview clear; integrated670d0ee |
-| 19 | ready-for-agent | unassigned | — | all software prerequisites done; native CI 37660685612 unlocks acceptance work |
+| 19 | done | ticket/19-validation / .worktrees/ticket-19-validation | c8be25c | 9737cb5+8257513; Luna review clear; integration ab508bd; physical ESP32 1.2.2 workflow passed; docs/validation.md |
 
 ## Shared contracts
 
@@ -292,4 +292,19 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
   ID11502485325; awtrix-cli-x86_64-unknown-linux-gnu ID11502365895;
   awtrix-cli-x86_64-pc-windows-msvc ID11501964511. No release published.
 - Ticket18 remains accepted with fresh post-rename native evidence. Ticket19 still
-  ready, not started. Use awtrix-cli for its scenario and documentation.
+   ready, not started. Use awtrix-cli for its scenario and documentation.
+
+## GitHub tracker migration — 2026-10-07
+
+- User requested migrating local tickets to GitHub while preserving open/closed state.
+- Specification migrated to https://github.com/toinux/awtrix-cli/issues/1 with all
+  19 implementation tickets linked as native sub-issues and a completion checklist.
+- Historical tickets 01–18 map to completed GitHub issues #2–#19. Completion evidence
+  from this journal was copied into issue comments; acceptance text was preserved.
+- Historical ticket 19 maps to completed GitHub issue #20.
+  Native blocked-by links preserve the original graph; all prerequisites are closed.
+- GitHub is now authoritative for specification/ticket state, comments and dependencies.
+  Local spec/ticket files remain historical archives; README.md in this directory records
+  their correspondence. This journal remains the local integration evidence source.
+- The implement-spec command now reads the live GitHub parent and sub-issues, reconciles
+  existing local branches using the migration map, and updates GitHub after integration.

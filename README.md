@@ -320,8 +320,8 @@ verification window does not prove future script correctness. Device logs retain
 only the latest 34 lines, so log collection is not exhaustive.
 
 The [distribution documentation](docs/distribution.md) and
-[physical validation ticket](.scratch/awtrix-cli/issues/19-validation-parcours-compatibilite.md)
-record the remaining acceptance gates.
+[physical validation ticket](https://github.com/toinux/awtrix-cli/issues/20)
+record release artifacts and the observed compatibility scope.
 
 ## Documentation
 

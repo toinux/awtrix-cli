@@ -6,7 +6,7 @@ This file configures how AI agents should interact with this repository.
 
 ### Issue tracker
 
-Issues live as local markdown files under `.scratch/`. See `docs/agents/issue-tracker.md`.
+Issues and specs live in GitHub Issues (`toinux/awtrix-cli`). See `docs/agents/issue-tracker.md` for operations and migrated ticket references.
 
 ### Triage labels
 
