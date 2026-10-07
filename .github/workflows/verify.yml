@@ -32,6 +32,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Verify skill installers
+        run: python tests/skill-installers/test_installers.py -v
       - name: Format
         run: cargo fmt --check
       - name: Lint
@@ -45,13 +50,13 @@ jobs:
         env:
           AWTRIX_DISTRIBUTION_BINARY: target/${{ matrix.target }}/release/awtrix-cli${{ matrix.suffix }}
         run: cargo test --test distribution
+      - name: Verify release artifact layout contract
+        run: python tests/release-artifact-contract.py
       - uses: actions/upload-artifact@v4
-        if: startsWith(github.ref, 'refs/tags/v')
         with:
           name: awtrix-cli-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/awtrix-cli${{ matrix.suffix }}
           if-no-files-found: error
-          retention-days: 1
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -67,33 +72,47 @@ jobs:
         run: |
           version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "awtrix-cli") | .version')"
           test "$TAG" = "v$version" || { echo "tag $TAG does not match package version v$version" >&2; exit 1; }
+          case "$version" in *-*|*+*) echo "release versions must be stable (no prerelease/build metadata): $version" >&2; exit 1 ;; esac
       - uses: actions/download-artifact@v4
         with:
           pattern: awtrix-cli-*
           path: artifacts
-          merge-multiple: true
+          merge-multiple: false
       - name: Assemble release assets and checksums
         run: |
           set -euo pipefail
           mkdir release-assets
-          install -m 0755 artifacts/awtrix-cli-x86_64-unknown-linux-gnu release-assets/awtrix-cli-x86_64-unknown-linux-gnu
-          install -m 0755 artifacts/awtrix-cli-aarch64-apple-darwin release-assets/awtrix-cli-aarch64-apple-darwin
-          install -m 0755 artifacts/awtrix-cli-x86_64-pc-windows-msvc.exe release-assets/awtrix-cli-x86_64-pc-windows-msvc.exe
+          install -m 0755 artifacts/awtrix-cli-x86_64-unknown-linux-gnu/awtrix-cli release-assets/awtrix-cli-x86_64-unknown-linux-gnu
+          install -m 0755 artifacts/awtrix-cli-aarch64-apple-darwin/awtrix-cli release-assets/awtrix-cli-aarch64-apple-darwin
+          install -m 0755 artifacts/awtrix-cli-x86_64-pc-windows-msvc/awtrix-cli.exe release-assets/awtrix-cli-x86_64-pc-windows-msvc.exe
           (cd release-assets && sha256sum awtrix-cli-x86_64-unknown-linux-gnu awtrix-cli-aarch64-apple-darwin awtrix-cli-x86_64-pc-windows-msvc.exe > SHA256SUMS)
           test "$(wc -l < release-assets/SHA256SUMS)" -eq 3
-      - name: Create draft release and upload all assets
+      - name: Create draft release, upload assets, and publish
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            is_draft="$(gh release view "$TAG" --json isDraft --jq .isDraft)"
+            if [ "$is_draft" = "false" ]; then
+              actual_assets="$(gh release view "$TAG" --json assets --jq '[.assets[].name] | sort | join("\n")')"
+              expected_assets="$(printf '%s\n' awtrix-cli-aarch64-apple-darwin awtrix-cli-x86_64-pc-windows-msvc.exe awtrix-cli-x86_64-unknown-linux-gnu SHA256SUMS | sort)"
+              test "$actual_assets" = "$expected_assets" || { echo "published release asset set differs; refusing to mutate published release" >&2; exit 1; }
+              mkdir existing-assets
+              gh release download "$TAG" --dir existing-assets
+              cmp release-assets/SHA256SUMS existing-assets/SHA256SUMS || { echo "published checksums differ; refusing to mutate published release" >&2; exit 1; }
+              (cd existing-assets && sha256sum -c SHA256SUMS)
+              echo "Published release already matches; leaving immutable assets unchanged."
+              exit 0
+            fi
+          else
             gh release create "$TAG" --draft --title "$TAG" --notes "AWTRIX CLI $TAG"
+          fi
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = "false" ]; then
+            exit 0
           else
             gh release edit "$TAG" --draft
           fi
           gh release upload "$TAG" release-assets/* --clobber
-      - name: Publish stable release as latest
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: gh release edit "$TAG" --draft=false --latest
+          gh release edit "$TAG" --draft=false --latest

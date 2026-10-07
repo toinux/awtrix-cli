@@ -24,8 +24,10 @@ target/x86_64-unknown-linux-gnu/release/awtrix-cli --version
 On macOS use `aarch64-apple-darwin` and on Windows use
 `x86_64-pc-windows-msvc`; install the Rust target with `rustup target add`
 before building on a different host. The matching native linker/SDK is
-required. `.github/workflows/verify.yml` runs on branch pushes and pull requests.
-Ordinary verification does not publish a release. Workflow runs use the
+required. `.github/workflows/verify.yml` runs on branch pushes, pull requests,
+and version tags. Every native check uploads its binary artifact, retaining the
+existing CI artifact behavior on ordinary branches and pull requests. Those
+ordinary verification runs do not publish a release. Workflow runs use the
 host-native runners: their help/version and
 HTTP contract test executes the just-built release artifact (selected by
 `AWTRIX_DISTRIBUTION_BINARY`) against a local deterministic HTTP fixture; it
@@ -36,8 +38,9 @@ recorded process as not running when Linux process identity cannot be checked.
 
 ## Tagged releases
 
-Pushing a tag whose name is exactly `v<package version>` (initially `v0.1.0`)
-starts the same three native verification jobs. Each job builds once with
+Pushing a stable tag whose name is exactly `v<package version>` (initially
+`v0.1.0`; prerelease/build-metadata versions are rejected) starts the same three
+native verification jobs. Each job builds once with
 `--locked`, exercises the release executable, and uploads that verified binary;
 the release job reuses those artifacts rather than rebuilding. A tag that does
 not exactly match the `awtrix-cli` version in `Cargo.toml` fails before release
@@ -55,8 +58,10 @@ On a green run, the workflow assembles exactly these assets:
 `<hex>  <asset basename>`. Verify downloads with `sha256sum -c SHA256SUMS` from
 the directory containing all three binaries. The workflow creates the release
 as a draft, attaches/replaces all assets and checksum first, then publishes it
-as the stable latest release. A rerun first returns an existing release to draft
-state, then replaces same-named assets before publishing again.
+as the stable latest release. A rerun of an already-published tag compares the
+asset set and checksums and leaves a matching release unchanged; mismatched
+published releases fail rather than being modified. Incomplete draft releases
+may be safely completed by rerunning the workflow.
 
 To cut a release, update the package version and lockfile as appropriate, tag
 the matching commit (for example `git tag v0.1.0`), and push that tag. The
