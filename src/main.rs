@@ -248,6 +248,37 @@ impl ApiClient {
             })?;
         self.script_response(response)
     }
+    /// Send an authenticated JSON mutation and decode the official JSON response.
+    pub(crate) fn mutate(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: &Value,
+    ) -> CliResult<Value> {
+        let mut request = self.client.request(method, format!("{}{path}", self.base));
+        if let Some(username) = &self.username {
+            request = request.basic_auth(username, self.password.as_deref());
+        }
+        if !body.is_null() {
+            request = request.json(body);
+        }
+        let response = request.send().map_err(|e| {
+            if e.is_timeout() {
+                ("TIMEOUT", "request timed out".into())
+            } else {
+                (
+                    "TRANSPORT",
+                    "mutation result is unknown after transport failure".into(),
+                )
+            }
+        })?;
+        if response.status() == reqwest::StatusCode::INSUFFICIENT_STORAGE {
+            // The enabled-route OpenAPI explicitly says 507 is applied in memory but not saved.
+            // Discard the server body: its untrusted details must not leak to CLI output.
+            return Err(("HTTP_507", "device returned HTTP 507".into()));
+        }
+        self.script_response(response)
+    }
     pub(crate) fn conditional_put(
         &self,
         name: &str,
@@ -510,6 +541,20 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
         ),
         "script" | "scripts" => {
             json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no conflict protection"},"inputs":["raw Berry source"],"outputs":["get: raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; otherwise execution_state unknown"],"examples":["awtrix script get demo","awtrix --json script get demo","awtrix script deploy demo --file main.be --expected-source OLD","awtrix script deploy demo --file main.be --create","awtrix script deploy demo --file main.be --force"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; start confirmation requires system/app state"],"offline_reference_variant":"ESP32"})
+        }
+        "script state" | "script enable" | "script disable" | "script delete"
+        | "script config-get" | "script config-put" | "script data" => {
+            let action = topic.strip_prefix("script ").unwrap_or("state");
+            let (route, output, example) = match action {
+                "state" => ("GET /api/v1/apps", "scripts with observed enabled/inLoop/present and available error message/line/hook", "awtrix script state"),
+                "enable" => ("PUT /api/v1/apps/{name}/enabled (bare JSON true)", "name, enabled, accepted, device_result, runtime_success_guaranteed=false", "awtrix script enable demo"),
+                "disable" => ("PUT /api/v1/apps/{name}/enabled (bare JSON false)", "name, enabled, accepted, device_result, runtime_success_guaranteed=false", "awtrix script disable demo"),
+                "delete" => ("DELETE /api/v1/apps/{name}", "name, deleted, device_result", "awtrix script delete demo"),
+                "config-get" => ("GET /api/v1/apps/{name}/config", "declared settings fields and warnings", "awtrix script config-get demo"),
+                "config-put" => ("PATCH /api/v1/apps/{name}/config", "accepted, device_result; saves restart init()/setup() and do not promise future runtime success", "awtrix script config-put demo --values '{\"rate\":2}'"),
+                _ => ("GET /api/v1/apps/{name}/data", "persisted store values", "awtrix script data demo"),
+            };
+            command_description(&format!("script {action}"), route, output, example)
         }
         "logs" | "logs follow" | "logs read" => logs::describe(topic)?,
         "screen" => screen::describe(),

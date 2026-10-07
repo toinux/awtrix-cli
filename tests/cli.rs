@@ -743,6 +743,186 @@ fn script_get_preserves_raw_source_and_script_put_reports_berry_error() {
 }
 
 #[test]
+fn script_enable_uses_bare_boolean_and_script_state_exposes_only_observed_error_fields() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Put);
+        assert_eq!(request.url(), "/api/v1/apps/demo/enabled");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(body, "true");
+        request
+            .respond(Response::from_string(r#"{"ok":true}"#))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps");
+        request.respond(Response::from_string(r#"[{"name":"demo","origin":"script","enabled":true,"error":{"message":"bad","line":4}}]"#)).unwrap();
+    });
+    let enabled = run(&["--target", &url, "--json", "script", "enable", "demo"]);
+    assert!(enabled.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&enabled.stdout).unwrap()
+            ["runtime_success_guaranteed"],
+        false
+    );
+    let state = run(&["--target", &url, "--json", "script", "state"]);
+    worker.join().unwrap();
+    let state: serde_json::Value = serde_json::from_slice(&state.stdout).unwrap();
+    assert_eq!(state["scripts"][0]["error_message"], "bad");
+    assert_eq!(state["scripts"][0]["error_line"], 4);
+    assert!(state["scripts"][0].get("error_hook").unwrap().is_null());
+}
+
+#[test]
+fn lifecycle_disable_delete_config_and_data_use_official_routes() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for (method, route, expected_body, response) in [
+            (
+                tiny_http::Method::Put,
+                "/api/v1/apps/demo/enabled",
+                "false",
+                r#"{"ok":true}"#,
+            ),
+            (
+                tiny_http::Method::Delete,
+                "/api/v1/apps/demo",
+                "",
+                r#"{"ok":true}"#,
+            ),
+            (
+                tiny_http::Method::Get,
+                "/api/v1/apps/demo/config",
+                "",
+                r#"{"name":"demo","fields":[],"warnings":[]}"#,
+            ),
+            (
+                tiny_http::Method::Patch,
+                "/api/v1/apps/demo/config",
+                "{}",
+                r#"{"ok":true,"name":"demo","error":null}"#,
+            ),
+            (
+                tiny_http::Method::Get,
+                "/api/v1/apps/demo/data",
+                "",
+                r#"{"counter":3}"#,
+            ),
+        ] {
+            let mut request = server.recv().unwrap();
+            assert_eq!(request.method(), &method);
+            assert_eq!(request.url(), route);
+            let mut body = String::new();
+            request.as_reader().read_to_string(&mut body).unwrap();
+            assert_eq!(body, expected_body);
+            request.respond(Response::from_string(response)).unwrap();
+        }
+    });
+    for args in [
+        vec!["--target", &url, "--json", "script", "disable", "demo"],
+        vec!["--target", &url, "--json", "script", "delete", "demo"],
+        vec!["--target", &url, "--json", "script", "config-get", "demo"],
+        vec![
+            "--target",
+            &url,
+            "--json",
+            "script",
+            "config-put",
+            "demo",
+            "--values",
+            "{}",
+        ],
+        vec!["--target", &url, "--json", "script", "data", "demo"],
+    ] {
+        let output = run(&args);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+    worker.join().unwrap();
+}
+
+#[test]
+fn enable_507_reports_official_applied_but_not_persisted_state_without_body_leakage() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        request
+            .respond(Response::from_string("private device detail").with_status_code(507))
+            .unwrap();
+    });
+    let output = run(&["--target", &url, "--json", "script", "disable", "demo"]);
+    worker.join().unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "APPLIED_NOT_SAVED");
+    assert!(result["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("applied but not persisted"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private device detail"));
+}
+
+#[test]
+fn script_state_rejects_invalid_inventory_and_preserves_absent_error_as_null() {
+    for (body, expected) in [
+        ("null", Some("INVALID_RESPONSE")),
+        (
+            r#"[{"name":"demo","origin":"script","enabled":true}]"#,
+            None,
+        ),
+    ] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let body = body.to_owned();
+        let worker = thread::spawn(move || {
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_string(body))
+                .unwrap()
+        });
+        let output = run(&["--target", &url, "--json", "script", "state"]);
+        worker.join().unwrap();
+        if let Some(code) = expected {
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]
+                    ["code"],
+                code
+            );
+        } else {
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert!(result["scripts"][0]["error_message"].is_null());
+            assert!(result["scripts"][0]["error_line"].is_null());
+            assert!(result["scripts"][0]["error_hook"].is_null());
+        }
+    }
+}
+
+#[test]
+fn script_lifecycle_incompatible_http_failure_is_structured_without_body_leakage() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string("private").with_status_code(503))
+            .unwrap()
+    });
+    let output = run(&["--target", &url, "--json", "script", "config-get", "demo"]);
+    worker.join().unwrap();
+    let error: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error["error"]["code"], "HTTP");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("private"));
+}
+
+#[test]
 fn script_deploy_uses_atomic_expected_source_route_and_does_not_pre_read() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
