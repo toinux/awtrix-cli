@@ -4,7 +4,7 @@
 
 **Blocked by:** 16 — Exécuter les tests déclaratifs d’un projet.
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 ## Acceptance criteria
 

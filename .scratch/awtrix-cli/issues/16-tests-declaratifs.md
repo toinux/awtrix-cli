@@ -4,7 +4,7 @@
 
 **Blocked by:** 11 — Vérifier le fonctionnement d’un script ; 13 — Initialiser et déployer un projet TOML ; 15 — Lancer et arrêter une cible headless.
 
-**Status:** in-progress
+**Status:** done
 
 ## Acceptance criteria
 

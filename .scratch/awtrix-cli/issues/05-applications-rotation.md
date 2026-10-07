@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 — Identifier et diagnostiquer un appareil.
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 ## Acceptance criteria
 

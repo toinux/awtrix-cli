@@ -31,8 +31,10 @@ Verified unique IDs, existing references, acyclic graph (Luna preflight).
 | 18 | in-progress (external blocker) | ticket/18-dist / .worktrees/ticket-18 | 445270f | 41af415; software review clear; Linux release/HTTP checks pass; integratedf27aa33; native macOS/Windows pending |
 | 03 | done | ticket/03-pushed / .worktrees/ticket-03 | 6ac6db5 | 98ba2df+519ce6c; review clear; realheadless pushed create/update/delete; integrated |
 | 14 | done | ticket/14-tracking / .worktrees/ticket-14 | 6ac6db5 | c97c366+1ba7e44+e9a36c1; review clear; integratedffff1a5 |
-| 04,16 | in-progress | ticket/04-notify, ticket/16-tests | next journal commit | pending |
-| 05–06,17,19 | ready-for-agent, dependencies enforced | unassigned | — | — |
+| 04 | done | ticket/04-notify / .worktrees/ticket-04 | 3292b9d | 6c4af32+22f1293; reviewedclear integrated41ecc638 |
+| 16 | done | ticket/16-tests / .worktrees/ticket-16 | 3292b9d | f554231; reviewedclear integrated41ecc638; realignoredtest explicitlyrun passed |
+| 05,17 | in-progress | ticket/05-rotation, ticket/17-visual | next journal commit | pending |
+| 06,19 | ready-for-agent, dependencies enforced | unassigned | — | — |
 
 ## Shared contracts
 
@@ -86,3 +88,10 @@ Identity uses /device boardType+soc, not arbitrary strings. Describe offline and
   durable perproject/endpoint/device ownership, pruneonlymanaged and conservative explicit
   uncertainty recovery releases ownership without remote mutation. Final Luna review clear.
   Integrated fmt/clippy pass,6unit+99CLI+2distribution tests.
+- Tickets04/16 integrated41ecc638: validated notifications and uncertainPOST no retries;
+  declarative test runner scopedheadless owner/config/data independentuserstate and explicittargets.
+  Integrated fmt/clippy pass,6unit+110CLI+2distribution tests. Orchestrator explicitly ran
+  AWTRIX_LINUX_BIN=/tmp/opencode/awtrix-ng-build/awtrix-linux
+  AWTRIX_WEBUI=/tmp/opencode/awtrix-ng-src/webui/index.html
+  cargo test --test headless -- --ignored --nocapture: one real test passed19.12s,
+  success/failure/Berryerror/isolation/cleanup scenarios. Final Luna re-review clear.
