@@ -111,3 +111,25 @@ Local branches retained. Clean integrated worker worktrees may be removed withou
 Next: native macOS ARM64/Windows MSVC jobs (remote publication requires separate permission),
 then resume18acceptance and19 via the same implement-spec command. Supply explicit physical
 targets if hardware checks are desired; otherwise19must document missing physical results.
+
+## Final verification evidence
+
+- Final hardening6d4ba97 independently reviewed without blockers, integrated93742e7.
+  README added; log-collection report phase retained; final runner cancellation checked.
+- Integrated final checks: cargo fmt --check, cargo clippy --all-targets --all-features
+  --locked -- -D warnings, cargo test --locked: 6unit+134CLI+2distribution pass.
+- Real headless integration explicitly executed (not merely ignored defaulttest): one test
+  passes21.48s covering success/failure/Berryerror/isolation/cleanup and controlledvisualrender.
+- cargo build --release --locked passed; usable local binary target/release/awtrix.
+- Actual release-binary end-to-end closing scenario against AWTRIX1.2.2 on loopback18847:
+  ownedheadlessstart -> diagnosis -> progresspushedapp -> protected example project deployment
+  and active/log assertions -> named completionnotification -> dismissnotification/removeprogress
+  -> ownedheadlessstop. All commands succeeded; temporary headlessdata removed.
+  Nativeheadless identity is boardType=linux (reported unknown hardwarevariant, not misclassified).
+- Closing scenario created local tracking for its temporary target; that generated example
+  state was removed after provenance verified. Runtime tracking files are now Git-ignored.
+- All19 dispatched worker worktrees (18tickets+hardening) removed only after clean-status and
+  ancestor/integration checks. Local branches/commits retained; main remains originalbaseline.
+- Earlier load-related logs-follow fixture timeouts were observed; reruns and final suites
+  passed. Dedicated scheduling stress validation has not been performed. No hidden test pass
+  is claimed for native macOS/Windows or physicaldevices.

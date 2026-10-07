@@ -2,3 +2,4 @@
 /.worktrees/
 /.automation-runtime/
 *.log
+.awtrix-tracking-*.json
