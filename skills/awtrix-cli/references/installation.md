@@ -57,7 +57,7 @@ for agent shell calls; if adding to PATH, do so in each new shell invocation.
 Preserve the original diagnostics on failure.
 
 To choose a release or another destination **when the CLI is missing**, use
-`--version v0.1.1 --install-dir DIR` for shell, or `-Version v0.1.1 -InstallDir DIR`
+`--version v0.1.2 --install-dir DIR` for shell, or `-Version v0.1.2 -InstallDir DIR`
 for PowerShell. These are bootstrap installers, not automatic upgrade commands.
 
 Linux ARM64/musl, Intel macOS, and Windows ARM64 currently have no published
