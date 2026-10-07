@@ -4822,7 +4822,13 @@ fn app_rotation_routes_and_payloads_are_observed_at_cli_boundary() {
     let worker = thread::spawn(move || {
         for (path, method, payload) in [
             ("/api/v1/apps", "GET", None),
-            ("/api/v1/apps/active", "PUT", Some("\"demo\"")),
+            ("/api/v1/device", "GET", None),
+            ("/api/v1/apps", "GET", None),
+            (
+                "/api/v1/apps/active",
+                "PUT",
+                Some(r#"{"name":"demo","fast":false}"#),
+            ),
             ("/api/v1/apps/order", "PUT", Some(r#"{"disabled":["old"]}"#)),
             (
                 "/api/v1/apps/order",
@@ -4836,10 +4842,15 @@ fn app_rotation_routes_and_payloads_are_observed_at_cli_boundary() {
             if let Some(expected) = payload {
                 let mut body = String::new();
                 request.as_reader().read_to_string(&mut body).unwrap();
-                assert_eq!(body, expected);
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+                    serde_json::from_str::<serde_json::Value>(expected).unwrap()
+                );
             }
             let body = if path == "/api/v1/apps" {
-                r#"[{"name":"demo","origin":"script","enabled":true,"present":true,"inLoop":false,"error":null}]"#
+                r#"[{"name":"demo","origin":"script","enabled":true,"present":true,"inLoop":false,"error":null,"slot":0},{"name":"implicit","slot":null}]"#
+            } else if path == "/api/v1/device" {
+                r#"{"currentApp":"demo"}"#
             } else {
                 "{}"
             };
@@ -4854,6 +4865,18 @@ fn app_rotation_routes_and_payloads_are_observed_at_cli_boundary() {
     );
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["apps"][0]["in_loop"], false);
+    let active = run(&["--target", &url, "--json", "apps", "active-get"]);
+    assert!(active.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&active.stdout).unwrap()["current_app"],
+        "demo"
+    );
+    let order = run(&["--target", &url, "--json", "apps", "order-get"]);
+    assert!(order.status.success());
+    let order: serde_json::Value = serde_json::from_slice(&order.stdout).unwrap();
+    assert_eq!(order["rotation_slots"][0]["name"], "demo");
+    assert_eq!(order["implicit_apps"][0], "implicit");
+    assert_eq!(order["persisted_order_exposed"], false);
     for args in [
         vec!["--target", &url, "--json", "apps", "select", "demo"],
         vec![
@@ -4901,4 +4924,72 @@ fn app_rotation_rejects_bad_name_before_network_access() {
         String::from_utf8_lossy(&output.stderr)
     )
     .contains("name must match"));
+    for args in [
+        vec![
+            "--target",
+            "http://127.0.0.1:1",
+            "apps",
+            "order-set",
+            "--order",
+            "bad-json",
+        ],
+        vec![
+            "--target",
+            "http://127.0.0.1:1",
+            "apps",
+            "order-set",
+            "--disabled",
+            "[\"bad/name\"]",
+        ],
+    ] {
+        let output = run(&args);
+        assert_ne!(output.status.code(), Some(0));
+        assert!(!format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .contains("could not reach"));
+    }
+}
+
+#[test]
+fn app_rotation_command_descriptions_state_read_and_mutation_contracts() {
+    for (topic, required) in [
+        ("apps active-get", "GET /api/v1/device"),
+        ("apps select", "PUT /api/v1/apps/active"),
+        ("apps order-get", "persisted_order_exposed=false"),
+        ("apps order-set", "complete set"),
+    ] {
+        let output = run(&["--json", "describe", topic]);
+        assert!(output.status.success());
+        let description: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let text = description.to_string();
+        assert!(text.contains(required), "{topic}: {text}");
+    }
+}
+
+#[test]
+fn unsupported_active_route_method_is_reported_without_get_fallback() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/active");
+        assert_eq!(request.method().as_str(), "PUT");
+        request.respond(Response::empty(405)).unwrap();
+        assert!(server
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap()
+            .is_none());
+    });
+    let output = run(&["--target", &url, "apps", "select", "demo"]);
+    assert_ne!(output.status.code(), Some(0));
+    assert!(format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+    .contains("HTTP 405"));
+    worker.join().unwrap();
 }

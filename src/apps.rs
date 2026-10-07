@@ -11,11 +11,16 @@ const MAX_TC002_PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
 pub enum Command {
     /// List the device's complete app inventory, including persistent apps and pushed apps.
     List,
-    /// Read which app the device reports as active (does not dismiss notifications).
+    /// Read currentApp from device state; notifications do not change this value.
     ActiveGet,
     /// Select an app without claiming it is currently visible.
-    Select { name: String },
-    /// Read the ordered rotation.
+    Select {
+        name: String,
+        /// Jump instantly rather than using the transition animation.
+        #[arg(long)]
+        fast: bool,
+    },
+    /// Read inventory slot projections, not the full persisted rotation document.
     OrderGet,
     /// Set rotation order and complete disabled-name set (omitted order is preserved).
     OrderSet {
@@ -63,18 +68,49 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             let items = inventory
                 .as_array()
                 .ok_or(("INVALID_RESPONSE", "app inventory must be an array".into()))?;
-            let apps: Vec<Value> = items.iter().map(|app| json!({"name":app.get("name"),"origin":app.get("origin"),"enabled":app.get("enabled"),"present":app.get("present"),"in_loop":app.get("inLoop"),"error":app.get("error")})).collect();
+            let apps: Vec<Value> = items.iter().map(|app| json!({"name":app.get("name"),"origin":app.get("origin"),"enabled":app.get("enabled"),"present":app.get("present"),"slot":app.get("slot"),"in_loop":app.get("inLoop"),"error":app.get("error")})).collect();
             Ok(json!({"apps":apps,"count":apps.len()}))
         }
-        Command::ActiveGet => api.get("/api/v1/apps/active"),
-        Command::Select { name } => {
+        Command::ActiveGet => {
+            let state = api.get("/api/v1/device")?;
+            Ok(
+                json!({"current_app":state.get("currentApp"),"observed":true,"meaning":"device-reported app on screen; a notification does not change currentApp"}),
+            )
+        }
+        Command::Select { name, fast } => {
             validate_name(name).map_err(|message| ("ARGUMENT", message))?;
-            let value = api.mutate(reqwest::Method::PUT, "/api/v1/apps/active", &json!(name))?;
+            let value = api.mutate(
+                reqwest::Method::PUT,
+                "/api/v1/apps/active",
+                &json!({"name":name,"fast":fast}),
+            )?;
             Ok(
                 json!({"name":name,"accepted":true,"visibility":"unknown","device_result":value,"notification_effect":"none_claimed"}),
             )
         }
-        Command::OrderGet => api.get("/api/v1/apps"),
+        Command::OrderGet => {
+            let inventory = api.get("/api/v1/apps")?;
+            let items = inventory
+                .as_array()
+                .ok_or(("INVALID_RESPONSE", "app inventory must be an array".into()))?;
+            let mut slotted: Vec<(u64, Value)> = items
+                .iter()
+                .filter_map(|app| {
+                    app.get("slot")
+                        .and_then(Value::as_u64)
+                        .map(|slot| (slot, app.get("name").cloned().unwrap_or(Value::Null)))
+                })
+                .collect();
+            slotted.sort_by_key(|(slot, _)| *slot);
+            let implicit: Vec<Value> = items
+                .iter()
+                .filter(|app| app.get("slot").is_some_and(Value::is_null))
+                .map(|app| app.get("name").cloned().unwrap_or(Value::Null))
+                .collect();
+            Ok(
+                json!({"rotation_slots":slotted.iter().map(|(slot,name)|json!({"slot":slot,"name":name})).collect::<Vec<_>>(),"implicit_apps":implicit,"persisted_order_exposed":false,"meaning":"inventory slot assignments only; the complete persisted order is not exposed by a GET route"}),
+            )
+        }
         Command::OrderSet { order, disabled } => {
             let disabled: Vec<String> = serde_json::from_str(disabled).map_err(|_| {
                 (
@@ -143,7 +179,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
 pub fn validate(command: &Command) -> Result<(), String> {
     match command {
         Command::List | Command::ActiveGet | Command::OrderGet => Ok(()),
-        Command::Select { name } => validate_name(name),
+        Command::Select { name, .. } => validate_name(name),
         Command::OrderSet { order, disabled } => {
             let disabled: Vec<String> = serde_json::from_str(disabled)
                 .map_err(|_| "--disabled must be a JSON array of app names".to_owned())?;
@@ -382,13 +418,13 @@ pub fn describe(topic: &str) -> Value {
         "list" | "active-get" | "select" | "order-get" | "order-set"
     ) {
         let (route, parameters, output, example) = match action {
-            "list" => ("GET /api/v1/apps", json!({}), "apps: name, origin, enabled, present, in_loop, error (absent device fields are null)", "awtrix --json apps list"),
-            "active-get" => ("GET /api/v1/apps/active", json!({}), "device-reported active app", "awtrix apps active-get"),
-            "select" => ("PUT /api/v1/apps/active (JSON string name)", json!({"name":"[A-Za-z0-9_-]{1,32}"}), "accepted, visibility=unknown; does not remove notifications", "awtrix apps select demo"),
-            "order-get" => ("GET /api/v1/apps", json!({}), "full ordered app inventory", "awtrix apps order-get"),
+            "list" => ("GET /api/v1/apps", json!({}), "apps: name, origin, enabled, present, slot, in_loop, error (absent device fields are null)", "awtrix --json --fields apps apps list"),
+            "active-get" => ("GET /api/v1/device; reads currentApp", json!({}), "device-reported current_app; notification does not change this value", "awtrix apps active-get"),
+            "select" => ("PUT /api/v1/apps/active (JSON object {name, fast})", json!({"name":"[A-Za-z0-9_-]{1,32}","--fast":"boolean; request an instant transition"}), "accepted, visibility=unknown; does not remove notifications", "awtrix apps select demo --fast"),
+            "order-get" => ("GET /api/v1/apps; project inventory slot values", json!({}), "rotation_slots and implicit_apps; persisted_order_exposed=false", "awtrix --json apps order-get"),
             _ => ("PUT /api/v1/apps/order", json!({"--order":"optional JSON string array; repeated names are allowed", "--disabled":"JSON string array, complete set of switched-off app names (default [])"}), "accepted, order_included, disabled, device_result", "awtrix apps order-set --order '[\"clock\",\"demo\"]' --disabled '[\"weather\"]'"),
         };
-        return json!({"command":format!("apps {action}"),"route":route,"parameters":parameters,"inputs":[],"schemas":{"output":output},"outputs":[output],"output_fields":["apps","count","name","origin","enabled","present","in_loop","error","accepted","visibility","order_included","disabled","device_result"],"examples":[example],"prerequisites":["AWTRIX NG app API; device routes remain authoritative"],"limitations":["select acceptance does not guarantee current visibility or dismiss notifications","order-set disabled is the complete off-set; omitted order preserves existing order"]});
+        return json!({"command":format!("apps {action}"),"route":route,"parameters":parameters,"inputs":[],"schemas":{"output":output},"outputs":[output],"output_fields":["apps","count","name","origin","enabled","present","slot","in_loop","error","accepted","visibility","order_included","disabled","device_result","current_app","observed","rotation_slots","implicit_apps","persisted_order_exposed"],"examples":[example],"prerequisites":["AWTRIX NG app API; device routes remain authoritative"],"limitations":["select acceptance does not guarantee current visibility or dismiss notifications","order-set disabled is the complete off-set; omitted order preserves existing order","order-get projects GET /api/v1/apps slot assignments and implicit apps; it cannot retrieve the complete persisted order"]});
     }
     let parameters = if action == "delete" {
         json!({"name":"[A-Za-z0-9_-]{1,32}"})
