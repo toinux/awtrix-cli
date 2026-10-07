@@ -1,5 +1,7 @@
 //! Opt-in system integration against the actual AWTRIX Linux executable.
+#[cfg(target_os = "linux")]
 use serde_json::Value;
+#[cfg(target_os = "linux")]
 use std::{
     net::TcpStream,
     path::{Path, PathBuf},
@@ -7,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+#[cfg(target_os = "linux")]
 fn run(manifest: &str, binary: &Path, webui: &Path, config: &Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_awtrix"))
         .args([
@@ -27,6 +30,7 @@ fn run(manifest: &str, binary: &Path, webui: &Path, config: &Path) -> Output {
         .unwrap()
 }
 
+#[cfg(target_os = "linux")]
 fn parse(output: &Output) -> Value {
     serde_json::from_slice(&output.stdout).unwrap_or_else(|_| {
         panic!(
@@ -37,6 +41,7 @@ fn parse(output: &Output) -> Value {
     })
 }
 
+#[cfg(target_os = "linux")]
 fn target_is_stopped(target: &str) -> bool {
     let address = target.strip_prefix("http://").unwrap();
     TcpStream::connect_timeout(&address.parse().unwrap(), Duration::from_millis(250)).is_err()
