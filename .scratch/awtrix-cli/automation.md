@@ -375,4 +375,23 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
   sibling `headless.json`, no legacy fallback/migration, no schema/lifecycle changes.
 - Real headless executable/UI remain available at the previously recorded paths
   (official AWTRIX NG 1.2.2 source/build). No physical device mutation is authorized
-  or needed for this graph. No known external acceptance blocker.
+   or needed for this graph. No known external acceptance blocker.
+
+## Specification #23 run — 2026-10-08
+
+- Authority: https://github.com/toinux/awtrix-cli/issues/23. Native children #26,
+  #27, #28 are OPEN with no comments; #28 is blocked by #27. No other native
+  dependencies or nested children. Unique IDs/existing prerequisites/acyclic graph verified.
+- No historical ticket mapping applies. Original diagnostic and graph are integrated.
+- Original run baseline `09e939d351159c2f453fca242d917134da966086`, clean branch
+  `integration/awtrix-cli`; Git identity configured. No ADR files present.
+- Preserve unrelated release/installer worktrees and ticket #25's separate run/worktree.
+- Local commits/merges and tracker updates authorized; no pushes/releases authorized.
+- Serialize #26 then #27 due to shared discovery/CLI contracts, not a new dependency.
+  #28 remains unavailable until #27 acceptance. Maximum two implementers.
+- #26 assignment: `ticket/26-release-notices`, repository sibling worktree
+  `.worktrees/ticket-26`; dispatch base is the committed checkpoint for this entry.
+- Shared constraints: stable releases only, notices stderr, no structured stdout changes,
+  at-most-24h checks including failures, bounded best-effort network, opt-out, no auto-install.
+- #27 native macOS/Windows replacement verification may be externally blocked on this
+  Linux host; workflow configuration is not execution evidence. Do not push to obtain CI.
