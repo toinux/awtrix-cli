@@ -183,9 +183,18 @@ impl ApiClient {
         )
         .map_err(|_| ("INVALID_RESPONSE", "script source is not UTF-8".into()))
     }
-    pub(crate) fn raw_bytes_get(&self, path: &str, max_bytes: u64) -> CliResult<Vec<u8>> {
+    pub(crate) fn raw_bytes_get_with_timeout(
+        &self,
+        path: &str,
+        max_bytes: u64,
+        timeout: Duration,
+    ) -> CliResult<Vec<u8>> {
         let response = self
-            .authorized(self.client.get(format!("{}{path}", self.base)))
+            .authorized(
+                self.client
+                    .get(format!("{}{path}", self.base))
+                    .timeout(timeout.min(self.timeout)),
+            )
             .send()
             .map_err(|error| {
                 if error.is_timeout() {
@@ -679,7 +688,7 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
             "awtrix --target http://awtrix.local device diagnose",
         ),
         "script" | "scripts" => {
-            json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no conflict protection"},"inputs":["raw Berry source"],"outputs":["get: raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; otherwise execution_state unknown"],"examples":["awtrix script get demo","awtrix --json script get demo","awtrix script deploy demo --file main.be --expected-source OLD","awtrix script deploy demo --file main.be --create","awtrix script deploy demo --file main.be --force"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; start confirmation requires system/app state"],"offline_reference_variant":"ESP32"})
+            json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no conflict protection","--verify-secs":"optional bounded observation after successful deploy, 1..3600"},"inputs":["raw Berry source"],"outputs":["get: raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; optional verification report; otherwise execution_state unknown"],"examples":["awtrix script get demo","awtrix --json script get demo","awtrix script deploy demo --file main.be --expected-source OLD --verify-secs 30","awtrix script deploy demo --file main.be --create","awtrix script deploy demo --file main.be --force"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; start confirmation requires system/app state"],"offline_reference_variant":"ESP32"})
         }
         "script verify" => {
             json!({"command":"script verify","parameters":{"name":"script name [A-Za-z0-9_-]{1,32}","--duration-secs":"bounded observation window, 1..3600 (default 10)","--interval-ms":"log polling interval, 1..60000 (default 500)","--after":"initial log cursor (default 0)","--capture":"optional PNG output path"},"inputs":["AWTRIX NG system, app inventory, cursor logs and optional framebuffer"],"outputs":{"source_saved":"not_requested for existing-script verification","start_verified":"boolean","observed_window":{"complete":"boolean","duration_secs":"number"},"not_available":"null or safe diagnostic","runtime_error":"null or reported Berry error","logs":{"after":"integer","next":"integer","lines":"string array","history_limit":34,"exhaustive":false},"capture":"optional screen artifact summary","runtime_success_guaranteed":false},"examples":["awtrix --json script verify demo --duration-secs 30 --interval-ms 500","awtrix script verify demo --capture observed.png"],"prerequisites":["existing enabled AWTRIX NG script","bounded device log history"],"limitations":["No error observed is not proof of general correctness","log history is bounded to 34 lines"]})

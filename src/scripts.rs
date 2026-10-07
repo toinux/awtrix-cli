@@ -252,8 +252,16 @@ fn verify(
         );
     }
     let mut final_state = app.cloned();
-    while started.elapsed() < deadline {
-        let remaining = deadline.saturating_sub(started.elapsed());
+    // Reserve a bounded tail of the same deadline for optional framebuffer I/O and local PNG write.
+    let capture_reserve = if capture.is_some() {
+        (deadline / 4).min(Duration::from_secs(2))
+    } else {
+        Duration::ZERO
+    };
+    let observation_deadline = deadline.saturating_sub(capture_reserve);
+    let poll_deadline = observation_deadline.saturating_sub(Duration::from_millis(100));
+    while started.elapsed() < poll_deadline {
+        let remaining = observation_deadline.saturating_sub(started.elapsed());
         match api.get_with_timeout(&format!("/api/v1/logs?after={cursor}"), remaining) {
             Ok(logs) => {
                 cursor = logs
@@ -270,7 +278,7 @@ fn verify(
                 break;
             }
         }
-        let remaining = deadline.saturating_sub(started.elapsed());
+        let remaining = observation_deadline.saturating_sub(started.elapsed());
         if remaining.is_zero() {
             break;
         }
@@ -298,20 +306,30 @@ fn verify(
                 break;
             }
         }
-        if started.elapsed() >= deadline {
+        if started.elapsed() >= observation_deadline {
             break;
         }
         std::thread::sleep(
-            Duration::from_millis(interval_ms).min(deadline.saturating_sub(started.elapsed())),
+            Duration::from_millis(interval_ms)
+                .min(observation_deadline.saturating_sub(started.elapsed())),
         );
     }
     let artifact = if let Some(path) = capture {
-        let result = crate::screen::run(
-            &crate::screen::Command::Capture {
-                output: path.clone(),
-            },
-            api,
-        );
+        let remaining = deadline.saturating_sub(started.elapsed());
+        let result = if remaining.is_zero() {
+            Err((
+                "TIMEOUT",
+                "verification deadline left no time for capture".into(),
+            ))
+        } else {
+            crate::screen::run_with_timeout(
+                &crate::screen::Command::Capture {
+                    output: path.clone(),
+                },
+                api,
+                remaining,
+            )
+        };
         match result {
             Ok(value) => Some(value),
             Err((code, message)) => {
@@ -325,7 +343,7 @@ fn verify(
         None
     };
     Ok(
-        json!({"source_saved":"not_requested","start_verified":true,"observed_window":{"complete":collection_error.is_none() && (started.elapsed() >= deadline || runtime_error.is_some()),"duration_secs":started.elapsed().as_secs_f64(),"note":"No observed error is not proof of general correctness"},"not_available":collection_error,"runtime_error":runtime_error,"runtime_state":final_state,"logs":{"after":after,"next":cursor,"lines":lines,"history_limit":34,"exhaustive":false},"capture":artifact,"runtime_success_guaranteed":false}),
+        json!({"source_saved":"not_requested","start_verified":true,"observed_window":{"complete":collection_error.is_none() && (started.elapsed() >= poll_deadline || runtime_error.is_some()),"duration_secs":started.elapsed().as_secs_f64(),"note":"No observed error is not proof of general correctness"},"not_available":collection_error,"runtime_error":runtime_error,"runtime_state":final_state,"logs":{"after":after,"next":cursor,"lines":lines,"history_limit":34,"exhaustive":false},"capture":artifact,"runtime_success_guaranteed":false}),
     )
 }
 fn validate(name: &str) -> crate::CliResult<()> {
