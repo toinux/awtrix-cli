@@ -294,11 +294,12 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
 - Ticket18 remains accepted with fresh post-rename native evidence. Ticket19 still
   ready, not started. Use awtrix-cli for its scenario and documentation.
 
-## Ticket #20 / historical ticket 19 — acceptance verified; tracker closeout pending — 2026-10-07
+## Ticket #20 / historical ticket 19 — completed — 2026-10-07
 
 - Reconciled live GitHub dependencies: #4, #5, #6, #7, #15, #18 and #19 are closed
-  as completed. Claimed #20 and posted progress; no implementation or acceptance
-  comments existed at dispatch.
+  as completed. Claimed #20, posted progress/evidence, and closed it as completed
+  after integration, checks and review. Updated and closed parent specification #1;
+  all 19 implementation issues (#2–#20) are closed as completed.
 - Integration branch resumed at `c8be25c8b4e142524ff643b0fef79053e874e344` in a clean
   dedicated worktree, preserving unrelated uncommitted tracker-migration changes in
   the user's `main` checkout.
@@ -336,5 +337,6 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
   explicitly NOT EXECUTED and have a resumption protocol in `docs/validation.md`.
   Ticket #20 acceptance is verified after integration and final independent review;
   no minimum physical firmware version or cross-variant hardware compatibility
-  beyond observed ESP32 1.2.2 behavior is claimed. Merge checkpoint remains
-  `ab508bda5103c35d349ff91cd3b6a6501e1cea76`.
+  beyond observed ESP32 1.2.2 behavior is claimed. Ticket merge is
+  `ab508bda5103c35d349ff91cd3b6a6501e1cea76`; final validation/docs commit is
+  `f64ba42`.
