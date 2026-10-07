@@ -2,6 +2,7 @@ use clap::{error::ErrorKind, Parser, Subcommand};
 use serde_json::{json, Map, Value};
 use std::{process::ExitCode, time::Duration};
 
+mod logs;
 mod profiles;
 mod scripts;
 
@@ -43,6 +44,10 @@ enum Command {
     Script {
         #[command(subcommand)]
         action: scripts::Command,
+    },
+    Logs {
+        #[command(subcommand)]
+        action: logs::Command,
     },
 }
 
@@ -267,6 +272,16 @@ fn main() -> ExitCode {
         }
     };
     match run(&cli) {
+        Ok(_)
+            if matches!(
+                cli.command,
+                Command::Logs {
+                    action: logs::Command::Follow { .. }
+                }
+            ) =>
+        {
+            ExitCode::SUCCESS
+        }
         Ok(value) if value.get("source").is_some() && cli.fields.is_empty() && !cli.json => {
             print!("{}", value["source"].as_str().unwrap_or_default());
             ExitCode::SUCCESS
@@ -365,6 +380,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
         Command::Describe { .. } => unreachable!(),
         Command::Profile { .. } => unreachable!(),
         Command::Script { action } => scripts::run(action, &api),
+        Command::Logs { action } => logs::run(action, &api, cli.json),
     }
 }
 
@@ -408,6 +424,7 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
         "script" | "scripts" => {
             json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no conflict protection"},"inputs":["raw Berry source"],"outputs":["get: raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; otherwise execution_state unknown"],"examples":["awtrix script get demo","awtrix --json script get demo","awtrix script deploy demo --file main.be --expected-source OLD","awtrix script deploy demo --file main.be --create","awtrix script deploy demo --file main.be --force"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; start confirmation requires system/app state"],"offline_reference_variant":"ESP32"})
         }
+        "logs" | "logs follow" | "logs read" => logs::describe(topic)?,
         _ => return Err(("ARGUMENT", format!("unknown description topic '{topic}'"))),
     };
     if let Some(target) = &cli.target {

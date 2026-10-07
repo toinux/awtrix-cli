@@ -1044,3 +1044,91 @@ fn force_cannot_be_combined_with_create_or_expected_source() {
         assert!(!String::from_utf8_lossy(&output.stderr).contains("could not reach"));
     }
 }
+
+#[test]
+fn logs_follow_advances_api_cursor_and_emits_jsonl_without_duplicate_records() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for (expected, body) in [
+            (
+                "/api/v1/logs?after=0",
+                r#"{"next":4,"lines":["[ 1s] first"]}"#,
+            ),
+            (
+                "/api/v1/logs?after=4",
+                r#"{"next":5,"lines":["[ 2s] second"]}"#,
+            ),
+            ("/api/v1/logs?after=5", r#"{"next":5,"lines":[]}"#),
+        ] {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), expected);
+            request.respond(Response::from_string(body)).unwrap();
+        }
+        while let Some(request) = server.recv_timeout(Duration::from_millis(200)).unwrap() {
+            assert_eq!(request.url(), "/api/v1/logs?after=5");
+            request
+                .respond(Response::from_string(r#"{"next":5,"lines":[]}"#))
+                .unwrap();
+        }
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "logs",
+        "follow",
+        "--after",
+        "0",
+        "--interval-ms",
+        "10",
+        "--duration-secs",
+        "1",
+    ]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let records: Vec<serde_json::Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0]["line"], "[ 1s] first");
+    assert_eq!(records[1]["line"], "[ 2s] second");
+    assert_eq!(records[2]["type"], "end");
+}
+
+#[test]
+fn logs_read_reports_empty_stream_and_remote_failure() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/logs?after=7");
+        request
+            .respond(Response::from_string(r#"{"next":7,"lines":[]}"#))
+            .unwrap();
+        let request = server.recv().unwrap();
+        request
+            .respond(Response::from_string("private detail").with_status_code(500))
+            .unwrap();
+    });
+    let empty = run(&["--target", &url, "--json", "logs", "read", "--after", "7"]);
+    assert!(empty.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&empty.stdout).unwrap()["lines"],
+        serde_json::json!([])
+    );
+    let failure = run(&["--target", &url, "--json", "logs", "read"]);
+    worker.join().unwrap();
+    assert_eq!(failure.status.code(), Some(5));
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&failure.stdout).unwrap()["error"]["code"],
+        "HTTP"
+    );
+    assert!(!String::from_utf8_lossy(&failure.stdout).contains("private detail"));
+}
