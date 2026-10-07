@@ -10,10 +10,7 @@ if (Get-Command awtrix-cli -ErrorAction SilentlyContinue) {
     $existing = & awtrix-cli --version 2>$null
     if ($LASTEXITCODE -eq 0 -and $existing -match '^awtrix-cli\s') {
         Write-Host 'awtrix-cli is already installed; using the existing command.'
-        & awtrix-cli --version
-        if ($LASTEXITCODE -ne 0) { throw 'Existing awtrix-cli failed --version.' }
-        & awtrix-cli --help
-        if ($LASTEXITCODE -ne 0) { throw 'Existing awtrix-cli failed --help.' }
+        Write-Host $existing
         exit 0
     }
 }
@@ -62,8 +59,6 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Downloaded binary failed --version; installation was not changed.' }
     $expectedVersion = "awtrix-cli $($Version.TrimStart('v'))"
     if ($reportedVersion -ne $expectedVersion) { throw "Unexpected binary version '$reportedVersion' (expected '$expectedVersion'); installation was not changed." }
-    & $staged --help | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Downloaded binary failed --help; installation was not changed.' }
     if (Test-Path -LiteralPath $destination) {
         [IO.File]::Replace($staged, $destination, $null)
     } else {
@@ -72,8 +67,6 @@ try {
     Write-Host "Installed awtrix-cli $Version at $destination"
     Write-Host "Add $InstallDir to PATH for this shell: `$env:PATH = `"$InstallDir;`$env:PATH`""
     Write-Host $reportedVersion
-    & $destination --help
-    if ($LASTEXITCODE -ne 0) { throw 'Installed executable failed --help.' }
 } finally {
     Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue

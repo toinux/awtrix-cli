@@ -11,84 +11,74 @@ description: >-
 
 # AWTRIX CLI
 
-Control an AWTRIX NG device through its HTTP(S) API using `awtrix-cli`.
-Use temporary pushed apps for status content; use persistent Berry scripts for
-on-device logic. Execute the CLI rather than reimplementing its HTTP operations.
+`awtrix-cli` is the primary interface and source of truth. This skill teaches
+efficient use; it does not duplicate CLI documentation or require rediscovering
+it on every task. Execute the CLI rather than reimplementing its HTTP operations.
 
-## 1. Bootstrap the CLI first
+## 1. Select the workflow
 
-**On activation, complete this step before asking about app content or a device
-address.** Installing the skill does not install the executable. A missing CLI
-is a bootstrap task to perform, not a reason to stop or ask generic project questions.
+Match the user's intent to the smallest suitable capability:
 
-1. Run `awtrix-cli --version`. If it succeeds, run `awtrix-cli --help` and retain
-   that executable for subsequent commands. If it reports `command not found`,
-   take the missing-binary branch immediately; another bare `--help` cannot work.
-2. Check the normal per-user binary path below (and Cargo's bin directory if
-   relevant). If the executable works by absolute path, use it directly.
-3. Otherwise announce that you are installing the published CLI and **execute
-   the bundled installer now**. Set `SKILL_DIR` to the absolute **Base directory
-   for this skill** supplied when it was loaded, not the current project directory.
-   The commands below install per-user without sudo and verify SHA-256:
-   Keep `$HOME`/`$env:LOCALAPPDATA` as shell expressions; use the installer's
-   reported destination as authoritative instead of guessing a user's home path.
+| Intent | Capability |
+| --- | --- |
+| Temporary content or progress | `apps` |
+| One-off notification | `notify` |
+| Inspect/change an existing script; quick standalone experiment | `script` |
+| Develop/maintain source files; coordinate resources or configuration | Consider `project` |
+| Validate/deploy an `awtrix.toml` project | `project` |
+| Automated assertions | `test` |
+| Device information, settings, image, diagnostics, resources | `device`, `settings`, `screen`, `logs`, `resources` respectively |
 
-   Linux/macOS, in a POSIX shell:
+Standalone persistent scripts are legitimate. Consider `project` when creating
+files to retain/edit, managing multiple resources or configuration, iterating,
+or planning future maintenance. If both fit, briefly propose a project before
+creating files. Use `.ax` for new AWTRIX script sources.
 
-   ```sh
-   sh "$SKILL_DIR/scripts/install.sh"
-   "$HOME/.local/bin/awtrix-cli" --version
-   "$HOME/.local/bin/awtrix-cli" --help
-   ```
+Load [script/project workflows](references/workflows.md) only for script work,
+project scaffolding/deployment, resources, runtime evidence, cleanup, or tests.
+For a project, prefer `project init` → edit scaffold → `project validate` →
+`project deploy` → verification if needed. First make a bounded check for an
+existing `awtrix.toml` in the intended workspace/parent context; reuse a relevant
+project rather than creating a nested duplicate. The generated scaffold is the
+starting point, not an unrelated device script fetched to learn Berry structure.
 
-   Windows, in PowerShell (`$SkillDir` is the loaded skill's absolute directory):
+## 2. Use known commands; discover only missing information
 
-   ```powershell
-   & (Join-Path $SkillDir 'scripts\install.ps1')
-   & "$env:LOCALAPPDATA\Programs\awtrix-cli\bin\awtrix-cli.exe" --version
-   & "$env:LOCALAPPDATA\Programs\awtrix-cli\bin\awtrix-cli.exe" --help
-   ```
+Before any discovery or inspection, identify the concrete unresolved question
+required to complete the task. Reuse information in this skill, a loaded
+reference, previous command output, or an explicit example. Documented examples
+are reliable enough to execute directly when they match the need.
 
-4. Retain the verified **absolute executable path** in your working context.
-   Substitute it for `awtrix-cli` in every example below if the command is not on
-   `PATH`. Shell calls can be separate processes: an `export PATH=...` in one call
-   may disappear in the next. Reuse the absolute path rather than reinstalling.
+- Use `--help` only for unknown exact syntax or required options. If the operation
+  itself is unknown, inspect its family, e.g. `awtrix-cli script --help`.
+- Use `describe "<topic>"` for missing semantics, schemas, capabilities, or
+  structured details, e.g. `awtrix-cli --json describe "apps create"`.
+- Stop discovery once the question is answered. Do not pair help and describe
+  mechanically, repeat help in the same session without a reason, or use help
+  to confirm syntax already supplied by the skill or a loaded reference.
+- Never guess subcommands or probe supposed names. Discover only when the
+  required operation is actually unknown.
+- Reuse inspection results while relevant; refresh only after a change, stale
+  evidence, or a new unresolved question. Fetch only task-relevant sources/data.
 
-**Done means both version and help succeeded.** Then continue with the user's
-request, asking only for app requirements or a target that cannot be inferred.
-If a tool actually blocks installation, ask specifically to allow that install.
-For unsupported hosts, missing scripts, prerequisites, or download errors, read
-[installation details and fallbacks](references/installation.md), try the applicable
-recovery, and report any remaining blocker explicitly. Preserve the installer's
-nonzero status; a failed install is not completion.
+Descriptions are offline unless a target is supplied (including `AWTRIX_URL`).
+Connected capabilities take precedence. Some topics are family-level (`script`,
+`screen`); consult subcommand help only if exact flags remain unknown.
 
-## 2. Discover the operation
+## 3. Ensure the executable and target
 
-Load only the operation needed:
-
-```sh
-awtrix-cli apps create --help
-awtrix-cli --json describe "apps create"
-```
-
-Use `--help` for exact syntax and `describe "<topic>"` for inputs, schemas,
-outputs, and examples. Descriptions use an offline reference unless a target
-is supplied, including through `AWTRIX_URL`; connected capabilities take
-precedence over offline assumptions. Some description topics are family-level
-(for example `script`, `screen`); use the subcommand's help for exact flags.
-
-## 3. Establish the target
+If availability is not already established, `awtrix-cli --version` is sufficient;
+help is not an installation check. If missing, follow
+[installation and recovery](references/installation.md). Retain the verified
+executable path across calls, using its absolute path if absent from `PATH`.
 
 Use the user's device URL or existing personal profile. Inspect profiles with
 `awtrix-cli --json profile list` when needed. Replace `http://awtrix.local`
 below with the intended endpoint; it is an example, not an auto-discovery address.
 
-```sh
-awtrix-cli --target http://awtrix.local --json device diagnose
-awtrix-cli --target http://awtrix.local --json device capabilities
-```
-
-Confirm the reported target and capabilities before changing device content.
+Use `device diagnose` for an unresolved reachability/identity question, or
+`device capabilities` for required capability information not already available.
+A known notification/app operation needs no routine diagnostic preflight.
 For ordinary device commands, selection precedence is `--target`, `AWTRIX_URL`,
 `--profile`/`AWTRIX_PROFILE`, project profile (project operations), default profile.
 An environment URL can therefore override a named profile. Basic authentication
@@ -114,12 +104,10 @@ awtrix-cli --target http://awtrix.local --json screen capture --output screen.pn
 `apps create` and `apps update` both create or replace the named pushed app;
 use a task-owned name. Pushed apps can expire and disappear on reboot.
 Prefer updating a named status app over repeatedly queueing notifications.
-For complex payloads, use `--file` after checking command help.
+For complex payloads, use `--file PATH` instead of `--payload JSON`.
 
-Load [script and project workflows](references/workflows.md) when deploying
-Berry, collecting runtime evidence, managing resources, pruning, or running
-headless tests. For settings, inspect `settings --help`, then the specific
-operation's help and description; read current values before applying a patch.
+For settings, read relevant current values before a patch; apply the discovery
+rules above only for syntax or semantics still missing.
 
 ## 5. Interpret evidence and failures
 

@@ -1,7 +1,36 @@
 # Bootstrap details and fallbacks
 
-The required bootstrap sequence is in [the skill](../SKILL.md#1-bootstrap-the-cli-first).
-Use this reference when that sequence needs recovery or a non-default installation.
+Load this reference only when the executable is missing or installation needs
+recovery. A successful `--version` establishes availability; retain that path.
+
+## Bootstrap a missing executable
+
+Installing the skill does not install the CLI. Check the normal per-user path
+below before installing again. If unavailable, announce the installation and
+execute the bundled installer. Set `SKILL_DIR` / `$SkillDir` to the absolute
+loaded skill directory, not the workspace. Use the reported destination as
+authoritative; keep home/environment paths as shell expressions.
+
+Linux/macOS:
+
+```sh
+sh "$SKILL_DIR/scripts/install.sh"
+"$HOME/.local/bin/awtrix-cli" --version
+```
+
+Windows PowerShell:
+
+```powershell
+& (Join-Path $SkillDir 'scripts\install.ps1')
+& "$env:LOCALAPPDATA\Programs\awtrix-cli\bin\awtrix-cli.exe" --version
+```
+
+Done means a successful install and version check. Retain the absolute executable
+path across shell calls rather than reinstalling when a PATH change disappears.
+Preserve nonzero installer status and recover using the applicable branch below.
+If a tool blocks installation, ask specifically to allow it; report any remaining
+blocker and ask only for task requirements/targets that cannot be inferred.
+
 Cargo's binary directory can also contain an executable absent from `PATH`
 (`$CARGO_HOME/bin`, normally `~/.cargo/bin`, or `%USERPROFILE%\.cargo\bin` on Windows).
 Validate it by absolute path before considering a second installation.
@@ -19,7 +48,7 @@ persistent machine policy.
 
 The installers reuse an existing working command. Otherwise, they resolve the
 latest stable release to one concrete tag, choose the host asset, download it and
-`SHA256SUMS`, and check its exact checksum and version/help before replacing the
+`SHA256SUMS`, and check its exact checksum and version before replacing the
 destination. Downloads/install errors remain nonzero, and a failed verification
 leaves an existing destination intact. Installation is per-user and needs no
 administrator access. The scripts print PATH instructions; a child script cannot
@@ -63,10 +92,9 @@ Verify installation in the same shell:
 
 ```sh
 awtrix-cli --version
-awtrix-cli --help
 ```
 
-If either check fails, retain the installation/check diagnostics and fix the
+If the check fails, retain the installation/check diagnostics and fix the
 toolchain or `PATH` rather than proceeding as if installation succeeded.
 For a local source build without installing, use `cargo build --release --locked`
 and substitute `./target/release/awtrix-cli` (Windows: the `.exe` path) in commands.
@@ -79,7 +107,7 @@ also needs the matching linker/SDK. Version-tagged CI publishes verified binarie
 and checksums as [GitHub releases](https://github.com/toinux/awtrix-cli/releases).
 Consult the current
 [distribution documentation](https://github.com/toinux/awtrix-cli/blob/HEAD/docs/distribution.md)
-when selecting an artifact or another architecture; verify its version/help
+when selecting an artifact or another architecture; verify its version
 after placing it on `PATH`. No compiled binaries are bundled with this skill.
 
 An AWTRIX NG HTTP(S) endpoint is required only for device operations. Linux

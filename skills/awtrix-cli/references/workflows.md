@@ -1,17 +1,18 @@
 # Berry, projects, and runtime evidence
 
-Commands below use an example URL. Select the intended target explicitly,
-check capabilities, and consult each operation's `--help` before adapting it.
+Use only the section needed, following the discovery rules in [the skill](../SKILL.md).
+Examples can be executed directly; replace the example URL with the intended
+target. The inspection commands below are alternatives for different questions,
+not a checklist to execute in sequence.
 
-## Protected script deployment
+## Standalone scripts and protected updates
 
-Scaffold a new local project in an unused directory, then validate offline:
+Standalone scripts do not require a project, even when persistent. For a quick
+experiment with an existing source file:
 
 ```sh
-awtrix-cli project init ./demo
-awtrix-cli --json project validate --manifest ./demo/awtrix.toml
 awtrix-cli --target http://awtrix.local --json script deploy main \
-  --file ./demo/src/main.ax --create --verify-secs 10
+  --file ./main.ax --create --verify-secs 10
 ```
 
 AWTRIX scripts use the `.ax` filename extension. Berry modules remain `.be`
@@ -20,17 +21,19 @@ files and are declared separately under `[[modules]]`.
 `--create` fails if the script already exists. For an update, read the remote
 source **before editing** with `script get NAME`, retain its exact bytes, and
 pass that original text as `--expected-source` when deploying the modified file.
-Use `script deploy --help` for syntax. Human-mode `script get` writes exact
-source to stdout; JSON mode returns a `source` string. POSIX command substitution
-strips trailing newlines, so `--expected-source "$(cat original.ax)"` is not a
-reliable exact-byte reference. Prefer project `expected_source_file` for file-based
+Human-mode `script get` writes exact source to stdout; JSON mode returns a
+`source` string. Shell command substitution strips trailing newlines and is not
+a reliable exact-byte reference. Prefer project `expected_source_file` for file-based
 updates instead of manufacturing a shell-string reference.
 
 Protected deploy requires live `scriptUpdates: true`. `CONFLICT` means the
 reference is stale; inspect and resolve the concurrent edit. `--force` is an
 explicit unprotected overwrite, not a retry or compatibility fallback.
 
-For feedback on an existing script:
+Choose evidence for the unresolved question: `script state` gives the script
+inventory and runtime state; `script data NAME` reads persisted data; `script
+verify NAME` collects bounded runtime/log evidence and optional capture; `logs
+follow` observes logs. Reuse deploy verification if it already answers the need.
 
 ```sh
 awtrix-cli --target http://awtrix.local --json script state
@@ -43,16 +46,23 @@ awtrix-cli --target http://awtrix.local --json logs follow --duration-secs 15
 Read `start_verified`, `observed_window`, `runtime_error`, `not_available`, and
 capture metadata rather than equating saved source with running code. Follow
 produces typed JSONL log/error/end records; retain the final resume cursor and
-exit status. Specify finite observation windows. `script config-get` discovers
-declared settings; `script config-put --values JSON` patches them and restarts
-init/setup. Inspect `--help` and `describe` before changing configuration.
+exit status. Specify finite observation windows. Read declared settings with
+`script config-get NAME` before a patch. `script config-put NAME --values JSON`
+patches them and restarts init/setup; discover syntax/schema only if still unknown.
 
-## Project deployment and cleanup
+## Project scaffolding and deployment
+
+Check briefly for a relevant existing `awtrix.toml` before initializing. Reuse it
+when appropriate. For a new project, use the generated scaffold as the minimal
+script/manifest structure; edit its `.ax` source and manifest rather than fetching
+an unrelated device script as an example:
 
 ```sh
-awtrix-cli --json project validate --manifest ./demo/awtrix.toml
+awtrix-cli project init ./hello-world
+# Edit ./hello-world/src/main.ax and ./hello-world/awtrix.toml as needed.
+awtrix-cli --json project validate --manifest ./hello-world/awtrix.toml
 awtrix-cli --target http://awtrix.local --json project deploy \
-  --manifest ./demo/awtrix.toml
+  --manifest ./hello-world/awtrix.toml
 ```
 
 A project manifest declares scripts, modules, resource files, configuration,
@@ -61,21 +71,26 @@ either `create = true` or `expected_source_file = "original/main.ax"` containing
 the exact original remote source (a project-relative file captured before edits).
 For an update replace the create-only declaration with that reference; do not
 refresh the reference immediately before deployment to bypass a conflict.
+For manifest fields not present in the scaffold and genuinely needed, use
+`awtrix-cli --json describe "project deploy"`. Add runtime verification only
+when the request needs evidence beyond the deployment report.
 
 Deploy runs modules, resources, scripts, then configuration. It is additive,
 stops at the first failure, and is not transactional. A partial failure can
 leave successful mutations on the device: inspect the deployment report before
 retrying. Modules use raw replacement without script-update conflict protection;
-inspect existing modules before replacing them. Discover individual operations
-with `resources modules --help` and `resources files --help`. `/ICONS` uploads
+inspect existing modules before replacing them. For an unknown resource operation,
+inspect the relevant `resources modules` or `resources files` family help. `/ICONS` uploads
 require lowercase `.gif`/`.jpg` names and matching file signatures. Generic file
 download is unsupported; use supported commands rather than guessing endpoints.
+
+## Project cleanup
 
 Only when cleanup is requested, preview tracked obsolete entries:
 
 ```sh
 awtrix-cli --target http://awtrix.local --json project prune \
-  --manifest ./demo/awtrix.toml --dry-run
+  --manifest ./hello-world/awtrix.toml --dry-run
 ```
 
 Review the planned names before running the same command without `--dry-run`.
@@ -90,23 +105,26 @@ For a manifest with test assertions, prefer an isolated Linux run when the
 caller provides the separate AWTRIX executable and any required web assets:
 
 ```sh
-awtrix-cli --json test project --manifest ./demo/awtrix.toml \
+awtrix-cli --json test project --manifest ./hello-world/awtrix.toml \
   --binary /path/to/awtrix-linux --webui /path/to/webui/index.html
 ```
 
-The scaffold has no assertions: add them using `describe "test project"` and
-the [example manifest](https://github.com/toinux/awtrix-cli/blob/HEAD/examples/project/awtrix.toml).
+The scaffold has no assertions. If the assertion schema is unknown, consult
+`awtrix-cli --json describe "test project"`; consult the
+[example manifest](https://github.com/toinux/awtrix-cli/blob/HEAD/examples/project/awtrix.toml)
+only for details still missing.
 The runner starts a disposable instance, deploys, observes assertions, then
 cleans up its process, data, and tracking. `AWTRIX_LINUX_BIN` may supply the binary.
-Use `headless start --help`, `headless status`, and `headless stop` when a
-longer-lived CLI-owned Linux instance is specifically needed. An explicit data
+Use the `headless` family only when a longer-lived CLI-owned Linux instance is
+specifically needed: `headless start`, `headless status`, `headless stop`.
+Discover start options only if needed and unknown. An explicit data
 directory is retained on stop; temporary data is removed.
 
 Testing on an existing device deploys content and requires an explicit URL:
 
 ```sh
 awtrix-cli --target http://awtrix.local --json test project \
-  --manifest ./demo/awtrix.toml
+  --manifest ./hello-world/awtrix.toml
 ```
 
 Profiles and `AWTRIX_URL` do not select an external test target. Explicit

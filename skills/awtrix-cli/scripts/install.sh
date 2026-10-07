@@ -23,7 +23,6 @@ if command -v awtrix-cli >/dev/null 2>&1; then
     if existing_version=$(awtrix-cli --version 2>/dev/null) && case "$existing_version" in 'awtrix-cli '*) true ;; *) false ;; esac; then
         printf '%s\n' 'awtrix-cli is already installed; using the existing command.'
         printf '%s\n' "$existing_version"
-        awtrix-cli --help >/dev/null
         exit 0
     fi
 fi
@@ -88,9 +87,7 @@ cp "$tmp/$asset" "$staged"
 chmod 755 "$staged"
 reported_version=$("$staged" --version) || { printf '%s\n' 'Downloaded binary failed --version; installation was not changed.' >&2; exit 1; }
 [ "$reported_version" = "awtrix-cli ${version#v}" ] || { printf 'Unexpected binary version: %s (expected awtrix-cli %s).\n' "$reported_version" "${version#v}" >&2; exit 1; }
-"$staged" --help >/dev/null || { printf '%s\n' 'Downloaded binary failed --help; installation was not changed.' >&2; exit 1; }
 mv -f "$staged" "$dest"
 printf 'Installed awtrix-cli %s at %s\n' "$version" "$dest"
 printf 'Add %s to PATH for this shell (for example: export PATH="%s:$PATH").\n' "$install_dir" "$install_dir"
 printf '%s\n' "$reported_version"
-"$dest" --help >/dev/null || { printf '%s\n' 'Installed executable failed --help.' >&2; exit 1; }
