@@ -21,8 +21,10 @@ Verified unique IDs, existing references, acyclic graph (Luna preflight).
 | 01 | done | ticket/01-diagnostic / .worktrees/ticket-01 | 6991a3b | 0bc68a6 + 5220578; Luna review four blockers corrected; re-review clear; merged; fmt/clippy/test13 passed |
 | 02 | done | ticket/02-profils / .worktrees/ticket-02 | 70cb068 | 60d8ed5+907418d; review clear; integrated |
 | 07 | done | ticket/07-scripts / .worktrees/ticket-07 | 70cb068 | 3b2a76c+1cc3a28+f4ed0bc; review clear; merge fe5cda1 |
-| 09,10 | in-progress | ticket/09-logs, ticket/10-screen | next journal commit | pending |
-| 03–06,08,11–19 | ready-for-agent, dependencies enforced | unassigned | — | — |
+| 09 | done | ticket/09-logs / .worktrees/ticket-09 | 02cf98c | 698ccf4+753ddf3; review clear; integrated |
+| 10 | done | ticket/10-screen / .worktrees/ticket-10 | 02cf98c | 76abdab+af4fd8c+0dde76d+41b0444; final review clear; integrated240dab5 |
+| 08,12 | in-progress | ticket/08-lifecycle, ticket/12-resources | next journal commit | pending |
+| 03–06,11,13–19 | ready-for-agent, dependencies enforced | unassigned | — | — |
 
 ## Shared contracts
 
@@ -46,3 +48,8 @@ Identity uses /device boardType+soc, not arbitrary strings. Describe offline and
 - Tickets02/07 integrated after review fixes. Main command registration conflict resolved;
   scripts receive the same resolved/authenticated ApiClient as device commands.
   Integration fe5cda1: fmt/clippy pass; 2 unit +31 CLI tests pass. Combined Luna review clear.
+- Tickets09/10 integrated240dab5. Logs finite network budget, JSONL error/end resume;
+  capture official /display/screen packedRGB, bounded read and atomic replacement.
+  Screen worker accidentally edited root initially: provenance confirmed, redundant stray
+  changes removed before integration. Merge conflicts resolved preserving both domains.
+  Integration fmt/clippy pass; 2 unit+46 CLI tests pass; Luna review clear.
