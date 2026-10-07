@@ -164,7 +164,7 @@ fn parse(name: &str, input: &str, raw: bool) -> Result<Value, String> {
 }
 
 #[derive(Clone, Copy)]
-enum FieldKind {
+pub(crate) enum FieldKind {
     Text,
     String,
     TextCase,
@@ -185,8 +185,12 @@ enum FieldKind {
     Draw,
 }
 
+pub(crate) fn notification_field_kind(key: &str) -> Option<FieldKind> {
+    field_kind(key)
+}
+
 impl FieldKind {
-    fn accepts(self, value: &Value) -> bool {
+    pub(crate) fn accepts(self, value: &Value) -> bool {
         match self {
             Self::Text => value.is_string() || value.is_array(),
             Self::String | Self::Font => value.is_string(),
