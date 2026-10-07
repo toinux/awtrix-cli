@@ -39,6 +39,14 @@ pub enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Explicitly release local ownership of items whose remote effect is uncertain.
+    Reconcile {
+        #[arg(long, default_value = "awtrix.toml")]
+        manifest: PathBuf,
+        /// Forget uncertain ownership without claiming or changing remote state.
+        #[arg(long, required = true)]
+        forget_uncertain: bool,
+    },
 }
 
 #[derive(Deserialize)]
@@ -381,6 +389,10 @@ pub fn run(command: &Command, cli: &crate::Cli) -> Result<Value> {
         }
         Command::Deploy { manifest, force } => deploy(load(manifest)?, manifest, cli, *force),
         Command::Prune { manifest, dry_run } => prune(load(manifest)?, manifest, cli, *dry_run),
+        Command::Reconcile {
+            manifest,
+            forget_uncertain,
+        } => reconcile(load(manifest)?, manifest, cli, *forget_uncertain),
     }
 }
 
@@ -781,6 +793,73 @@ fn prune(p: Loaded, manifest_path: &Path, cli: &crate::Cli, dry_run: bool) -> Re
         json!({"project":state.project,"target":target,"dry_run":false,"planned":obsolete,"deleted":deleted,"failed":null,"not_run":[]}),
     )
 }
+
+fn reconcile(
+    p: Loaded,
+    manifest_path: &Path,
+    cli: &crate::Cli,
+    forget_uncertain: bool,
+) -> Result<Value> {
+    if !forget_uncertain {
+        return Err((
+            "ARGUMENT",
+            "reconcile requires explicit --forget-uncertain; remote outcomes are not verified"
+                .into(),
+        ));
+    }
+    let explicit = std::env::args().any(|a| a == "--target" || a.starts_with("--target="));
+    let selected = crate::profiles::resolve_project(
+        if explicit {
+            cli.target.as_deref()
+        } else {
+            None
+        },
+        cli.profile.as_deref(),
+        p.manifest.target.profile.as_deref(),
+        cli.username.as_deref(),
+        cli.password.as_deref(),
+    )?;
+    let target = reqwest::Url::parse(selected.target.as_deref().unwrap_or_default())
+        .map_err(|_| ("ARGUMENT", "invalid selected target".into()))?
+        .to_string()
+        .trim_end_matches('/')
+        .to_owned();
+    let path = tracking_path(manifest_path, &p.manifest.project.name, &target);
+    let mut state = read_tracking(&path, &p.manifest.project.name, &target, None)?;
+    let api = crate::ApiClient::new(
+        cli,
+        selected.target.as_deref(),
+        selected.username,
+        selected.password,
+    )?;
+    let actual_device_id = device_id(&api)?;
+    if state.device_id.as_deref() != actual_device_id.as_deref() {
+        return Err((
+            "TRACKING_INVALID",
+            "device identity changed at this endpoint; refusing reconciliation".into(),
+        ));
+    }
+
+    let forgotten = std::mem::take(&mut state.uncertain);
+    let released = state
+        .entries
+        .iter()
+        .filter(|entry| forgotten.contains(entry))
+        .cloned()
+        .collect::<Vec<_>>();
+    state.entries.retain(|entry| !forgotten.contains(entry));
+    save_tracking(&path, &state)?;
+    Ok(json!({
+        "project": state.project,
+        "target": target,
+        "forgotten_uncertain": forgotten,
+        "released_tracked_entries": released,
+        "remaining_tracked_entries": state.entries,
+        "remote_mutations": false,
+        "remote_effect": "unknown; inspect the device manually before managing forgotten items"
+    }))
+}
+
 fn encode(s: &str) -> String {
     s.bytes()
         .map(|b| {
@@ -795,5 +874,14 @@ fn encode(s: &str) -> String {
 
 pub fn describe(topic: &str) -> Value {
     let command = topic.strip_prefix("project ").unwrap_or("project");
+    if command == "project reconcile" || command == "reconcile" {
+        return json!({
+            "command": "project reconcile",
+            "parameters": {"--manifest": "manifest path (default awtrix.toml)", "--forget-uncertain": "required explicit local release of uncertain ownership; no device mutation or outcome claim"},
+            "output_fields": ["project", "target", "forgotten_uncertain", "released_tracked_entries", "remaining_tracked_entries", "remote_mutations", "remote_effect"],
+            "examples": ["awtrix --json project reconcile --manifest awtrix.toml --forget-uncertain"],
+            "safety": "validates project, endpoint, and available device identifier; removes uncertain names from tracking ownership and clears uncertainty only. Forgotten names are never automatically pruned and require manual device inspection. Known unaffected tracked entries remain tracked. No remote mutations are sent."
+        });
+    }
     json!({"command":command,"parameters":{"PATH":"project directory","MANIFEST":"manifest path (default awtrix.toml)","--force":"explicit unprotected overwrite for declared scripts","project prune --dry-run":"preview explicit tracked deletions"},"inputs":["awtrix.toml identity, target profile, scripts/modules/resources/config paths relative to manifest","private project-local identity-keyed .awtrix-tracking-*.json state"],"outputs":["validation counts","ordered deploy report with succeeded/failed/not_run/uncertain/tracking_error","prune report with planned/deleted/failed/not_run/uncertain/tracking_error"],"examples":["awtrix project init ./demo","awtrix project validate --manifest demo/awtrix.toml","awtrix --json project deploy --manifest demo/awtrix.toml","awtrix --json project prune --manifest demo/awtrix.toml --dry-run","awtrix --json project prune --manifest demo/awtrix.toml"],"prerequisites":["personal profile configuration for named targets; no credentials in project manifest","scriptUpdates capability for protected scripts","prune requires valid tracking state matching project, normalized endpoint, and available device ID; uncertain entries must be manually reconciled"],"tracking_contract":{"version":2,"identity":"project name plus normalized effective endpoint, and UID/deviceId/serial from /api/v1/device when supplied; credentials are never stored","entries":"successfully deployed scripts, modules and resources only; config patches are not deletable resources","uncertain":"failed operations are durably recorded separately; prune is blocked until manual reconciliation","safety":"missing, corrupt, foreign-project, foreign-endpoint, or changed-device state fails closed; deploy remains additive","state_file":".awtrix-tracking-<identity-key>.json beside the manifest, mode 0600 on Unix, atomically persisted after each successful operation; separate from credential configuration"},"schema":{"project":{"name":"string","version":"string"},"target":{"profile":"optional personal profile name"},"scripts":[{"name":"AWTRIX script name","file":"relative Berry source path","create":"boolean","expected_source_file":"relative original source used for conflict protection"}],"modules":[{"name":"module name","file":"relative Berry source with # @module"}],"resources":[{"path":"absolute device file path","file":"relative local binary path"}],"config":[{"script":"declared script name","file":"relative JSON object path"}]}})
 }

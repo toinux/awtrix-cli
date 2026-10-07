@@ -567,22 +567,38 @@ fn project_stops_on_first_remote_error_and_reports_unrun_work_without_deleting_f
 
 #[test]
 fn project_prune_deletes_only_tracked_entries_and_retains_failed_entry_in_state() {
+    let description = run(&["--json", "describe", "project reconcile"]);
+    assert!(description.status.success());
+    let description: serde_json::Value = serde_json::from_slice(&description.stdout).unwrap();
+    assert!(description["parameters"]["--forget-uncertain"].is_string());
+    assert!(description["safety"]
+        .as_str()
+        .unwrap()
+        .contains("never automatically pruned"));
+    let help = run(&["project", "reconcile", "--help"]);
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--forget-uncertain"));
     let root = std::env::temp_dir().join(format!("awtrix-prune-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("a.be"), "# @module a\n").unwrap();
     std::fs::write(root.join("b.be"), "# @module b\n").unwrap();
-    std::fs::write(root.join("awtrix.toml"), "[project]\nname='prune-test'\nversion='1'\n[[modules]]\nname='a'\nfile='a.be'\n[[modules]]\nname='b'\nfile='b.be'\n").unwrap();
+    std::fs::write(root.join("c.be"), "# @module c\n").unwrap();
+    std::fs::write(root.join("awtrix.toml"), "[project]\nname='prune-test'\nversion='1'\n[[modules]]\nname='a'\nfile='a.be'\n[[modules]]\nname='b'\nfile='b.be'\n[[modules]]\nname='c'\nfile='c.be'\n").unwrap();
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
     let deploy_worker = thread::spawn(move || {
+        let mut remote_items = vec!["foreign".to_owned()];
         for expected in [
             "/api/v1/device",
             "/api/v1/apps/script/a",
             "/api/v1/apps/script/b",
+            "/api/v1/apps/script/c",
         ] {
             let request = server.recv().unwrap();
             assert_eq!(request.url(), expected);
+            if expected.starts_with("/api/v1/apps/script/") {
+                remote_items.push(expected.rsplit('/').next().unwrap().to_owned());
+            }
             request
                 .respond(Response::from_string(if expected == "/api/v1/device" {
                     r#"{"uid":"prune-unit"}"#
@@ -599,6 +615,7 @@ fn project_prune_deletes_only_tracked_entries_and_retains_failed_entry_in_state(
         let request = server.recv().unwrap();
         assert_eq!(request.method(), &tiny_http::Method::Delete);
         assert_eq!(request.url(), "/api/v1/apps/a");
+        remote_items.retain(|item| item != "a");
         request.respond(Response::from_string("{}")).unwrap();
         let request = server.recv().unwrap();
         assert_eq!(request.method(), &tiny_http::Method::Delete);
@@ -606,11 +623,19 @@ fn project_prune_deletes_only_tracked_entries_and_retains_failed_entry_in_state(
         request
             .respond(Response::from_string("private body omitted").with_status_code(500))
             .unwrap();
+        for _ in 0..3 {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), "/api/v1/device");
+            request
+                .respond(Response::from_string(r#"{"uid":"prune-unit"}"#))
+                .unwrap();
+        }
         let request = server.recv().unwrap();
-        assert_eq!(request.url(), "/api/v1/device");
-        request
-            .respond(Response::from_string(r#"{"uid":"prune-unit"}"#))
-            .unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Delete);
+        assert_eq!(request.url(), "/api/v1/apps/c");
+        remote_items.retain(|item| item != "c");
+        request.respond(Response::from_string("{}")).unwrap();
+        assert_eq!(remote_items, vec!["foreign", "b"]);
     });
     let deploy = run(&[
         "--target",
@@ -650,6 +675,53 @@ fn project_prune_deletes_only_tracked_entries_and_retains_failed_entry_in_state(
         "--manifest",
         root.join("awtrix.toml").to_str().unwrap(),
     ]);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&retry.stdout).unwrap()["error"]["code"],
+        "TRACKING_UNCERTAIN"
+    );
+    let reconcile = run(&[
+        "--target",
+        &url,
+        "--json",
+        "project",
+        "reconcile",
+        "--forget-uncertain",
+        "--manifest",
+        root.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    assert!(
+        reconcile.status.success(),
+        "{}",
+        String::from_utf8_lossy(&reconcile.stdout)
+    );
+    let reconciliation: serde_json::Value = serde_json::from_slice(&reconcile.stdout).unwrap();
+    assert_eq!(
+        reconciliation["forgotten_uncertain"],
+        serde_json::json!(["module:b"])
+    );
+    assert_eq!(
+        reconciliation["released_tracked_entries"],
+        serde_json::json!(["module:b"])
+    );
+    assert_eq!(reconciliation["remote_mutations"], false);
+    let final_prune = run(&[
+        "--target",
+        &url,
+        "--json",
+        "project",
+        "prune",
+        "--manifest",
+        root.join("awtrix.toml").to_str().unwrap(),
+    ]);
+    assert!(
+        final_prune.status.success(),
+        "{}",
+        String::from_utf8_lossy(&final_prune.stdout)
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&final_prune.stdout).unwrap()["deleted"],
+        serde_json::json!(["module:c"])
+    );
     deploy_worker.join().unwrap();
     assert!(!prune.status.success());
     let report: serde_json::Value = serde_json::from_slice(&prune.stdout).unwrap();
@@ -676,8 +748,8 @@ fn project_prune_deletes_only_tracked_entries_and_retains_failed_entry_in_state(
         .unwrap();
     let tracking: serde_json::Value =
         serde_json::from_slice(&std::fs::read(tracking_path).unwrap()).unwrap();
-    assert_eq!(tracking["entries"], serde_json::json!(["module:b"]));
-    assert_eq!(tracking["uncertain"], serde_json::json!(["module:b"]));
+    assert_eq!(tracking["entries"], serde_json::json!([]));
+    assert_eq!(tracking["uncertain"], serde_json::json!([]));
     let _ = std::fs::remove_dir_all(root);
 }
 

@@ -743,9 +743,8 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
         "headless" | "headless start" | "headless stop" | "headless status" => {
             headless::describe(topic)
         }
-        "project" | "project init" | "project validate" | "project deploy" => {
-            project::describe(topic)
-        }
+        "project" | "project init" | "project validate" | "project deploy" | "project prune"
+        | "project reconcile" => project::describe(topic),
         "resources files list"
         | "resources files upload"
         | "resources files delete"
