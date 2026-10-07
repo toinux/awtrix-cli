@@ -50,40 +50,7 @@ pub fn validate(command: &Command) -> Result<(), String> {
                     .map_err(|_| "could not read payload file as UTF-8".to_owned())?,
                 _ => return Err("provide exactly one of --payload or --file".into()),
             };
-            let mut value: Value = serde_json::from_str(&input)
-                .map_err(|_| "payload must be valid JSON".to_owned())?;
-            let object = value
-                .as_object_mut()
-                .filter(|object| !object.is_empty())
-                .ok_or("payload must be a non-empty JSON object")?;
-            if let Some(name) = name {
-                validate_name(name)?;
-                if name == "active" {
-                    return Err("notification name 'active' is reserved".into());
-                }
-                object.insert("name".into(), json!(name));
-            }
-            object.insert("hold".into(), json!(hold));
-            object.insert("stack".into(), json!(stack));
-            object.insert("wakeup".into(), json!(wakeup));
-            for (key, value) in object.iter() {
-                if key == "name" && value.is_string()
-                    || key == "hold"
-                    || key == "stack"
-                    || key == "wakeup"
-                {
-                    continue;
-                }
-                let kind = crate::apps::notification_field_kind(key);
-                if kind.is_none() && !raw {
-                    return Err(format!(
-                        "unknown notification field '{key}'; pass --raw to forward it"
-                    ));
-                }
-                if kind.is_some_and(|kind| !kind.accepts(value)) {
-                    return Err(format!("{key} has an invalid JSON type or value"));
-                }
-            }
+            prepare_payload(&input, *hold, *stack, *wakeup, name.as_deref(), *raw)?;
             Ok(())
         }
         Command::DeleteActive => Ok(()),
@@ -119,24 +86,23 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                     ))
                 }
             };
-            let mut body: Value = serde_json::from_str(&input)
-                .map_err(|_| ("ARGUMENT", "payload must be valid JSON".into()))?;
-            let object = body
-                .as_object_mut()
-                .ok_or(("ARGUMENT", "payload must be a JSON object".into()))?;
-            object.insert("hold".into(), json!(hold));
-            object.insert("stack".into(), json!(stack));
-            object.insert("wakeup".into(), json!(wakeup));
-            if let Some(name) = name {
-                object.insert("name".into(), json!(name));
-            }
+            let body = prepare_payload(
+                &input,
+                *hold,
+                *stack,
+                *wakeup,
+                name.as_deref(),
+                command_raw(command),
+            )
+            .map_err(|message| ("ARGUMENT", message))?;
+            let effective_name = body.get("name").cloned().unwrap_or(Value::Null);
             api.mutate(reqwest::Method::POST, "/api/v1/notifications", &body).map_err(|(code, message)| {
-                if code == "HTTP_507" || code == "HTTP" && message.contains("507") { ("QUEUE_FULL", "device notification queue is full (HTTP 507); no retry was attempted".into()) }
+                if code == "HTTP_507" { ("HTTP_507", "device returned HTTP 507 (insufficient storage); notification acceptance is not guaranteed and no retry was attempted".into()) }
                 else if matches!(code, "TIMEOUT" | "TRANSPORT") { ("OUTCOME_UNKNOWN", "notification may have been accepted; outcome is unknown and no retry was attempted".into()) }
                 else { (code, message) }
             })?;
             Ok(
-                json!({"accepted":true,"visibility":"unknown","name":name,"queue":"device-managed","runtime_success_guaranteed":false}),
+                json!({"accepted":true,"visibility":"unknown","name":effective_name,"queue":"device-managed","runtime_success_guaranteed":false}),
             )
         }
         Command::DeleteActive => {
@@ -156,6 +122,77 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             Ok(json!({"accepted":true,"operation":"dismiss-named","name":name}))
         }
     }
+}
+
+fn command_raw(command: &Command) -> bool {
+    matches!(command, Command::Send { raw: true, .. })
+}
+
+fn prepare_payload(
+    input: &str,
+    hold: bool,
+    stack: bool,
+    wakeup: bool,
+    option_name: Option<&str>,
+    raw: bool,
+) -> Result<Value, String> {
+    let mut value: Value =
+        serde_json::from_str(input).map_err(|_| "payload must be valid JSON".to_owned())?;
+    let object = value
+        .as_object_mut()
+        .filter(|object| !object.is_empty())
+        .ok_or("payload must be a non-empty JSON object")?;
+    for (key, enabled) in [("hold", hold), ("stack", stack), ("wakeup", wakeup)] {
+        if let Some(payload_value) = object.get(key) {
+            let payload_bool = payload_value
+                .as_bool()
+                .ok_or_else(|| format!("{key} must be a boolean"))?;
+            if enabled && !payload_bool {
+                return Err(format!("--{key} conflicts with payload {key}: false"));
+            }
+        } else {
+            object.insert(key.into(), json!(enabled));
+        }
+    }
+    let payload_name = object
+        .get("name")
+        .map(|value| {
+            value
+                .as_str()
+                .ok_or_else(|| "name must be a string".to_owned())
+        })
+        .transpose()?;
+    if let Some(name) = payload_name {
+        validate_name(name)?;
+        if name == "active" {
+            return Err("notification name 'active' is reserved".into());
+        }
+    }
+    if let Some(name) = option_name {
+        validate_name(name)?;
+        if name == "active" {
+            return Err("notification name 'active' is reserved".into());
+        }
+        if payload_name.is_some_and(|payload_name| payload_name != name) {
+            return Err("--name conflicts with payload name".into());
+        }
+        object.insert("name".into(), json!(name));
+    }
+    for (key, field_value) in object.iter() {
+        if matches!(key.as_str(), "name" | "hold" | "stack" | "wakeup") {
+            continue;
+        }
+        let kind = crate::apps::notification_field_kind(key);
+        if kind.is_none() && !raw {
+            return Err(format!(
+                "unknown notification field '{key}'; pass --raw to forward it"
+            ));
+        }
+        if kind.is_some_and(|kind| !kind.accepts(field_value)) {
+            return Err(format!("{key} has an invalid JSON type or value"));
+        }
+    }
+    Ok(value)
 }
 
 fn validate_name(name: &str) -> Result<(), String> {
@@ -182,7 +219,7 @@ pub fn describe(topic: &str) -> Value {
             json!({"command":"notify delete","parameters":{"name":"[A-Za-z0-9_-]{1,32}; active is reserved"},"inputs":["caller-defined notification name"],"schemas":{"output":{"accepted":"boolean","operation":"dismiss-named","name":"string"}},"outputs":["dismisses the named notification wherever it sits in the queue; 404 means no matching notification"],"output_fields":["accepted","operation","name"],"examples":["awtrix --json notify delete build"],"prerequisites":["AWTRIX NG HTTP API"]})
         }
         "send" => {
-            json!({"command":"notify send","parameters":{"--payload":"non-empty JSON object of pushed-app fields","--file":"UTF-8 JSON file","--hold":"keep notification until dismissed","--stack":"append to queue; maximum 32 stacked notifications","--wakeup":"wake display","--name":"optional name for targeted dismissal (not a deduplication key)","--raw":"forward unknown device-specific fields"},"inputs":["notification content and optional hold/stack/wakeup/name"],"schemas":{"input":"typed pushed-app fields reused from apps; hold, stack and wakeup are booleans","output":{"accepted":"boolean","visibility":"unknown","name":"string|null","queue":"device-managed","runtime_success_guaranteed":false}},"outputs":["HTTP acceptance only; visibility is not guaranteed"],"output_fields":["accepted","visibility","name","queue","runtime_success_guaranteed"],"examples":["awtrix --json notify send --payload '{\"text\":\"Ready\"}' --stack --wakeup --name build"],"prerequisites":["AWTRIX NG /api/v1/notifications"],"limitations":["No deduplication guarantee for names or options","HTTP 507 indicates queue capacity refusal","uncertain POST outcomes are not retried"]})
+            json!({"command":"notify send","parameters":{"--payload":"non-empty JSON object of pushed-app fields; notification extras hold, stack, wakeup and name are validated","--file":"UTF-8 JSON file","--hold":"set hold true; conflicts with payload hold:false","--stack":"set stack true; conflicts with payload stack:false; API stacks at most 32 notifications","--wakeup":"set wakeup true; conflicts with payload wakeup:false","--name":"optional validated name for targeted dismissal; must agree with payload name","--raw":"forward unknown device-specific fields; known fields remain validated"},"inputs":["notification content and optional hold/stack/wakeup/name"],"schemas":{"input":"typed pushed-app fields reused from apps; hold, stack and wakeup must be booleans; name must match [A-Za-z0-9_-]{1,32} and cannot be active","output":{"accepted":"boolean","visibility":"unknown","name":"string|null","queue":"device-managed","runtime_success_guaranteed":false}},"outputs":["HTTP acceptance only; visibility is not guaranteed"],"output_fields":["accepted","visibility","name","queue","runtime_success_guaranteed"],"examples":["awtrix --json notify send --payload '{\"text\":\"Ready\"}' --stack --wakeup --name build"],"prerequisites":["AWTRIX NG /api/v1/notifications"],"limitations":["No deduplication guarantee for names or options","HTTP 507 remains generic insufficient storage; queue-full is not inferred","uncertain POST outcomes are not retried"]})
         }
         _ => {
             json!({"command":"notify delete-active","parameters":{},"inputs":["active notification"],"schemas":{"output":{"accepted":"boolean","operation":"dismiss-active"}},"outputs":["dismisses the current notification"],"output_fields":["accepted","operation"],"examples":["awtrix --json notify delete-active"],"prerequisites":["AWTRIX NG /api/v1/notifications/active"]})

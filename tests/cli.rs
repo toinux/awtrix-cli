@@ -1467,6 +1467,13 @@ fn notifications_send_named_delete_active_and_uncertain_post_follow_documented_r
         assert_eq!(request.method(), &tiny_http::Method::Post);
         thread::sleep(Duration::from_millis(200));
         let _ = request.respond(Response::from_string("{}"));
+        assert!(
+            server
+                .recv_timeout(Duration::from_millis(100))
+                .unwrap()
+                .is_none(),
+            "uncertain notification POST was retried"
+        );
     });
     let output = run(&[
         "--target",
@@ -1521,7 +1528,7 @@ fn notifications_validate_locally_and_report_queue_full_without_leaking_remote_b
     ]);
     worker.join().unwrap();
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["error"]["code"], "QUEUE_FULL");
+    assert_eq!(report["error"]["code"], "HTTP_507");
     assert!(!String::from_utf8_lossy(&output.stdout).contains("private queue details"));
     for topic in ["notify send", "notify delete-active", "notify delete"] {
         let description = run(&["--json", "describe", topic]);
@@ -1534,6 +1541,82 @@ fn notifications_validate_locally_and_report_queue_full_without_leaking_remote_b
         assert!(schema["parameters"].is_object());
         assert!(!schema["output_fields"].as_array().unwrap().is_empty());
     }
+}
+
+#[test]
+fn notification_payload_extras_are_type_checked_and_flag_conflicts_are_rejected() {
+    for payload in [
+        r#"{"text":"x","name":"active"}"#,
+        r#"{"text":"x","name":"invalid/name"}"#,
+        r#"{"text":"x","name":7}"#,
+        r#"{"text":"x","hold":"yes"}"#,
+        r#"{"text":"x","stack":1}"#,
+        r#"{"text":"x","wakeup":null}"#,
+    ] {
+        let output = run(&[
+            "--target",
+            "http://127.0.0.1:1",
+            "--json",
+            "notify",
+            "send",
+            "--payload",
+            payload,
+        ]);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{payload}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()["error"]["code"],
+            "ARGUMENT"
+        );
+    }
+    let conflict = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "--json",
+        "notify",
+        "send",
+        "--payload",
+        r#"{"text":"x","hold":false}"#,
+        "--hold",
+    ]);
+    assert_eq!(conflict.status.code(), Some(2));
+    let name_conflict = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "--json",
+        "notify",
+        "send",
+        "--payload",
+        r#"{"text":"x","name":"first"}"#,
+        "--name",
+        "second",
+    ]);
+    assert_eq!(name_conflict.status.code(), Some(2));
+    let unknown = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "--json",
+        "notify",
+        "send",
+        "--payload",
+        r#"{"text":"x","vendor":true}"#,
+    ]);
+    assert_eq!(unknown.status.code(), Some(2));
+    let raw = run(&[
+        "--target",
+        "http://127.0.0.1:1",
+        "--json",
+        "notify",
+        "send",
+        "--payload",
+        r#"{"text":"x","vendor":true}"#,
+        "--raw",
+    ]);
+    assert_ne!(raw.status.code(), Some(2));
 }
 
 #[test]
