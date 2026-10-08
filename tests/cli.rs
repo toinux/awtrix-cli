@@ -295,6 +295,191 @@ fn script_re_minify_fetches_backs_up_then_conditionally_writes_minified_source()
 }
 
 #[test]
+fn script_re_minify_no_backup_is_explicit_and_still_uses_conditional_update() {
+    let root = tempfile::tempdir().unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let original = "class Demo\n  def draw()\n    print(1)\n  end\nend\nreturn Demo()\n";
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(original))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/script-update/demo");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["expected_source"], original);
+        assert_eq!(
+            body["source"],
+            "class a\ndef draw()\nprint(1)\nend\nend\nreturn a()\n"
+        );
+        request.respond(Response::from_string("{}")).unwrap();
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args([
+            "--json",
+            "--target",
+            &url,
+            "script",
+            "re-minify",
+            "demo",
+            "--no-backup",
+        ])
+        .current_dir(root.path())
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(output.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["backup_created"], false);
+    assert!(result["backup"].is_null());
+    assert!(!root.path().join("demo.bak.ax").exists());
+}
+
+#[test]
+fn script_re_minify_refuses_existing_backup_without_remote_write() {
+    let root = tempfile::tempdir().unwrap();
+    let backup = root.path().join("demo.bak.ax");
+    std::fs::write(&backup, b"keep existing backup").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string("class Demo\nend\n"))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        assert!(server
+            .recv_timeout(Duration::from_millis(150))
+            .unwrap()
+            .is_none());
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "--target", &url, "script", "re-minify", "demo"])
+        .current_dir(root.path())
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&backup).unwrap(), b"keep existing backup");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "BACKUP");
+}
+
+#[test]
+fn script_re_minify_fetch_or_minification_failure_never_checks_capability_or_writes() {
+    for (remote, expected_code) in [
+        ("", "HTTP"),
+        (
+            "class Demo\n  def draw()\n    return \"unterminated\n  end\nend\n",
+            "MINIFY_SYNTAX",
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), "/api/v1/apps/script/demo");
+            request
+                .respond(if remote.is_empty() {
+                    Response::from_string("not found").with_status_code(404)
+                } else {
+                    Response::from_string(remote)
+                })
+                .unwrap();
+            assert!(server
+                .recv_timeout(Duration::from_millis(150))
+                .unwrap()
+                .is_none());
+        });
+        let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+            .args(["--json", "--target", &url, "script", "re-minify", "demo"])
+            .current_dir(root.path())
+            .env("AWTRIX_NO_UPDATE_CHECK", "1")
+            .output()
+            .unwrap();
+        worker.join().unwrap();
+        assert!(!output.status.success());
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["error"]["code"], expected_code);
+        assert!(!root.path().join("demo.bak.ax").exists());
+    }
+}
+
+#[test]
+fn script_re_minify_capability_and_conflict_fail_without_unprotected_fallback() {
+    for (capabilities, expected_write_status, expected_code) in [
+        (r#"{"other":true}"#, None, "PROTECTION_UNAVAILABLE"),
+        (r#"{"scriptUpdates":true}"#, Some(409), "CONFLICT"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let original = "class Demo\nend\n";
+        let worker = thread::spawn(move || {
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_string(original))
+                .unwrap();
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_string(capabilities))
+                .unwrap();
+            if let Some(status) = expected_write_status {
+                let request = server.recv().unwrap();
+                assert_eq!(request.url(), "/api/v1/apps/script-update/demo");
+                request
+                    .respond(Response::from_string("conflict").with_status_code(status))
+                    .unwrap();
+                assert!(server
+                    .recv_timeout(Duration::from_millis(150))
+                    .unwrap()
+                    .is_none());
+            } else {
+                assert!(server
+                    .recv_timeout(Duration::from_millis(150))
+                    .unwrap()
+                    .is_none());
+            }
+        });
+        let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+            .args(["--json", "--target", &url, "script", "re-minify", "demo"])
+            .current_dir(root.path())
+            .env("AWTRIX_NO_UPDATE_CHECK", "1")
+            .output()
+            .unwrap();
+        worker.join().unwrap();
+        assert!(!output.status.success());
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["error"]["code"], expected_code);
+        let backup = root.path().join("demo.bak.ax");
+        if expected_write_status.is_some() {
+            assert_eq!(std::fs::read_to_string(backup).unwrap(), original);
+        } else {
+            assert!(!backup.exists());
+        }
+    }
+}
+
+#[test]
 fn local_minify_force_preserves_an_existing_output_when_atomic_replace_fails() {
     let root = tempfile::tempdir().unwrap();
     let source_path = root.path().join("blocked.ax");
