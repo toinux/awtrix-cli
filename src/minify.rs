@@ -84,6 +84,20 @@ pub(crate) fn run(
     Ok(json!({"output":output,"bytes":bytes}))
 }
 
+/// Transform source for an in-memory deployment without creating or modifying a file.
+pub(crate) fn minify_source(source: &str) -> crate::CliResult<String> {
+    minify_berry(
+        source,
+        MinifyOptions {
+            rename_locals: true,
+            rename_classes: true,
+            rename_members: true,
+            join_lines: false,
+            merge_var_decls: true,
+        },
+    )
+}
+
 fn output_path(file: &Path) -> crate::CliResult<PathBuf> {
     let stem = file
         .file_stem()
