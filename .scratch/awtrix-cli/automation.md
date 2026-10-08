@@ -501,3 +501,14 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
   stable release as neither draft nor prerelease; supplied to worker as context.
 - No external prerequisite is required for #35 acceptance (local HTTP fixture).
   Native macOS/Windows execution and physical checks will not be claimed.
+- Dispatch base: `dda3188076dd953e2c1740071cef0db5e37855bb`; #35 claimed @me.
+  Luna implementer session `ses_ee3085735ffewceTISvKncXAY9` initially used a
+  wrong derived directory, then encountered forbidden git merge-base; corrected
+  assignment and used HEAD equality instead. No model substitution or bypass.
+- Delivered `e146a07`; independent reviewer `ses_ee3018877ffeDnZq1HAIhOX8VZ`
+  found no production blockers but request-count evidence needed strengthening.
+  Correction `e98dfcf` asserts exact HTTP sequences and force/no-force matrix,
+  and rejects plus-prefixed numeric components. Independent re-review: no
+  Standards/Spec blockers or acceptance gaps; reviewer ran 22 update tests.
+  Worker fmt/Clippy/full suite passed (18 unit, 174 CLI, 2 distribution).
+- Candidate approved; controlled local integration and final checks are next.
