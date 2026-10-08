@@ -395,3 +395,55 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
   at-most-24h checks including failures, bounded best-effort network, opt-out, no auto-install.
 - #27 native macOS/Windows replacement verification may be externally blocked on this
   Linux host; workflow configuration is not execution evidence. Do not push to obtain CI.
+
+## Recovery and consolidated run — 2026-10-08
+
+- This section supersedes the earlier no-push authorization notes for the three new
+  specifications only. User authorized an intermediate and final push of the integration
+  branch; releases remain unauthorized. Main checkout edits in `GLOSSARY.md` and
+  untracked `TODO.md` were preserved outside the integration worktree.
+- Recovery cause: the detached wrapper treated OpenCode's exit code 0 as completion even
+  when worker permission prompts were auto-rejected. One ticket worktree was initially
+  placed beneath the integration worktree instead of at the repository `.worktrees` root.
+  Corrected agent path permissions and registered the external minifier as a read-only
+  project reference; verified the implementer agent config with `opencode debug agent`.
+- Spec #22 / child #25: implementation commits `5fbaf24`, `6cdcd55`; independent Luna
+  review approved; `cargo fmt --check`, Clippy, and full tests passed. Integrated at
+  `2561c8f`, pushed in `6d0f10c`, and GitHub #25/#22 closed as completed.
+- Spec #23 / child #26: implementation commits `d111b2c`, `9efcf42`; independent Luna
+  review approved; local notice/outage/throttle/opt-out/current-version tests and full
+  checks passed. Integrated at `dbd05c3`, pushed in `6d0f10c`, and #26 closed.
+- Spec #23 / child #27: implementation `28638eb`, failure-path/native self-replacement
+  corrections `5c1dfe6`, `e00eb71`; independent review approved. First push CI run
+  `37734915437` found a Windows-only Clippy lifetime error in the debug fixture path;
+  fixed in integration commit `873bde0`. Native run `37735731185` passed Linux GNU,
+  macOS ARM64, and Windows MSVC, including the updater test step. GitHub #27 was closed
+  after this evidence. No release was published.
+- Spec #24 / child #29: minifier implementation `914e7c6`, atomic-output and regression
+  tests `0eb93dd`; independent Luna review approved. The exact local Anothertime script
+  was not checked in, so a sanitized, representative Anothertime-derived fixture is in
+  `tests/fixtures/anothertime-minify.ax`; a golden case was compared with the existing
+  TypeScript utility. Integrated at `6d0f10c`, pushed, and #29 closed.
+- Spec #24 / child #30: deployment-time opt-in minification implementation
+  `cc46e9a`, no-write-on-minifier-error test `1300644`; independent review approved.
+  Integrated at `cdc4eb6`; full integration checks passed. GitHub issue remains open
+  until its code is included in the final push.
+- Spec #24 / child #31: installed-script re-minification implementation `1cd577f`,
+  opt-out/failure coverage `a085a7f`, atomic backup creation `23cef2b`; independent
+  review approved. The backup uses same-directory temporary output and create-new
+  persistence, and preparation failures never issue a remote write. Integrated at
+  `2aff32d`; full integration checks passed. GitHub issue remains open pending push.
+- Spec #23 / child #28: skill binary-first guidance `c587ba1`; independent review
+  approved. Installer contract test added. Integrated at `4b536cc`; full integration
+  checks pass. GitHub issue remains open pending final push.
+- Current consolidated integration HEAD before journal update: `4b536cca7f17577e4e86be6760fa613099130891`.
+  Pushed origin HEAD remains `873bde00919d6b1d0bd03c5e19e3969623d752a1`; local commits
+  for #28/#30/#31 and this journal update await the final branch push.
+- Latest integrated checks: `cargo fmt --check`, `cargo clippy --all-targets --all-features
+  --locked -- -D warnings`, `cargo test --locked` (18 unit, 167 CLI, 2 distribution;
+  one real-headless test ignored), release Clippy/build, packaged distribution tests,
+  release-artifact contract, and installer contract suite (10 passed, 4 Windows tests
+  skipped on Linux). Native checks for the final consolidated HEAD must run after push.
+- GitHub state at this checkpoint: #22/#25/#26/#27/#29 closed after their code was pushed
+  and required checks passed; #23/#24 remain open. #28/#30/#31 are locally integrated
+  and reviewed but intentionally remain open until the final push and CI.
