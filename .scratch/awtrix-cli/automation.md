@@ -539,3 +539,11 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
 - Next close-out: append GitHub evidence, close #35 as completed, mark parent
   checklist and close #34, reconcile live graph, then remove only clean integrated
   ticket-35 worktree while retaining its branch and commits. No push/release.
+- Close-out completed: evidence comments posted, #35 and #34 observed CLOSED
+  with state_reason=completed, parent #35 checklist checked, live child graph
+  contains only completed #35 and no blockers. No remaining frontier in #34.
+- Clean ticket-35 worktree removed after ancestor/integration verification;
+  `ticket/35-version-aware-update` and both commits retained. Integration workspace
+  clean before this journal note; main GLOSSARY.md diff and untracked TODO.md
+  confirmed preserved. Other worktrees untouched. Run complete, no blockers.
+  Changes are local only; publication requires a separate user request.
