@@ -174,6 +174,23 @@ class PublicationTests(unittest.TestCase):
         self.checkpoint["final_reviews"] = reviews(self.head, self.head)
         self.blocked("stale")
 
+    def test_resume_after_marking_pr_ready_is_idempotent_but_rechecks_evidence(self):
+        self.pr["isDraft"] = False
+        gate.publication(self.checkpoint, self.pr)
+        self.pr["statusCheckRollup"] = []
+        self.blocked("Required CI not successful")
+
+    def test_external_candidate_after_delivered_head_is_rejected(self):
+        later = self.commit("not in delivered PR")
+        self.checkpoint["head"] = later
+        self.ticket.update(in_scope=False, status="delivered", candidate_head=later,
+                           reviews=reviews(self.base, later),
+                           delivery={"pr": 100, "merge_sha": self.head})
+        self.dependent()
+        delivered = dict(self.pr, state="MERGED", mergeCommit={"oid": self.head})
+        with patch.object(gate, "pr_data", return_value=delivered):
+            self.blocked("candidate is not integrated")
+
     def test_cli_live_tracker_failure_is_blocked(self):
         checkpoint = self.repo / "checkpoint.json"
         checkpoint.write_text(json.dumps(self.checkpoint), encoding="utf-8")
