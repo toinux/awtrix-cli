@@ -475,3 +475,29 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
 - The run-scoped absolute path reference to the external TypeScript minifier was removed
   from `.opencode/opencode.json` before final publication; the Rust implementation and
   checked-in fixture are self-contained for future clones.
+
+## Specification #34 run — 2026-10-08
+
+- Live authority: https://github.com/toinux/awtrix-cli/issues/34 and sole native
+  child https://github.com/toinux/awtrix-cli/issues/35, both OPEN, unassigned,
+  no comments. Both native dependency lists and #35 child list are empty.
+  Unique issue IDs, existing prerequisites and acyclic one-ticket graph verified.
+- No historical local ticket mapping applies. Original diagnostic is integrated.
+- Original baseline: `4f4186ca2d526ca7eac34acc5e2a3aa58bcbfd36` (main v0.2.0).
+  Existing clean integration worktree fast-forwarded to main; branch
+  `integration/awtrix-cli`, workspace `.worktrees/integration-awtrix-cli`.
+  Main checkout's modified GLOSSARY.md and untracked TODO.md are untouched.
+  Other worktrees are unrelated and preserved. Git author identity verified via
+  `git var GIT_AUTHOR_IDENT`; no configuration changed. No ADR files present.
+- Authorization: local ticket/journal commits, merges and GitHub tracker updates;
+  no remote code pushes or releases. Maximum two implementers, one ready ticket.
+- #35 assignment planned: branch `ticket/35-version-aware-update`, worktree
+  `/home/toine/Work/tries/2026-10-07-awtrix-cli/.worktrees/ticket-35`.
+  Dispatch base will be this committed journal checkpoint.
+- Shared contracts: compare embedded installed version to stable tag before assets;
+  optional leading v; equal no-op unless force, newer always no-op, invalid fails
+  even under force; preserve checksum/replacement protections and JSON contracts.
+  User glossary defines installed version as the running binary's version and
+  stable release as neither draft nor prerelease; supplied to worker as context.
+- No external prerequisite is required for #35 acceptance (local HTTP fixture).
+  Native macOS/Windows execution and physical checks will not be claimed.
