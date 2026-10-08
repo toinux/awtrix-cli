@@ -447,3 +447,26 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
 - GitHub state at this checkpoint: #22/#25/#26/#27/#29 closed after their code was pushed
   and required checks passed; #23/#24 remain open. #28/#30/#31 are locally integrated
   and reviewed but intentionally remain open until the final push and CI.
+
+## Final close-out — 2026-10-08
+
+- User authorized subsequent integration-branch pushes without further approval; release
+  publication remains unauthorized. The full implementation branch was pushed at
+  `51fb9e701b39624f1f1333397eb7ee464c2ad6e6`.
+- Final native verification run `37737002123` succeeded on Linux GNU, macOS ARM64, and
+  Windows MSVC. Each host passed format, Clippy, the native updater test, release build,
+  packaged CLI/HTTP checks, installer contract tests and release-artifact layout checks;
+  Linux also passed the full test suite. Release and release-install jobs were skipped
+  because this was a branch push, not a version tag. No release was published.
+- Final integration checks passed: `cargo fmt --check`; debug Clippy with warnings denied;
+  `cargo test --locked` (18 unit, 167 CLI, 2 distribution; one real-headless test ignored);
+  release Clippy, `cargo build --release --locked`, packaged distribution tests, installer
+  contract tests (10 passed, 4 native PowerShell tests skipped locally), and the
+  release-artifact contract.
+- All approved implementation issues #25–#31 and parent specifications #22–#24 are
+  closed as completed after their changes were pushed. #27's native OS replacement
+  acceptance was verified by the successful matrix. #30/#31 local HTTP tests do not
+  establish physical device behavior; no device mutation or hardware test was performed.
+- The user checkout's pre-existing `GLOSSARY.md` and untracked `TODO.md` changes remained
+  untouched. Local integration branch is `integration/awtrix-cli`; no release tag or
+  release publication was created.
