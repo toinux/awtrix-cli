@@ -382,6 +382,44 @@ fn script_re_minify_refuses_existing_backup_without_remote_write() {
 }
 
 #[test]
+fn script_re_minify_backup_install_failure_preserves_backup_tree_and_skips_write() {
+    let root = tempfile::tempdir().unwrap();
+    let backup = root.path().join("demo.bak.ax");
+    std::fs::create_dir(&backup).unwrap();
+    let sentinel = backup.join("keep.txt");
+    std::fs::write(&sentinel, b"existing backup tree").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string("class Demo\nend\n"))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        assert!(server
+            .recv_timeout(Duration::from_millis(150))
+            .unwrap()
+            .is_none());
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "--target", &url, "script", "re-minify", "demo"])
+        .current_dir(root.path())
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"existing backup tree");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "BACKUP");
+}
+
+#[test]
 fn script_re_minify_fetch_or_minification_failure_never_checks_capability_or_writes() {
     for (remote, expected_code) in [
         ("", "HTTP"),

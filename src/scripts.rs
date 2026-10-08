@@ -2,7 +2,10 @@
 use clap::Subcommand;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -243,27 +246,32 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
 fn write_script_backup(name: &str, source: &str) -> crate::CliResult<PathBuf> {
     use std::io::Write;
     let path = PathBuf::from(format!("{name}.bak.ax"));
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|error| {
-            (
-                "BACKUP",
-                format!(
-                    "cannot create backup {}: {error}; existing backups are never overwritten",
-                    path.display()
-                ),
-            )
-        })?;
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
+        (
+            "BACKUP",
+            format!("cannot stage backup {}: {error}", path.display()),
+        )
+    })?;
     file.write_all(source.as_bytes())
-        .and_then(|()| file.sync_all())
+        .and_then(|()| file.as_file().sync_all())
         .map_err(|error| {
             (
                 "BACKUP",
                 format!("cannot write backup {}: {error}", path.display()),
             )
         })?;
+    file.persist_noclobber(&path).map_err(|error| {
+        let message = if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+            format!(
+                "backup {} already exists; existing backups are never overwritten",
+                path.display()
+            )
+        } else {
+            format!("cannot install backup {}: {}", path.display(), error.error)
+        };
+        ("BACKUP", message)
+    })?;
     Ok(path)
 }
 
