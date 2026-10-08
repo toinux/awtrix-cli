@@ -10,6 +10,23 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 SH_INSTALLER = ROOT / "skills/awtrix-cli/scripts/install.sh"
 PS_INSTALLER = ROOT / "skills/awtrix-cli/scripts/install.ps1"
+INSTALLATION_GUIDE = ROOT / "skills/awtrix-cli/references/installation.md"
+SKILL = ROOT / "skills/awtrix-cli/SKILL.md"
+
+
+class SkillInstallationGuidanceTests(unittest.TestCase):
+    def test_guidance_prefers_verified_binaries_and_uses_explicit_update(self):
+        guide = INSTALLATION_GUIDE.read_text()
+        skill = SKILL.read_text()
+        self.assertLess(guide.index("Preferred path: verified GitHub release binary"), guide.index("Source-build fallback: Cargo"))
+        self.assertIn("awtrix-cli update", guide)
+        self.assertIn("SHA256SUMS", guide)
+        self.assertIn("awtrix-cli-x86_64-unknown-linux-gnu", guide)
+        self.assertIn("awtrix-cli-aarch64-apple-darwin", guide)
+        self.assertIn("awtrix-cli-x86_64-pc-windows-msvc.exe", guide)
+        self.assertIn("never installs anything automatically", guide)
+        self.assertIn("does not install the CLI", guide)
+        self.assertIn("awtrix-cli update", skill)
 
 
 @unittest.skipIf(os.name == "nt", "POSIX shell behavior test")

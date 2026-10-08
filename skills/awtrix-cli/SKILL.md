@@ -71,6 +71,8 @@ If availability is not already established, `awtrix-cli --version` is sufficient
 help is not an installation check. If missing, follow
 [installation and recovery](references/installation.md). Retain the verified
 executable path across calls, using its absolute path if absent from `PATH`.
+For an existing installation, run `awtrix-cli update` only when the user chooses
+to upgrade; release notices only announce availability and never install updates.
 
 Use the user's device URL or existing personal profile. Inspect profiles with
 `awtrix-cli --json profile list` when needed. Replace `http://awtrix.local`

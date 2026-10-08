@@ -3,6 +3,27 @@
 Load this reference only when the executable is missing or installation needs
 recovery. A successful `--version` establishes availability; retain that path.
 
+## Choose install or upgrade
+
+Prefer the compatible published release binary: the bundled installers select
+the host artifact and verify it against `SHA256SUMS`. Supported assets are Linux
+x86_64 GNU/glibc (`awtrix-cli-x86_64-unknown-linux-gnu`), macOS arm64
+(`awtrix-cli-aarch64-apple-darwin`), and Windows x86_64 MSVC
+(`awtrix-cli-x86_64-pc-windows-msvc.exe`). No Rust toolchain is needed.
+
+For an existing `awtrix-cli`, use the explicit command when the user requests an
+upgrade:
+
+```sh
+awtrix-cli update
+```
+
+The command installs only when explicitly run. A startup release notice is
+informational and never installs anything automatically. The update command uses
+the matching stable published binary and verifies its checksum; if unavailable,
+report the limitation and offer the source-build fallback below. Do not silently
+switch an update request into a source build.
+
 ## Bootstrap a missing executable
 
 Installing the skill does not install the CLI. Check the normal per-user path
@@ -42,7 +63,7 @@ The Windows installer uses PowerShell's web requests and SHA-256 support.
 Invoke scripts from the loaded skill's absolute directory. If scripts are absent,
 the installed skill copy is incomplete: reinstall it from `toinux/awtrix-cli` using
 `npx skills add toinux/awtrix-cli --skill awtrix-cli` with the original agent/scope
-options, or use the Cargo fallback. If local PowerShell policy blocks execution,
+options. If local PowerShell policy blocks execution,
 report it and use a caller-approved execution method rather than changing
 persistent machine policy.
 
@@ -62,10 +83,11 @@ for PowerShell. These are bootstrap installers, not automatic upgrade commands.
 
 Linux ARM64/musl, Intel macOS, and Windows ARM64 currently have no published
 asset. The installers fail explicitly on unsupported hosts; use the source-build
-fallback below if a suitable native Rust toolchain is available. An incompatible
-glibc runtime also fails the downloaded binary's checks before installation.
+fallback below only when no compatible asset exists or the user explicitly
+requests source compilation. An incompatible glibc runtime also fails the
+downloaded binary's checks before installation.
 
-## Fallback: Cargo with the committed lockfile
+## Source-build fallback: Cargo with the committed lockfile
 
 Check `cargo --version` and `rustc --version`. Building requires a stable Rust
 toolchain and a native linker/SDK. If absent, use the official
