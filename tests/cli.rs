@@ -244,6 +244,57 @@ fn local_minify_handles_anothertime_berry_constructs_and_all_metadata() {
 }
 
 #[test]
+fn script_re_minify_fetches_backs_up_then_conditionally_writes_minified_source() {
+    let root = tempfile::tempdir().unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let original =
+        "# @name demo\nclass Demo\n  def draw()\n    print(1)\n  end\nend\nreturn Demo()\n";
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Get);
+        assert_eq!(request.url(), "/api/v1/apps/script/demo");
+        request.respond(Response::from_string(original)).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/capabilities");
+        request
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Put);
+        assert_eq!(request.url(), "/api/v1/apps/script-update/demo");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["expected_source"], original);
+        assert_eq!(
+            body["source"],
+            "# @name demo\nclass a\ndef draw()\nprint(1)\nend\nend\nreturn a()\n"
+        );
+        request.respond(Response::from_string("{}")).unwrap();
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "--target", &url, "script", "re-minify", "demo"])
+        .current_dir(root.path())
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("demo.bak.ax")).unwrap(),
+        original
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["backup_created"], true);
+    assert_eq!(result["backup"], "demo.bak.ax");
+}
+
+#[test]
 fn local_minify_force_preserves_an_existing_output_when_atomic_replace_fails() {
     let root = tempfile::tempdir().unwrap();
     let source_path = root.path().join("blocked.ax");

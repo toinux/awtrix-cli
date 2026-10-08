@@ -22,6 +22,13 @@ pub enum Command {
     },
     /// Read exact source bytes from the device to stdout.
     Get { name: String },
+    /// Fetch, back up, and conditionally replace an installed script with its minified source.
+    ReMinify {
+        name: String,
+        /// Skip the local exact-source backup.
+        #[arg(long)]
+        no_backup: bool,
+    },
     /// Deploy a raw Berry source file.
     Deploy {
         name: String,
@@ -105,6 +112,28 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             let response = api.raw_get(&format!("/api/v1/apps/script/{name}"))?;
             // The output layer emits this raw unless --json was explicitly requested.
             Ok(json!({"source":response}))
+        }
+        Command::ReMinify { name, no_backup } => {
+            validate(name)?;
+            let original = api.raw_get(&format!("/api/v1/apps/script/{name}"))?;
+            let payload = crate::minify::minify_source(&original)?;
+            let capabilities = api.get("/api/v1/capabilities")?;
+            if capabilities.get("scriptUpdates").and_then(Value::as_bool) != Some(true) {
+                return Err((
+                    "PROTECTION_UNAVAILABLE",
+                    "scriptUpdates capability is absent; no write performed".into(),
+                ));
+            }
+            let backup = if *no_backup {
+                None
+            } else {
+                Some(write_script_backup(name, &original)?)
+            };
+            let result = api.conditional_put(name, &Value::String(original), &payload)?;
+            let saved = operational_result(result, true, None)?;
+            Ok(
+                json!({"name":name,"backup":backup,"backup_created":backup.is_some(),"minified":true,"source_saved":saved["source_saved"],"start_verified":false,"execution_state":"unknown","guarantee":saved["guarantee"],"device_result":saved["device_result"]}),
+            )
         }
         Command::Deploy {
             name,
@@ -209,6 +238,33 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             api.get(&format!("/api/v1/apps/{name}/data"))
         }
     }
+}
+
+fn write_script_backup(name: &str, source: &str) -> crate::CliResult<PathBuf> {
+    use std::io::Write;
+    let path = PathBuf::from(format!("{name}.bak.ax"));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|error| {
+            (
+                "BACKUP",
+                format!(
+                    "cannot create backup {}: {error}; existing backups are never overwritten",
+                    path.display()
+                ),
+            )
+        })?;
+    file.write_all(source.as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|error| {
+            (
+                "BACKUP",
+                format!("cannot write backup {}: {error}", path.display()),
+            )
+        })?;
+    Ok(path)
 }
 
 fn chain_verification(
