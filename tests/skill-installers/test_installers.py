@@ -15,6 +15,20 @@ SKILL = ROOT / "skills/awtrix-cli/SKILL.md"
 
 
 class SkillInstallationGuidanceTests(unittest.TestCase):
+    def test_skill_description_selects_awtrix_cli_information_and_setup_requests(self):
+        description = SKILL.read_text().split("---", 2)[1]
+
+        self.assertIn("AWTRIX", description)
+        self.assertIn("awtrix-cli", description)
+        self.assertIn("version", description)
+        self.assertIn("availability", description)
+        self.assertIn("location", description)
+        self.assertIn("install", description)
+        self.assertIn("update", description)
+        self.assertIn("use", description)
+        self.assertIn("troubleshoot", description)
+        self.assertIn("generic CLI", description)
+
     def test_guidance_prefers_verified_binaries_and_uses_explicit_update(self):
         guide = INSTALLATION_GUIDE.read_text()
         skill = SKILL.read_text()
