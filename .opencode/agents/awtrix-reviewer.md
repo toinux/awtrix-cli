@@ -20,6 +20,8 @@ permission:
     "cargo fmt --check*": allow
     "cargo clippy*": allow
     "cargo test*": allow
+    "python tests/agent-workflow/test_implementation_gate.py*": allow
+    "python3 tests/agent-workflow/test_implementation_gate.py*": allow
 ---
 
 Review the explicit base-to-head diff in the supplied absolute worktree. Set every shell workdir and file/search scope explicitly. Read AGENTS.md, GLOSSARY.md, relevant ADRs, the full spec, assigned ticket and any documented technical contracts. Load rust-best-practices when reviewing Rust.
