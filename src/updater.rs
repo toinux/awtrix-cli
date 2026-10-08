@@ -321,11 +321,12 @@ fn replace_fixture_target(
         fs::rename(target, &backup_path).map_err(|_| manual("cannot move the test target to a recovery path; existing executable was not changed"))?;
         if let Err(error) = temporary.persist(target) {
             let restore = fs::rename(&backup_path, target);
-            return Err(manual(if restore.is_ok() {
-                &format!("replacement failed ({error}); previous executable restored")
+            let message = if restore.is_ok() {
+                format!("replacement failed ({error}); previous executable restored")
             } else {
-                "replacement failed and automatic restoration failed; restore the backup beside the executable"
-            }));
+                "replacement failed and automatic restoration failed; restore the backup beside the executable".to_owned()
+            };
+            return Err(manual(&message));
         }
         fs::remove_file(&backup_path).map_err(|_| {
             manual("update installed, but the previous executable backup could not be removed")
