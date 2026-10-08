@@ -71,11 +71,24 @@ may be safely completed by rerunning the workflow.
 ## Explicit self-update
 
 `awtrix-cli update` is the only command that installs a release. It reads the
-GitHub latest-release endpoint, selects the one supported host asset, fetches
-`SHA256SUMS` and the binary, and verifies the exact asset entry before writing
-anything to the executable path. The command updates the resolved path reported
-by `current_exe()`; launching through a symlink updates its resolved executable,
-not the symlink entry. The validated file is staged beside that executable and
+GitHub latest-release endpoint and compares the stable release tag with the
+running binary's embedded version before looking up or downloading any assets.
+Version comparison accepts numeric `major.minor.patch` values; one leading `v`
+on the release tag is ignored. Other spellings (including prerelease/build
+metadata) are rejected as incomparable before asset requests. An equal version
+reports that the CLI is already up to date and leaves the executable untouched.
+`awtrix-cli update --force` reinstalls that equal version through the ordinary
+checksum-verified path; it does not enable downgrades. If the installed version
+is newer, the command reports that no downgrade was performed, regardless of
+`--force`. In JSON output the existing `updated` field is `false` for these
+no-op results and `true` when replacement proceeds.
+
+For a new version or forced equal-version reinstall, the command selects the
+supported host asset, fetches `SHA256SUMS` and the binary, and verifies the exact
+asset entry before writing anything to the executable path. The command updates
+the resolved path reported by `current_exe()`; launching through a symlink
+updates its resolved executable, not the symlink entry. The validated file is
+staged beside that executable and
 `self-replace` performs the platform-specific handoff, including Windows locking
 and delayed cleanup. Windows also keeps a temporary recovery copy while the
 handoff runs and restores it if replacement fails before the new executable is

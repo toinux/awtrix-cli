@@ -475,3 +475,75 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
 - The run-scoped absolute path reference to the external TypeScript minifier was removed
   from `.opencode/opencode.json` before final publication; the Rust implementation and
   checked-in fixture are self-contained for future clones.
+
+## Specification #34 run — 2026-10-08
+
+- Live authority: https://github.com/toinux/awtrix-cli/issues/34 and sole native
+  child https://github.com/toinux/awtrix-cli/issues/35, both OPEN, unassigned,
+  no comments. Both native dependency lists and #35 child list are empty.
+  Unique issue IDs, existing prerequisites and acyclic one-ticket graph verified.
+- No historical local ticket mapping applies. Original diagnostic is integrated.
+- Original baseline: `4f4186ca2d526ca7eac34acc5e2a3aa58bcbfd36` (main v0.2.0).
+  Existing clean integration worktree fast-forwarded to main; branch
+  `integration/awtrix-cli`, workspace `.worktrees/integration-awtrix-cli`.
+  Main checkout's modified GLOSSARY.md and untracked TODO.md are untouched.
+  Other worktrees are unrelated and preserved. Git author identity verified via
+  `git var GIT_AUTHOR_IDENT`; no configuration changed. No ADR files present.
+- Authorization: local ticket/journal commits, merges and GitHub tracker updates;
+  no remote code pushes or releases. Maximum two implementers, one ready ticket.
+- #35 assignment planned: branch `ticket/35-version-aware-update`, worktree
+  `/home/toine/Work/tries/2026-10-07-awtrix-cli/.worktrees/ticket-35`.
+  Dispatch base will be this committed journal checkpoint.
+- Shared contracts: compare embedded installed version to stable tag before assets;
+  optional leading v; equal no-op unless force, newer always no-op, invalid fails
+  even under force; preserve checksum/replacement protections and JSON contracts.
+  User glossary defines installed version as the running binary's version and
+  stable release as neither draft nor prerelease; supplied to worker as context.
+- No external prerequisite is required for #35 acceptance (local HTTP fixture).
+  Native macOS/Windows execution and physical checks will not be claimed.
+- Dispatch base: `dda3188076dd953e2c1740071cef0db5e37855bb`; #35 claimed @me.
+  Luna implementer session `ses_ee3085735ffewceTISvKncXAY9` initially used a
+  wrong derived directory, then encountered forbidden git merge-base; corrected
+  assignment and used HEAD equality instead. No model substitution or bypass.
+- Delivered `e146a07`; independent reviewer `ses_ee3018877ffeDnZq1HAIhOX8VZ`
+  found no production blockers but request-count evidence needed strengthening.
+  Correction `e98dfcf` asserts exact HTTP sequences and force/no-force matrix,
+  and rejects plus-prefixed numeric components. Independent re-review: no
+  Standards/Spec blockers or acceptance gaps; reviewer ran 22 update tests.
+  Worker fmt/Clippy/full suite passed (18 unit, 174 CLI, 2 distribution).
+- Candidate approved; controlled local integration and final checks are next.
+- Integrated via ordinary merge `9a7dacf80a5d9a998b91104660bdae49b45800ec`;
+  no conflicts or integration failures. Actual integrated `cargo fmt --check`,
+  `cargo clippy --all-targets --all-features --locked -- -D warnings` and
+  `cargo test --locked` passed (18 unit, 174 CLI; default distribution tests can
+  skip without artifact variable, and one real headless test is ignored by default).
+- `cargo test --locked --test cli update_` passed 22 matches, including two
+  unrelated substring matches. New HTTP end-to-end fixture cases prove exact
+  latest-only request lists for equal/newer/invalid outcomes, prefixed/unprefixed
+  forced equal checksum+binary sequences, unchanged/replaced executable bytes,
+  and both force states. Existing real update/failure/protection tests remain green.
+- Real headless end-to-end regression explicitly executed with
+  AWTRIX_LINUX_BIN=/tmp/opencode/awtrix-ng-build/awtrix-linux and
+  AWTRIX_WEBUI=/tmp/opencode/awtrix-ng-src/webui/index.html:
+  `cargo test --locked --test headless -- --ignored --nocapture` passed 1, 21.48s.
+  Existing official AWTRIX NG 1.2.2 build/source provenance recorded above;
+  executable and UI availability verified before execution. No acquisition needed.
+- `cargo build --release --locked` passed; explicit AWTRIX_DISTRIBUTION_BINARY
+  pointing to integration workspace target/release/awtrix-cli passed both packaged
+  help/version and local HTTP diagnosis tests. No real self-update download or
+  modification of the user's installed CLI was performed.
+- Final independent Luna review `ses_ee2fdc051ffeB4TvYZRZLC630V`, original
+  `4f4186c` through integrated `9a7dacf`: Standards 0, Spec 0, acceptance gaps 0.
+  All #35 mandatory criteria satisfied. Native macOS/Windows and physical checks
+  NOT EXECUTED, not required by this ticket; no compatibility claims added.
+- Next close-out: append GitHub evidence, close #35 as completed, mark parent
+  checklist and close #34, reconcile live graph, then remove only clean integrated
+  ticket-35 worktree while retaining its branch and commits. No push/release.
+- Close-out completed: evidence comments posted, #35 and #34 observed CLOSED
+  with state_reason=completed, parent #35 checklist checked, live child graph
+  contains only completed #35 and no blockers. No remaining frontier in #34.
+- Clean ticket-35 worktree removed after ancestor/integration verification;
+  `ticket/35-version-aware-update` and both commits retained. Integration workspace
+  clean before this journal note; main GLOSSARY.md diff and untracked TODO.md
+  confirmed preserved. Other worktrees untouched. Run complete, no blockers.
+  Changes are local only; publication requires a separate user request.

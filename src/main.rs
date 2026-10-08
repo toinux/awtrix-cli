@@ -111,7 +111,11 @@ enum Command {
         action: settings::Command,
     },
     /// Install the latest stable awtrix-cli release after validating its checksum.
-    Update,
+    Update {
+        /// Reinstall the same version when it is already installed.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -671,8 +675,8 @@ fn emit_error(code: &str, message: &str, machine: bool) {
 }
 
 fn run(cli: &Cli) -> CliResult<Value> {
-    if matches!(cli.command, Command::Update) {
-        updater::run().map(|message| json!({"updated":true,"message":message}))
+    if let Command::Update { force } = cli.command {
+        updater::run(force).map(|(updated, message)| json!({"updated":updated,"message":message}))
     } else if let Command::Minify {
         file,
         classes,
@@ -752,7 +756,7 @@ fn run_command(cli: &Cli) -> CliResult<Value> {
         Command::Apps { action } => apps::run(action, &api),
         Command::Notify { action } => notifications::run(action, &api),
         Command::Settings { action } => settings::run(action, &api, cli.timeout),
-        Command::Update => unreachable!(),
+        Command::Update { .. } => unreachable!(),
         Command::Device {
             action: DeviceCommand::State,
         } => api.get("/api/v1/device"),

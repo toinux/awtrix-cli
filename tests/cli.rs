@@ -543,6 +543,172 @@ fn update_help_is_explicit_and_version_remains_available() {
     let help = run(&["update", "--help"]);
     assert!(help.status.success());
     assert!(String::from_utf8_lossy(&help.stdout).contains("Install the latest stable"));
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--force"));
+}
+
+#[test]
+fn update_equal_installed_version_skips_assets_and_preserves_executable() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    let (output, requests) = run_versioned_update(&target, "0.2.0", "v0.2.0", false);
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Already up to date"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("\"updated\":false"));
+    assert_eq!(requests, ["/latest"]);
+    assert_eq!(std::fs::read(target).unwrap(), b"working binary");
+}
+
+#[test]
+fn update_equal_unprefixed_release_tag_is_already_installed() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    let (output, requests) = run_versioned_update(&target, "0.2.0", "0.2.0", false);
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Already up to date"));
+    assert_eq!(requests, ["/latest"]);
+    assert_eq!(std::fs::read(target).unwrap(), b"working binary");
+}
+
+#[test]
+fn update_force_reinstalls_equal_unprefixed_release_tag() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    let (output, requests) = run_versioned_update(&target, "0.2.0", "0.2.0", true);
+    assert!(output.status.success());
+    assert_eq!(
+        requests,
+        vec![
+            "/latest".to_owned(),
+            "/SHA256SUMS".to_owned(),
+            format!("/{}", update_asset_name())
+        ]
+    );
+    assert_eq!(std::fs::read(target).unwrap(), b"verified release binary");
+}
+
+fn run_versioned_update(
+    target: &std::path::Path,
+    installed: &str,
+    tag: &str,
+    force: bool,
+) -> (Output, Vec<String>) {
+    use sha2::{Digest, Sha256};
+
+    let payload = b"verified release binary";
+    let digest = format!("{:x}", Sha256::digest(payload));
+    let asset = update_asset_name();
+    let release = format!(
+        r#"{{"tag_name":"{tag}","prerelease":false,"draft":false,"assets":[{{"name":"{asset}","browser_download_url":"unused"}},{{"name":"SHA256SUMS","browser_download_url":"unused"}}]}}"#
+    );
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut requests = Vec::new();
+        while let Ok(Some(request)) = server.recv_timeout(Duration::from_millis(250)) {
+            let path = request.url().to_owned();
+            requests.push(path.clone());
+            let response = match path.as_str() {
+                "/latest" => Response::from_data(release.as_bytes().to_vec()),
+                "/SHA256SUMS" => Response::from_data(format!("{digest}  {asset}\n").into_bytes()),
+                path if path == format!("/{asset}") => Response::from_data(payload.to_vec()),
+                _ => {
+                    Response::from_data(b"unexpected update request".to_vec()).with_status_code(404)
+                }
+            };
+            request.respond(response).unwrap();
+        }
+        requests
+    });
+    let mut command = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"));
+    command
+        .args(["--json", "update"])
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .env("AWTRIX_UPDATE_API_URL", format!("{base}/latest"))
+        .env("AWTRIX_UPDATE_ASSET_BASE_URL", &base)
+        .env("AWTRIX_UPDATE_EXECUTABLE", target)
+        .env("AWTRIX_UPDATE_INSTALLED_VERSION", installed);
+    if force {
+        command.arg("--force");
+    }
+    let output = command.output().unwrap();
+    let requests = worker.join().unwrap();
+    (output, requests)
+}
+
+#[test]
+fn update_force_reinstalls_equal_version_through_checksum_verification() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    let (output, requests) = run_versioned_update(&target, "0.2.0", "v0.2.0", true);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        requests,
+        vec![
+            "/latest".to_owned(),
+            "/SHA256SUMS".to_owned(),
+            format!("/{}", update_asset_name())
+        ]
+    );
+    assert_eq!(std::fs::read(target).unwrap(), b"verified release binary");
+}
+
+#[test]
+fn update_force_does_not_downgrade_a_newer_installed_version() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    for force in [false, true] {
+        std::fs::write(&target, b"working binary").unwrap();
+        let (output, requests) = run_versioned_update(&target, "0.3.0", "v0.2.0", force);
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("not downgrading"));
+        assert_eq!(requests, ["/latest"]);
+        assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+    }
+}
+
+#[test]
+fn update_rejects_an_invalid_installed_version_before_assets_even_with_force() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    for installed in ["invalid", "+1.2.3", "1.+2.3"] {
+        for force in [false, true] {
+            std::fs::write(&target, b"working binary").unwrap();
+            let (output, requests) = run_versioned_update(&target, installed, "v0.2.0", force);
+            assert!(!output.status.success());
+            assert!(String::from_utf8_lossy(&output.stderr).contains("invalid installed version"));
+            assert_eq!(requests, ["/latest"]);
+            assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+        }
+    }
+}
+
+#[test]
+fn update_rejects_an_invalid_release_version_before_assets() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    for tag in ["vnext", "v+1.2.3", "v1.+2.3"] {
+        for force in [false, true] {
+            std::fs::write(&target, b"working binary").unwrap();
+            let (output, requests) = run_versioned_update(&target, "0.1.0", tag, force);
+            assert!(!output.status.success());
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("invalid stable release version")
+            );
+            assert_eq!(requests, ["/latest"]);
+            assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+        }
+    }
 }
 
 #[test]
