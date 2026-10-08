@@ -28,6 +28,10 @@ _Avoid_: Alert, toast
 Un programme Berry conserve sur l'appareil, executant sa propre logique et pouvant produire un affichage.
 _Avoid_: Berry script, app script
 
+**Minification** :
+Transformation d'un script visant a reduire sa taille tout en conservant son comportement et ses metadonnees AWTRIX.
+_Avoid_: Compression, minify (pour designer le resultat)
+
 **Projet de scripts** :
 Un ensemble declare de scripts, modules et ressources destines a etre deployes et testes ensemble.
 _Avoid_: Script project, bundle

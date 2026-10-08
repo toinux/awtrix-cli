@@ -2,7 +2,10 @@
 use clap::Subcommand;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -22,6 +25,13 @@ pub enum Command {
     },
     /// Read exact source bytes from the device to stdout.
     Get { name: String },
+    /// Fetch, back up, and conditionally replace an installed script with its minified source.
+    ReMinify {
+        name: String,
+        /// Skip the local exact-source backup.
+        #[arg(long)]
+        no_backup: bool,
+    },
     /// Deploy a raw Berry source file.
     Deploy {
         name: String,
@@ -41,6 +51,9 @@ pub enum Command {
         /// After saving, run verification for this many seconds (1..3600).
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..=3600))]
         verify_secs: Option<u64>,
+        /// Minify the deployment payload; the source file and expected-source reference stay original.
+        #[arg(long)]
+        minify: bool,
     },
     /// Enable a script without changing other apps.
     Enable { name: String },
@@ -103,6 +116,28 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             // The output layer emits this raw unless --json was explicitly requested.
             Ok(json!({"source":response}))
         }
+        Command::ReMinify { name, no_backup } => {
+            validate(name)?;
+            let original = api.raw_get(&format!("/api/v1/apps/script/{name}"))?;
+            let payload = crate::minify::minify_source(&original)?;
+            let capabilities = api.get("/api/v1/capabilities")?;
+            if capabilities.get("scriptUpdates").and_then(Value::as_bool) != Some(true) {
+                return Err((
+                    "PROTECTION_UNAVAILABLE",
+                    "scriptUpdates capability is absent; no write performed".into(),
+                ));
+            }
+            let backup = if *no_backup {
+                None
+            } else {
+                Some(write_script_backup(name, &original)?)
+            };
+            let result = api.conditional_put(name, &Value::String(original), &payload)?;
+            let saved = operational_result(result, true, None)?;
+            Ok(
+                json!({"name":name,"backup":backup,"backup_created":backup.is_some(),"minified":true,"source_saved":saved["source_saved"],"start_verified":false,"execution_state":"unknown","guarantee":saved["guarantee"],"device_result":saved["device_result"]}),
+            )
+        }
         Command::Deploy {
             name,
             source,
@@ -111,6 +146,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             create,
             force,
             verify_secs,
+            minify,
         } => {
             validate(name)?;
             let source = match (source, file) {
@@ -127,8 +163,13 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             if source.is_empty() {
                 return Err(("ARGUMENT", "Berry source must not be empty".into()));
             }
+            let payload = if *minify {
+                crate::minify::minify_source(&source)?
+            } else {
+                source.clone()
+            };
             if *force {
-                let result = api.raw_put(&format!("/api/v1/apps/script/{name}"), &source)?;
+                let result = api.raw_put(&format!("/api/v1/apps/script/{name}"), &payload)?;
                 let saved = operational_result(result, false, None)?;
                 chain_verification(saved, api, name, *verify_secs)
             } else {
@@ -141,7 +182,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                 } else {
                     Value::String(expected_source.clone().ok_or(("ARGUMENT", "conditional update requires --expected-source or --create; source was not reread".into()))?)
                 };
-                match api.conditional_put(name, &expected, &source) {
+                match api.conditional_put(name, &expected, &payload) {
                     Err(("CONFLICT", message)) => Err(("CONFLICT", message)),
                     Err(e) => Err(e),
                     Ok(result) => {
@@ -200,6 +241,38 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             api.get(&format!("/api/v1/apps/{name}/data"))
         }
     }
+}
+
+fn write_script_backup(name: &str, source: &str) -> crate::CliResult<PathBuf> {
+    use std::io::Write;
+    let path = PathBuf::from(format!("{name}.bak.ax"));
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|error| {
+        (
+            "BACKUP",
+            format!("cannot stage backup {}: {error}", path.display()),
+        )
+    })?;
+    file.write_all(source.as_bytes())
+        .and_then(|()| file.as_file().sync_all())
+        .map_err(|error| {
+            (
+                "BACKUP",
+                format!("cannot write backup {}: {error}", path.display()),
+            )
+        })?;
+    file.persist_noclobber(&path).map_err(|error| {
+        let message = if error.error.kind() == std::io::ErrorKind::AlreadyExists {
+            format!(
+                "backup {} already exists; existing backups are never overwritten",
+                path.display()
+            )
+        } else {
+            format!("cannot install backup {}: {}", path.display(), error.error)
+        };
+        ("BACKUP", message)
+    })?;
+    Ok(path)
 }
 
 fn chain_verification(

@@ -355,3 +355,123 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
   beyond observed ESP32 1.2.2 behavior is claimed. Ticket merge is
   `ab508bda5103c35d349ff91cd3b6a6501e1cea76`; final validation/docs commit is
   `f64ba42`.
+
+## Specification #22 run — 2026-10-08
+
+- Authority: https://github.com/toinux/awtrix-cli/issues/22; sole native child
+  https://github.com/toinux/awtrix-cli/issues/25. Both observed OPEN, no comments,
+  no native blocked-by edges or further children. Graph has unique IDs and is acyclic.
+- New issues have no historical local ticket IDs; migration table remains unchanged.
+  Prior diagnostic #2 and original graph are already integrated; no redispatch needed.
+- Run baseline `8ad3d07d65c9551583ec86367b67e3ea081d64d2`, clean integration workspace
+  on `integration/awtrix-cli`. Existing release/installer worktrees are unrelated and
+  will be preserved. Git author identity exists. No ADR files are present.
+- Authorized: local commits/merges and tracker updates, not remote pushes/releases.
+  Maximum two implementers; only one eligible ticket (#25).
+- Assignment: `ticket/25-config-directory`, worktree
+  `/home/toine/Work/tries/2026-10-07-awtrix-cli/.worktrees/ticket-25`.
+  Dispatch base is the committed run checkpoint following this entry.
+- Shared constraints: defaults use `awtrix-cli`, exact `AWTRIX_CONFIG` override retained,
+  sibling `headless.json`, no legacy fallback/migration, no schema/lifecycle changes.
+- Real headless executable/UI remain available at the previously recorded paths
+  (official AWTRIX NG 1.2.2 source/build). No physical device mutation is authorized
+   or needed for this graph. No known external acceptance blocker.
+
+## Specification #23 run — 2026-10-08
+
+- Authority: https://github.com/toinux/awtrix-cli/issues/23. Native children #26,
+  #27, #28 are OPEN with no comments; #28 is blocked by #27. No other native
+  dependencies or nested children. Unique IDs/existing prerequisites/acyclic graph verified.
+- No historical ticket mapping applies. Original diagnostic and graph are integrated.
+- Original run baseline `09e939d351159c2f453fca242d917134da966086`, clean branch
+  `integration/awtrix-cli`; Git identity configured. No ADR files present.
+- Preserve unrelated release/installer worktrees and ticket #25's separate run/worktree.
+- Local commits/merges and tracker updates authorized; no pushes/releases authorized.
+- Serialize #26 then #27 due to shared discovery/CLI contracts, not a new dependency.
+  #28 remains unavailable until #27 acceptance. Maximum two implementers.
+- #26 assignment: `ticket/26-release-notices`, repository sibling worktree
+  `.worktrees/ticket-26`; dispatch base is the committed checkpoint for this entry.
+- Shared constraints: stable releases only, notices stderr, no structured stdout changes,
+  at-most-24h checks including failures, bounded best-effort network, opt-out, no auto-install.
+- #27 native macOS/Windows replacement verification may be externally blocked on this
+  Linux host; workflow configuration is not execution evidence. Do not push to obtain CI.
+
+## Recovery and consolidated run — 2026-10-08
+
+- This section supersedes the earlier no-push authorization notes for the three new
+  specifications only. User authorized an intermediate and final push of the integration
+  branch; releases remain unauthorized. Main checkout edits in `GLOSSARY.md` and
+  untracked `TODO.md` were preserved outside the integration worktree.
+- Recovery cause: the detached wrapper treated OpenCode's exit code 0 as completion even
+  when worker permission prompts were auto-rejected. One ticket worktree was initially
+  placed beneath the integration worktree instead of at the repository `.worktrees` root.
+  Corrected agent path permissions and temporarily registered the external minifier as a
+  read-only project reference while the worker ported it; removed that machine-specific
+  reference from tracked config before the final push. Verified the implementer agent
+  permissions with `opencode debug agent`.
+- Spec #22 / child #25: implementation commits `5fbaf24`, `6cdcd55`; independent Luna
+  review approved; `cargo fmt --check`, Clippy, and full tests passed. Integrated at
+  `2561c8f`, pushed in `6d0f10c`, and GitHub #25/#22 closed as completed.
+- Spec #23 / child #26: implementation commits `d111b2c`, `9efcf42`; independent Luna
+  review approved; local notice/outage/throttle/opt-out/current-version tests and full
+  checks passed. Integrated at `dbd05c3`, pushed in `6d0f10c`, and #26 closed.
+- Spec #23 / child #27: implementation `28638eb`, failure-path/native self-replacement
+  corrections `5c1dfe6`, `e00eb71`; independent review approved. First push CI run
+  `37734915437` found a Windows-only Clippy lifetime error in the debug fixture path;
+  fixed in integration commit `873bde0`. Native run `37735731185` passed Linux GNU,
+  macOS ARM64, and Windows MSVC, including the updater test step. GitHub #27 was closed
+  after this evidence. No release was published.
+- Spec #24 / child #29: minifier implementation `914e7c6`, atomic-output and regression
+  tests `0eb93dd`; independent Luna review approved. The exact local Anothertime script
+  was not checked in, so a sanitized, representative Anothertime-derived fixture is in
+  `tests/fixtures/anothertime-minify.ax`; a golden case was compared with the existing
+  TypeScript utility. Integrated at `6d0f10c`, pushed, and #29 closed.
+- Spec #24 / child #30: deployment-time opt-in minification implementation
+  `cc46e9a`, no-write-on-minifier-error test `1300644`; independent review approved.
+  Integrated at `cdc4eb6`; full integration checks passed. GitHub issue remains open
+  until its code is included in the final push.
+- Spec #24 / child #31: installed-script re-minification implementation `1cd577f`,
+  opt-out/failure coverage `a085a7f`, atomic backup creation `23cef2b`; independent
+  review approved. The backup uses same-directory temporary output and create-new
+  persistence, and preparation failures never issue a remote write. Integrated at
+  `2aff32d`; full integration checks passed. GitHub issue remains open pending push.
+- Spec #23 / child #28: skill binary-first guidance `c587ba1`; independent review
+  approved. Installer contract test added. Integrated at `4b536cc`; full integration
+  checks pass. GitHub issue remains open pending final push.
+- Current consolidated integration HEAD before journal update: `4b536cca7f17577e4e86be6760fa613099130891`.
+  Pushed origin HEAD remains `873bde00919d6b1d0bd03c5e19e3969623d752a1`; local commits
+  for #28/#30/#31 and this journal update await the final branch push.
+- Latest integrated checks: `cargo fmt --check`, `cargo clippy --all-targets --all-features
+  --locked -- -D warnings`, `cargo test --locked` (18 unit, 167 CLI, 2 distribution;
+  one real-headless test ignored), release Clippy/build, packaged distribution tests,
+  release-artifact contract, and installer contract suite (10 passed, 4 Windows tests
+  skipped on Linux). Native checks for the final consolidated HEAD must run after push.
+- GitHub state at this checkpoint: #22/#25/#26/#27/#29 closed after their code was pushed
+  and required checks passed; #23/#24 remain open. #28/#30/#31 are locally integrated
+  and reviewed but intentionally remain open until the final push and CI.
+
+## Final close-out — 2026-10-08
+
+- User authorized subsequent integration-branch pushes without further approval; release
+  publication remains unauthorized. The full implementation branch was pushed at
+  `51fb9e701b39624f1f1333397eb7ee464c2ad6e6`.
+- Final native verification run `37737002123` succeeded on Linux GNU, macOS ARM64, and
+  Windows MSVC. Each host passed format, Clippy, the native updater test, release build,
+  packaged CLI/HTTP checks, installer contract tests and release-artifact layout checks;
+  Linux also passed the full test suite. Release and release-install jobs were skipped
+  because this was a branch push, not a version tag. No release was published.
+- Final integration checks passed: `cargo fmt --check`; debug Clippy with warnings denied;
+  `cargo test --locked` (18 unit, 167 CLI, 2 distribution; one real-headless test ignored);
+  release Clippy, `cargo build --release --locked`, packaged distribution tests, installer
+  contract tests (10 passed, 4 native PowerShell tests skipped locally), and the
+  release-artifact contract.
+- All approved implementation issues #25–#31 and parent specifications #22–#24 are
+  closed as completed after their changes were pushed. #27's native OS replacement
+  acceptance was verified by the successful matrix. #30/#31 local HTTP tests do not
+  establish physical device behavior; no device mutation or hardware test was performed.
+- The user checkout's pre-existing `GLOSSARY.md` and untracked `TODO.md` changes remained
+  untouched. Local integration branch is `integration/awtrix-cli`; no release tag or
+  release publication was created.
+- The run-scoped absolute path reference to the external TypeScript minifier was removed
+  from `.opencode/opencode.json` before final publication; the Rust implementation and
+  checked-in fixture are self-contained for future clones.

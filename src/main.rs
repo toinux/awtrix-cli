@@ -5,14 +5,17 @@ use std::{process::ExitCode, time::Duration};
 mod apps;
 mod headless;
 mod logs;
+mod minify;
 mod notifications;
 mod profiles;
 mod project;
+mod release_notice;
 mod resources;
 mod screen;
 mod scripts;
 mod settings;
 mod tests;
+mod updater;
 
 #[derive(Parser)]
 #[command(name = "awtrix-cli", version, about = "AWTRIX NG device CLI")]
@@ -52,6 +55,20 @@ enum Command {
     Script {
         #[command(subcommand)]
         action: scripts::Command,
+    },
+    /// Minify a local Berry source file into a sibling .min.ax file.
+    Minify {
+        file: std::path::PathBuf,
+        #[arg(long, conflicts_with = "no_classes")]
+        classes: bool,
+        #[arg(long = "no-classes", conflicts_with = "classes")]
+        no_classes: bool,
+        #[arg(long, conflicts_with = "no_variables")]
+        variables: bool,
+        #[arg(long = "no-variables", conflicts_with = "variables")]
+        no_variables: bool,
+        #[arg(long)]
+        force: bool,
     },
     Logs {
         #[command(subcommand)]
@@ -93,6 +110,8 @@ enum Command {
         #[command(subcommand)]
         action: settings::Command,
     },
+    /// Install the latest stable awtrix-cli release after validating its checksum.
+    Update,
 }
 
 #[derive(Subcommand)]
@@ -508,6 +527,10 @@ fn main() -> ExitCode {
             };
         }
     };
+    let notice = release_notice::notice();
+    if let Some(notice) = notice {
+        eprintln!("awtrix: {notice}");
+    }
     match run(&cli) {
         Ok(_)
             if matches!(
@@ -648,6 +671,29 @@ fn emit_error(code: &str, message: &str, machine: bool) {
 }
 
 fn run(cli: &Cli) -> CliResult<Value> {
+    if matches!(cli.command, Command::Update) {
+        updater::run().map(|message| json!({"updated":true,"message":message}))
+    } else if let Command::Minify {
+        file,
+        classes,
+        no_classes,
+        variables,
+        no_variables,
+        force,
+    } = &cli.command
+    {
+        minify::run(
+            file,
+            *classes || !*no_classes,
+            *variables || !*no_variables,
+            *force,
+        )
+    } else {
+        run_command(cli)
+    }
+}
+
+fn run_command(cli: &Cli) -> CliResult<Value> {
     if matches!(
         cli.command,
         Command::Logs {
@@ -706,6 +752,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
         Command::Apps { action } => apps::run(action, &api),
         Command::Notify { action } => notifications::run(action, &api),
         Command::Settings { action } => settings::run(action, &api, cli.timeout),
+        Command::Update => unreachable!(),
         Command::Device {
             action: DeviceCommand::State,
         } => api.get("/api/v1/device"),
@@ -737,6 +784,7 @@ fn run(cli: &Cli) -> CliResult<Value> {
         Command::Describe { .. } => unreachable!(),
         Command::Profile { .. } => unreachable!(),
         Command::Script { action } => scripts::run(action, &api),
+        Command::Minify { .. } => unreachable!(),
         Command::Logs { action } => logs::run(action, &api, cli.json),
         Command::Screen { action } => screen::run(action, &api),
         Command::Resources { action } => resources::run(action, &api),
@@ -784,7 +832,7 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
             "awtrix-cli --target http://awtrix.local device diagnose",
         ),
         "script" | "scripts" => {
-            json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file (.ax for scripts; .be for modules)","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no conflict protection","--verify-secs":"optional bounded observation after successful deploy, 1..3600"},"inputs":["raw Berry source"],"outputs":["get: raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; optional verification report; otherwise execution_state unknown"],"examples":["awtrix-cli script get demo","awtrix-cli --json script get demo","awtrix-cli script deploy demo --file main.ax --expected-source OLD --verify-secs 30","awtrix-cli script deploy demo --file main.ax --create","awtrix-cli script deploy demo --file main.ax --force"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; start confirmation requires system/app state"],"offline_reference_variant":"ESP32"})
+            json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file (.ax for scripts; .be for modules)","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no conflict protection","--minify":"opt-in minification of deployed payload; source file/reference remain unchanged","--no-backup":"script re-minify only: explicitly skip local <name>.bak.ax backup","--verify-secs":"optional bounded observation after successful deploy, 1..3600"},"inputs":["raw Berry source"],"outputs":["get: raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; optional verification report; otherwise execution_state unknown","re-minify: exact-source backup path and conditional update outcome; runtime state unknown"],"examples":["awtrix-cli script get demo","awtrix-cli --json script get demo","awtrix-cli script re-minify demo","awtrix-cli script re-minify demo --no-backup","awtrix-cli script deploy demo --file main.ax --expected-source OLD --minify","awtrix-cli script deploy demo --file main.ax --create","awtrix-cli script deploy demo --file main.ax --force"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; start confirmation requires system/app state"],"offline_reference_variant":"ESP32"})
         }
         "script verify" => {
             json!({"command":"script verify","parameters":{"name":"script name [A-Za-z0-9_-]{1,32}","--duration-secs":"bounded observation window, 1..3600 (default 10)","--interval-ms":"log polling interval, 1..60000 (default 500)","--after":"initial log cursor (default 0)","--capture":"optional PNG output path"},"inputs":["AWTRIX NG system, app inventory, cursor logs and optional framebuffer"],"outputs":{"source_saved":"not_requested for existing-script verification","start_verified":"boolean","observed_window":{"complete":"true only if the full requested duration elapsed without early termination","elapsed_ms":"integer","early_termination_reason":"null or berry_error, script_not_running, collection_error"},"not_available":"null, reason string, or diagnostic object with code/message/phase","runtime_error":"null or reported Berry error","runtime_state":"last observed app state or null","logs":{"after":"integer","next":"integer","lines":"string array","history_limit":34,"exhaustive":false},"capture":"optional screen artifact summary","runtime_success_guaranteed":false},"examples":["awtrix-cli --json script verify demo --duration-secs 30 --interval-ms 500","awtrix-cli script verify demo --capture observed.png"],"prerequisites":["existing enabled AWTRIX NG script","bounded device log history"],"limitations":["No error observed is not proof of general correctness","log history is bounded to 34 lines"]})
@@ -802,6 +850,9 @@ fn describe(cli: &Cli, topic: &str) -> CliResult<Value> {
                 _ => ("GET /api/v1/apps/{name}/data", "persisted store values", "awtrix-cli script data demo"),
             };
             command_description(&format!("script {action}"), route, output, example)
+        }
+        "minify" => {
+            json!({"command":"minify","parameters":{"<file>":"UTF-8 Berry source file","--classes":"rename top-level classes/functions (enabled by default)","--no-classes":"disable class/function renaming","--variables":"rename locals, parameters, import aliases and supported self fields (enabled by default)","--no-variables":"disable variable renaming","--force":"overwrite an existing .min.ax output"},"inputs":["local Berry source"],"outputs":["sibling .min.ax file; original source is unchanged"],"examples":["awtrix-cli minify main.ax","awtrix-cli minify main.ax --no-classes","awtrix-cli minify main.ax --force"],"prerequisites":["UTF-8 Berry source file"]})
         }
         "logs" | "logs follow" | "logs read" => logs::describe(topic)?,
         "screen" => screen::describe(),

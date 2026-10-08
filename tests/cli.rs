@@ -12,6 +12,87 @@ fn run(args: &[&str]) -> Output {
         .unwrap()
 }
 
+fn update_asset_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "awtrix-cli-x86_64-pc-windows-msvc.exe"
+    } else if cfg!(target_os = "macos") {
+        "awtrix-cli-aarch64-apple-darwin"
+    } else {
+        "awtrix-cli-x86_64-unknown-linux-gnu"
+    }
+}
+
+fn update_release_with_assets(assets: &[&str], prerelease: bool, draft: bool) -> String {
+    let assets = assets
+        .iter()
+        .map(|name| format!(r#"{{"name":"{name}","browser_download_url":"unused"}}"#))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        r#"{{"tag_name":"v99.0.0","prerelease":{prerelease},"draft":{draft},"assets":[{assets}]}}"#
+    )
+}
+
+fn run_update_fixture(
+    target: &std::path::Path,
+    release: String,
+    checksum: (u16, Vec<u8>),
+    asset: (u16, Vec<u8>),
+    expected_requests: usize,
+    inject_replace_failure: bool,
+) -> Output {
+    run_update_fixture_with_program(
+        std::path::Path::new(env!("CARGO_BIN_EXE_awtrix-cli")),
+        target,
+        release,
+        checksum,
+        asset,
+        expected_requests,
+        inject_replace_failure,
+    )
+}
+
+fn run_update_fixture_with_program(
+    program: &std::path::Path,
+    target: &std::path::Path,
+    release: String,
+    checksum: (u16, Vec<u8>),
+    asset: (u16, Vec<u8>),
+    expected_requests: usize,
+    inject_replace_failure: bool,
+) -> Output {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", server.server_addr());
+    let asset_name = update_asset_name();
+    let worker = thread::spawn(move || {
+        for _ in 0..expected_requests {
+            let request = server.recv().unwrap();
+            let (status, body) = match request.url() {
+                "/latest" => (200, release.as_bytes().to_vec()),
+                "/SHA256SUMS" => checksum.clone(),
+                path if path == format!("/{asset_name}") => asset.clone(),
+                other => panic!("unexpected update URL {other}"),
+            };
+            request
+                .respond(Response::from_data(body).with_status_code(status))
+                .unwrap();
+        }
+    });
+    let mut command = Command::new(program);
+    command
+        .arg("update")
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .env("AWTRIX_UPDATE_API_URL", format!("{base}/latest"))
+        .env("AWTRIX_UPDATE_ASSET_BASE_URL", &base)
+        .env("AWTRIX_UPDATE_EXECUTABLE", target);
+    if inject_replace_failure {
+        command.env("AWTRIX_UPDATE_REPLACE_FAIL", "1");
+    }
+    let output = command.output().unwrap();
+    worker.join().unwrap();
+    output
+}
+
 #[test]
 fn settings_brightness_uses_settings_patch_and_rejects_bad_values_before_http() {
     let server = Server::http("127.0.0.1:0").unwrap();
@@ -61,6 +142,892 @@ fn executable_help_and_version_use_the_published_binary_name() {
         .unwrap();
     assert!(version.status.success());
     assert!(String::from_utf8_lossy(&version.stdout).starts_with("awtrix-cli "));
+}
+
+#[test]
+fn local_minify_renames_by_default_preserves_source_and_refuses_overwrite() {
+    let root = tempfile::tempdir().unwrap();
+    let source_path = root.path().join("demo.ax");
+    let output_path = root.path().join("demo.min.ax");
+    let source = "# @name demo\n# @unlisted preserve me\nclass Demo\n  var value\n  def draw()\n    local = 2\n    self.value = local\n    print(self.value)\n  end\nend\nreturn Demo()\n";
+    std::fs::write(&source_path, source).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "minify", source_path.to_str().unwrap()])
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["output"], output_path.to_str().unwrap());
+    assert_eq!(
+        std::fs::read_to_string(&output_path).unwrap(),
+        "# @name demo\n# @unlisted preserve me\nclass a\nvar b\ndef draw()\nc=2\nself.b=c\nprint(self.b)\nend\nend\nreturn a()\n"
+    );
+    assert_eq!(std::fs::read_to_string(&source_path).unwrap(), source);
+
+    let overwrite = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["minify", source_path.to_str().unwrap()])
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    assert!(!overwrite.status.success());
+    assert!(String::from_utf8_lossy(&overwrite.stderr).contains("pass --force"));
+    assert_eq!(std::fs::read_to_string(&source_path).unwrap(), source);
+
+    let classes_disabled = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args([
+            "minify",
+            source_path.to_str().unwrap(),
+            "--no-classes",
+            "--force",
+        ])
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    assert!(classes_disabled.status.success());
+    let classes_disabled_output = std::fs::read_to_string(&output_path).unwrap();
+    assert!(classes_disabled_output.contains("class Demo"));
+    assert!(!classes_disabled_output.contains("self.value"));
+
+    let variables_disabled = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args([
+            "minify",
+            source_path.to_str().unwrap(),
+            "--no-variables",
+            "--force",
+        ])
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    assert!(variables_disabled.status.success());
+    let variables_disabled_output = std::fs::read_to_string(&output_path).unwrap();
+    assert!(variables_disabled_output.contains("class a"));
+    assert!(variables_disabled_output.contains("self.value"));
+    assert_eq!(std::fs::read_to_string(&source_path).unwrap(), source);
+}
+
+#[test]
+fn local_minify_handles_anothertime_berry_constructs_and_all_metadata() {
+    let root = tempfile::tempdir().unwrap();
+    let source_path = root.path().join("anothertime.ax");
+    let output_path = root.path().join("anothertime.min.ax");
+    let source = include_str!("fixtures/anothertime-minify.ax");
+    std::fs::write(&source_path, source).unwrap();
+    let metadata = source
+        .lines()
+        .filter(|line| line.trim_start().starts_with("# @"))
+        .collect::<Vec<_>>();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "minify", source_path.to_str().unwrap()])
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let compacted = std::fs::read_to_string(&output_path).unwrap();
+    assert!(compacted.len() < source.len());
+    for line in metadata {
+        assert!(compacted.lines().any(|output_line| output_line == line));
+    }
+    assert!(compacted.contains("class a"));
+    assert!(!compacted.contains("class FixtureApp"));
+    assert_eq!(std::fs::read_to_string(&source_path).unwrap(), source);
+}
+
+#[test]
+fn script_re_minify_fetches_backs_up_then_conditionally_writes_minified_source() {
+    let root = tempfile::tempdir().unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let original =
+        "# @name demo\nclass Demo\n  def draw()\n    print(1)\n  end\nend\nreturn Demo()\n";
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Get);
+        assert_eq!(request.url(), "/api/v1/apps/script/demo");
+        request.respond(Response::from_string(original)).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/capabilities");
+        request
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Put);
+        assert_eq!(request.url(), "/api/v1/apps/script-update/demo");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["expected_source"], original);
+        assert_eq!(
+            body["source"],
+            "# @name demo\nclass a\ndef draw()\nprint(1)\nend\nend\nreturn a()\n"
+        );
+        request.respond(Response::from_string("{}")).unwrap();
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "--target", &url, "script", "re-minify", "demo"])
+        .current_dir(root.path())
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("demo.bak.ax")).unwrap(),
+        original
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["backup_created"], true);
+    assert_eq!(result["backup"], "demo.bak.ax");
+}
+
+#[test]
+fn script_re_minify_no_backup_is_explicit_and_still_uses_conditional_update() {
+    let root = tempfile::tempdir().unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let original = "class Demo\n  def draw()\n    print(1)\n  end\nend\nreturn Demo()\n";
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(original))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/script-update/demo");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["expected_source"], original);
+        assert_eq!(
+            body["source"],
+            "class a\ndef draw()\nprint(1)\nend\nend\nreturn a()\n"
+        );
+        request.respond(Response::from_string("{}")).unwrap();
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args([
+            "--json",
+            "--target",
+            &url,
+            "script",
+            "re-minify",
+            "demo",
+            "--no-backup",
+        ])
+        .current_dir(root.path())
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(output.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["backup_created"], false);
+    assert!(result["backup"].is_null());
+    assert!(!root.path().join("demo.bak.ax").exists());
+}
+
+#[test]
+fn script_re_minify_refuses_existing_backup_without_remote_write() {
+    let root = tempfile::tempdir().unwrap();
+    let backup = root.path().join("demo.bak.ax");
+    std::fs::write(&backup, b"keep existing backup").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string("class Demo\nend\n"))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        assert!(server
+            .recv_timeout(Duration::from_millis(150))
+            .unwrap()
+            .is_none());
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "--target", &url, "script", "re-minify", "demo"])
+        .current_dir(root.path())
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&backup).unwrap(), b"keep existing backup");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "BACKUP");
+}
+
+#[test]
+fn script_re_minify_backup_install_failure_preserves_backup_tree_and_skips_write() {
+    let root = tempfile::tempdir().unwrap();
+    let backup = root.path().join("demo.bak.ax");
+    std::fs::create_dir(&backup).unwrap();
+    let sentinel = backup.join("keep.txt");
+    std::fs::write(&sentinel, b"existing backup tree").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string("class Demo\nend\n"))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        assert!(server
+            .recv_timeout(Duration::from_millis(150))
+            .unwrap()
+            .is_none());
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "--target", &url, "script", "re-minify", "demo"])
+        .current_dir(root.path())
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"existing backup tree");
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "BACKUP");
+}
+
+#[test]
+fn script_re_minify_fetch_or_minification_failure_never_checks_capability_or_writes() {
+    for (remote, expected_code) in [
+        ("", "HTTP"),
+        (
+            "class Demo\n  def draw()\n    return \"unterminated\n  end\nend\n",
+            "MINIFY_SYNTAX",
+        ),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), "/api/v1/apps/script/demo");
+            request
+                .respond(if remote.is_empty() {
+                    Response::from_string("not found").with_status_code(404)
+                } else {
+                    Response::from_string(remote)
+                })
+                .unwrap();
+            assert!(server
+                .recv_timeout(Duration::from_millis(150))
+                .unwrap()
+                .is_none());
+        });
+        let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+            .args(["--json", "--target", &url, "script", "re-minify", "demo"])
+            .current_dir(root.path())
+            .env("AWTRIX_NO_UPDATE_CHECK", "1")
+            .output()
+            .unwrap();
+        worker.join().unwrap();
+        assert!(!output.status.success());
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["error"]["code"], expected_code);
+        assert!(!root.path().join("demo.bak.ax").exists());
+    }
+}
+
+#[test]
+fn script_re_minify_capability_and_conflict_fail_without_unprotected_fallback() {
+    for (capabilities, expected_write_status, expected_code) in [
+        (r#"{"other":true}"#, None, "PROTECTION_UNAVAILABLE"),
+        (r#"{"scriptUpdates":true}"#, Some(409), "CONFLICT"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let original = "class Demo\nend\n";
+        let worker = thread::spawn(move || {
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_string(original))
+                .unwrap();
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_string(capabilities))
+                .unwrap();
+            if let Some(status) = expected_write_status {
+                let request = server.recv().unwrap();
+                assert_eq!(request.url(), "/api/v1/apps/script-update/demo");
+                request
+                    .respond(Response::from_string("conflict").with_status_code(status))
+                    .unwrap();
+                assert!(server
+                    .recv_timeout(Duration::from_millis(150))
+                    .unwrap()
+                    .is_none());
+            } else {
+                assert!(server
+                    .recv_timeout(Duration::from_millis(150))
+                    .unwrap()
+                    .is_none());
+            }
+        });
+        let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+            .args(["--json", "--target", &url, "script", "re-minify", "demo"])
+            .current_dir(root.path())
+            .env("AWTRIX_NO_UPDATE_CHECK", "1")
+            .output()
+            .unwrap();
+        worker.join().unwrap();
+        assert!(!output.status.success());
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["error"]["code"], expected_code);
+        let backup = root.path().join("demo.bak.ax");
+        if expected_write_status.is_some() {
+            assert_eq!(std::fs::read_to_string(backup).unwrap(), original);
+        } else {
+            assert!(!backup.exists());
+        }
+    }
+}
+
+#[test]
+fn local_minify_force_preserves_an_existing_output_when_atomic_replace_fails() {
+    let root = tempfile::tempdir().unwrap();
+    let source_path = root.path().join("blocked.ax");
+    let output_path = root.path().join("blocked.min.ax");
+    std::fs::write(&source_path, "class Demo\nend\n").unwrap();
+    std::fs::create_dir(&output_path).unwrap();
+    let sentinel = output_path.join("keep.txt");
+    std::fs::write(&sentinel, b"existing output tree").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["minify", source_path.to_str().unwrap(), "--force"])
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&sentinel).unwrap(), b"existing output tree");
+    assert!(output_path.is_dir());
+}
+
+#[test]
+fn update_help_is_explicit_and_version_remains_available() {
+    let help = run(&["update", "--help"]);
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).contains("Install the latest stable"));
+}
+
+#[test]
+fn update_downloads_matching_asset_verifies_checksum_and_atomically_replaces_target() {
+    use sha2::{Digest, Sha256};
+    let executable = tempfile::tempdir().unwrap();
+    let target = executable.path().join("awtrix-cli-copy");
+    std::fs::write(&target, b"old executable").unwrap();
+    let payload = b"new validated executable";
+    let digest = format!("{:x}", Sha256::digest(payload));
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", server.server_addr());
+    let asset = if cfg!(target_os = "windows") {
+        "awtrix-cli-x86_64-pc-windows-msvc.exe"
+    } else if cfg!(target_os = "macos") {
+        "awtrix-cli-aarch64-apple-darwin"
+    } else {
+        "awtrix-cli-x86_64-unknown-linux-gnu"
+    };
+    let release = format!(
+        r#"{{"tag_name":"v99.0.0","prerelease":false,"draft":false,"assets":[{{"name":"{asset}","browser_download_url":"unused"}},{{"name":"SHA256SUMS","browser_download_url":"unused"}}]}}"#
+    );
+    let worker = thread::spawn(move || {
+        for _ in 0..3 {
+            let request = server.recv().unwrap();
+            let body = match request.url() {
+                "/latest" => release.as_bytes().to_vec(),
+                "/SHA256SUMS" => format!("{digest}  {asset}\n").into_bytes(),
+                _ if request.url() == format!("/{asset}") => payload.to_vec(),
+                other => panic!("unexpected update URL {other}"),
+            };
+            request.respond(Response::from_data(body)).unwrap();
+        }
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .arg("update")
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .env("AWTRIX_UPDATE_API_URL", format!("{base}/latest"))
+        .env("AWTRIX_UPDATE_ASSET_BASE_URL", &base)
+        .env("AWTRIX_UPDATE_EXECUTABLE", &target)
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read(target).unwrap(), payload);
+}
+
+#[test]
+fn update_checksum_mismatch_preserves_existing_executable() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("existing");
+    std::fs::write(&target, b"known working binary").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", server.server_addr());
+    let asset = if cfg!(target_os = "windows") {
+        "awtrix-cli-x86_64-pc-windows-msvc.exe"
+    } else if cfg!(target_os = "macos") {
+        "awtrix-cli-aarch64-apple-darwin"
+    } else {
+        "awtrix-cli-x86_64-unknown-linux-gnu"
+    };
+    let release = format!(
+        r#"{{"tag_name":"v99.0.0","prerelease":false,"draft":false,"assets":[{{"name":"{asset}","browser_download_url":"unused"}},{{"name":"SHA256SUMS","browser_download_url":"unused"}}]}}"#
+    );
+    let worker = thread::spawn(move || {
+        for _ in 0..3 {
+            let request = server.recv().unwrap();
+            let body = match request.url() {
+                "/latest" => release.as_bytes().to_vec(),
+                "/SHA256SUMS" => format!("{}  {asset}\n", "a".repeat(64)).into_bytes(),
+                _ if request.url() == format!("/{asset}") => b"altered bytes".to_vec(),
+                other => panic!("unexpected update URL {other}"),
+            };
+            request.respond(Response::from_data(body)).unwrap();
+        }
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .arg("update")
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .env("AWTRIX_UPDATE_API_URL", format!("{base}/latest"))
+        .env("AWTRIX_UPDATE_ASSET_BASE_URL", &base)
+        .env("AWTRIX_UPDATE_EXECUTABLE", &target)
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(target).unwrap(), b"known working binary");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("checksum"));
+}
+
+#[test]
+fn update_network_failure_does_not_require_device_configuration_or_change_target() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("existing");
+    std::fs::write(&target, b"working").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .arg("update")
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .env("AWTRIX_UPDATE_API_URL", "http://127.0.0.1:1/latest")
+        .env("AWTRIX_UPDATE_ASSET_BASE_URL", "http://127.0.0.1:1")
+        .env("AWTRIX_UPDATE_EXECUTABLE", &target)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(target).unwrap(), b"working");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("manual"));
+}
+
+#[test]
+fn update_rejects_a_release_without_the_matching_host_asset() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    let output = run_update_fixture(
+        &target,
+        update_release_with_assets(&["SHA256SUMS"], false, false),
+        (200, b"".to_vec()),
+        (200, b"".to_vec()),
+        1,
+        false,
+    );
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("does not include"));
+}
+
+#[test]
+fn update_rejects_a_release_without_sha256sums() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    let output = run_update_fixture(
+        &target,
+        update_release_with_assets(&[update_asset_name()], false, false),
+        (200, b"".to_vec()),
+        (200, b"".to_vec()),
+        1,
+        false,
+    );
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("missing SHA256SUMS"));
+}
+
+#[test]
+fn update_rejects_prerelease_and_draft_responses_before_asset_download() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    for (prerelease, draft) in [(true, false), (false, true)] {
+        let output = run_update_fixture(
+            &target,
+            update_release_with_assets(&[update_asset_name(), "SHA256SUMS"], prerelease, draft),
+            (200, b"".to_vec()),
+            (200, b"".to_vec()),
+            1,
+            false,
+        );
+        assert!(!output.status.success());
+        assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("No stable release"));
+    }
+}
+
+#[test]
+fn update_rejects_malformed_or_missing_checksum_entries() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    let release = update_release_with_assets(&[update_asset_name(), "SHA256SUMS"], false, false);
+    for (body, expected_message) in [
+        (b"not-a-checksum\n".to_vec(), "malformed"),
+        (
+            format!("{}  some-other-asset\n", "a".repeat(64)).into_bytes(),
+            "no entry",
+        ),
+    ] {
+        let output = run_update_fixture(
+            &target,
+            release.clone(),
+            (200, body),
+            (200, b"would not be downloaded".to_vec()),
+            2,
+            false,
+        );
+        assert!(!output.status.success());
+        assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+        assert!(String::from_utf8_lossy(&output.stderr).contains(expected_message));
+    }
+}
+
+#[test]
+fn update_checksum_download_failure_preserves_the_working_executable() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    let output = run_update_fixture(
+        &target,
+        update_release_with_assets(&[update_asset_name(), "SHA256SUMS"], false, false),
+        (503, b"unavailable".to_vec()),
+        (200, b"would not be downloaded".to_vec()),
+        2,
+        false,
+    );
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+}
+
+#[test]
+fn update_asset_download_failure_preserves_the_working_executable() {
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("working-binary");
+    std::fs::write(&target, b"working binary").unwrap();
+    let output = run_update_fixture(
+        &target,
+        update_release_with_assets(&[update_asset_name(), "SHA256SUMS"], false, false),
+        (
+            200,
+            format!("{}  {}\n", "a".repeat(64), update_asset_name()).into_bytes(),
+        ),
+        (503, b"unavailable".to_vec()),
+        3,
+        false,
+    );
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
+}
+
+#[test]
+fn update_replacement_failure_preserves_the_working_executable() {
+    use sha2::{Digest, Sha256};
+    let root = tempfile::tempdir().unwrap();
+    let target_name = if cfg!(target_os = "windows") {
+        "awtrix-cli-copy.exe"
+    } else {
+        "awtrix-cli-copy"
+    };
+    let target = root.path().join(target_name);
+    std::fs::copy(env!("CARGO_BIN_EXE_awtrix-cli"), &target).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let original = std::fs::read(&target).unwrap();
+    let payload = b"validated replacement";
+    let output = run_update_fixture_with_program(
+        &target,
+        &target,
+        update_release_with_assets(&[update_asset_name(), "SHA256SUMS"], false, false),
+        (
+            200,
+            format!("{:x}  {}\n", Sha256::digest(payload), update_asset_name()).into_bytes(),
+        ),
+        (200, payload.to_vec()),
+        3,
+        true,
+    );
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(&target).unwrap(), original);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not changed"));
+}
+
+#[test]
+fn update_replaces_a_copy_of_the_running_executable_on_the_native_host() {
+    use sha2::{Digest, Sha256};
+    let root = tempfile::tempdir().unwrap();
+    let target_name = if cfg!(target_os = "windows") {
+        "awtrix-cli-copy.exe"
+    } else {
+        "awtrix-cli-copy"
+    };
+    let target = root.path().join(target_name);
+    std::fs::copy(env!("CARGO_BIN_EXE_awtrix-cli"), &target).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let payload = b"new native-host executable";
+    let output = run_update_fixture_with_program(
+        &target,
+        &target,
+        update_release_with_assets(&[update_asset_name(), "SHA256SUMS"], false, false),
+        (
+            200,
+            format!("{:x}  {}\n", Sha256::digest(payload), update_asset_name()).into_bytes(),
+        ),
+        (200, payload.to_vec()),
+        3,
+        false,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), payload);
+}
+
+#[cfg(unix)]
+#[test]
+fn update_replaces_the_resolved_executable_when_invoked_through_a_symlink() {
+    use sha2::{Digest, Sha256};
+    let root = tempfile::tempdir().unwrap();
+    let target = root.path().join("awtrix-cli-copy");
+    let link = root.path().join("awtrix-cli-link");
+    std::fs::copy(env!("CARGO_BIN_EXE_awtrix-cli"), &target).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let payload = b"new resolved executable";
+    let output = run_update_fixture_with_program(
+        &link,
+        &link,
+        update_release_with_assets(&[update_asset_name(), "SHA256SUMS"], false, false),
+        (
+            200,
+            format!("{:x}  {}\n", Sha256::digest(payload), update_asset_name()).into_bytes(),
+        ),
+        (200, payload.to_vec()),
+        3,
+        false,
+    );
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), payload);
+    assert!(std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+}
+
+#[test]
+fn release_notice_is_stable_cached_and_best_effort_at_the_cli_boundary() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/releases", server.server_addr());
+    let root = tempfile::tempdir().unwrap();
+    let cache = root.path().join("release-cache.json");
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/releases");
+        request.respond(Response::from_string(r#"[{"tag_name":"v99.0.0","prerelease":false},{"tag_name":"v100.0.0-rc.1","prerelease":true}]"#)).unwrap();
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .arg("describe")
+        .arg("device")
+        .env("AWTRIX_RELEASE_API_URL", endpoint)
+        .env("AWTRIX_RELEASE_CACHE", &cache)
+        .env_remove("AWTRIX_NO_UPDATE_CHECK")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("99.0.0"));
+    assert!(output.stdout.starts_with(b"{"));
+    assert!(cache.exists());
+
+    let cached = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["describe", "device"])
+        .env("AWTRIX_RELEASE_API_URL", "http://127.0.0.1:1/releases")
+        .env("AWTRIX_RELEASE_CACHE", &cache)
+        .env_remove("AWTRIX_NO_UPDATE_CHECK")
+        .output()
+        .unwrap();
+    assert!(cached.status.success());
+    assert!(!String::from_utf8_lossy(&cached.stderr).contains("newer stable"));
+}
+
+#[test]
+fn release_notice_does_not_notify_for_exact_current_version() {
+    let body = format!(
+        r#"[{{"tag_name":"v{}","prerelease":false}}]"#,
+        env!("CARGO_PKG_VERSION")
+    );
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/releases", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(body))
+            .unwrap()
+    });
+    let root = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "describe", "device"])
+        .env("AWTRIX_RELEASE_API_URL", endpoint)
+        .env("AWTRIX_RELEASE_CACHE", root.path().join("cache"))
+        .env_remove("AWTRIX_NO_UPDATE_CHECK")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("newer stable"));
+}
+
+#[test]
+fn release_notice_ignores_prereleases() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/releases", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"[{"tag_name":"v99.0.0-rc.1","prerelease":true}]"#,
+            ))
+            .unwrap()
+    });
+    let root = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["describe", "device"])
+        .env("AWTRIX_RELEASE_API_URL", endpoint)
+        .env("AWTRIX_RELEASE_CACHE", root.path().join("cache"))
+        .env_remove("AWTRIX_NO_UPDATE_CHECK")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("newer stable"));
+}
+
+#[test]
+fn release_notice_opt_out_makes_no_request() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    assert!(Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["describe", "device"])
+        .env(
+            "AWTRIX_RELEASE_API_URL",
+            format!("http://{}/releases", server.server_addr())
+        )
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap()
+        .status
+        .success());
+    assert!(server
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn release_notice_skips_request_when_attempt_cannot_be_cached() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/releases", server.server_addr());
+    let root = tempfile::tempdir().unwrap();
+    let blocker = root.path().join("not-a-directory");
+    std::fs::write(&blocker, "file").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "describe", "device"])
+        .env("AWTRIX_RELEASE_API_URL", endpoint)
+        .env("AWTRIX_RELEASE_CACHE", blocker.join("cache"))
+        .env_remove("AWTRIX_NO_UPDATE_CHECK")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(server
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn release_notice_outage_preserves_success_and_json_stdout() {
+    let root = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "describe", "device"])
+        .env("AWTRIX_RELEASE_API_URL", "http://127.0.0.1:1/releases")
+        .env("AWTRIX_RELEASE_CACHE", root.path().join("cache"))
+        .env_remove("AWTRIX_NO_UPDATE_CHECK")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(serde_json::from_slice::<serde_json::Value>(&output.stdout).is_ok());
 }
 
 #[test]
@@ -4374,6 +5341,103 @@ fn script_deploy_uses_atomic_expected_source_route_and_does_not_pre_read() {
 }
 
 #[test]
+fn script_deploy_minifies_payload_but_keeps_original_conditional_reference_and_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("main.ax");
+    let original =
+        "# @mystery keep\nclass Demo\n  def draw()\n    return 1\n  end\nend\nreturn Demo()\n";
+    std::fs::write(&file, original).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Put);
+        assert_eq!(request.url(), "/api/v1/apps/script-update/demo");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(payload["expected_source"], original);
+        assert_eq!(
+            payload["source"],
+            "# @mystery keep\nclass a\ndef draw()\nreturn 1\nend\nend\nreturn a()\n"
+        );
+        request
+            .respond(Response::from_string(r#"{"ok":true,"error":null}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":false}"#))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "deploy",
+        "demo",
+        "--file",
+        file.to_str().unwrap(),
+        "--expected-source",
+        original,
+        "--minify",
+    ]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(file).unwrap(), original);
+}
+
+#[test]
+fn script_deploy_minification_failure_sends_no_device_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("invalid.ax");
+    std::fs::write(
+        &file,
+        "class Demo\n  def draw()\n    return \"unterminated\n  end\nend\n",
+    )
+    .unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        assert!(server
+            .recv_timeout(Duration::from_millis(150))
+            .unwrap()
+            .is_none());
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args([
+            "--target",
+            &url,
+            "--json",
+            "script",
+            "deploy",
+            "demo",
+            "--file",
+            file.to_str().unwrap(),
+            "--expected-source",
+            "original",
+            "--minify",
+        ])
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(!output.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "MINIFY_SYNTAX");
+}
+
+#[test]
 fn script_deploy_surfaces_conflict_without_fallback_or_overwrite() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
@@ -4399,6 +5463,7 @@ fn script_deploy_surfaces_conflict_without_fallback_or_overwrite() {
         "new",
         "--expected-source",
         "original",
+        "--minify",
     ]);
     worker.join().unwrap();
     assert_eq!(output.status.code(), Some(1));
@@ -4427,6 +5492,7 @@ fn script_deploy_without_update_capability_does_not_write() {
         "new",
         "--expected-source",
         "original",
+        "--minify",
     ]);
     worker.join().unwrap();
     assert_eq!(output.status.code(), Some(6));
@@ -5796,4 +6862,75 @@ fn unsupported_active_route_method_is_reported_without_get_fallback() {
     )
     .contains("HTTP 405"));
     worker.join().unwrap();
+}
+
+#[test]
+fn default_profile_lookup_ignores_legacy_awtrix_directory_without_migrating_it() {
+    let root = std::env::temp_dir().join(format!("awtrix-config-dir-{}", std::process::id()));
+    let legacy_dir = root.join(".config/awtrix");
+    let current_dir = root.join(".config/awtrix-cli");
+    std::fs::create_dir_all(&legacy_dir).unwrap();
+    let legacy_config = legacy_dir.join("config.json");
+    let original =
+        br#"{"profiles":{"legacy":{"target":"http://legacy.local"}},"default":"legacy"}"#;
+    std::fs::write(&legacy_config, original).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args([
+            "profile",
+            "add",
+            "new-profile",
+            "--target",
+            "http://new.local",
+        ])
+        .env("HOME", &root)
+        .env_remove("AWTRIX_CONFIG")
+        .env_remove("AWTRIX_URL")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(current_dir.join("config.json").exists());
+    let config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(current_dir.join("config.json")).unwrap()).unwrap();
+    assert_eq!(
+        config["profiles"]["new-profile"]["target"],
+        "http://new.local"
+    );
+    assert_eq!(std::fs::read(&legacy_config).unwrap(), original);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn headless_status_reads_ownership_beside_default_config_directory() {
+    let home = tempfile::tempdir().unwrap();
+    let current = home.path().join(".config/awtrix-cli/headless.json");
+    let legacy = home.path().join(".config/awtrix/headless.json");
+    std::fs::create_dir_all(current.parent().unwrap()).unwrap();
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    std::fs::write(
+        &current,
+        r#"{"pid":0,"start_time":0,"url":"http://current.local","data":"/tmp/current","temporary":false}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        &legacy,
+        r#"{"pid":0,"start_time":0,"url":"http://legacy.local","data":"/tmp/legacy","temporary":false}"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args(["--json", "headless", "status"])
+        .env("HOME", home.path())
+        .env_remove("AWTRIX_CONFIG")
+        .env_remove("AWTRIX_URL")
+        .env_remove("AWTRIX_PROFILE")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["target"], "http://current.local");
+    assert_eq!(result["running"], false);
 }

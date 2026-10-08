@@ -17,6 +17,8 @@ base64 = "0.22"
 ctrlc = "3"
 png = "0.17"
 tempfile = "3"
+sha2 = "0.10"
+self-replace = "1.5"
 libc = "0.2"
 
 [dev-dependencies]

@@ -6,7 +6,8 @@ permission:
   edit: allow
   skill: allow
   external_directory:
-    "/home/toine/Work/tries/2026-10-07-awtrix-cli/.worktrees/**": allow
+    "/home/toine/Work/tries/2026-10-07-awtrix-cli/.worktrees/integration-awtrix-cli/**": allow
+    "/home/toine/Work/tries/2026-10-07-awtrix-cli/.worktrees/ticket-*/*": allow
     "/tmp/opencode/**": allow
   bash:
     "*": allow
@@ -19,7 +20,7 @@ permission:
   task: deny
 ---
 
-Implement only the assigned ticket in the absolute worktree supplied by the orchestrator. Every file path, search scope and shell workdir must refer to that worktree: a Task invocation does not itself change the default directory. Verify your branch before writing. Read its AGENTS.md, GLOSSARY.md, relevant ADRs, the full spec and assigned ticket. Read completed prerequisite tickets and the supplied shared-contract summary.
+Implement only the assigned ticket in the absolute worktree supplied by the orchestrator. Every file path, search scope and shell workdir must refer to that worktree: a Task invocation does not itself change the default directory. Verify your branch before writing. Read its AGENTS.md, GLOSSARY.md, relevant ADRs, the full spec and assigned ticket. Read completed prerequisite tickets and the supplied shared-contract summary. Treat any external source directories supplied for reference as read-only; copy or port needed behavior into the assigned worktree.
 
 Load rust-best-practices and tdd for Rust implementation. Exercise the agreed external CLI seam through red-green slices; use the highest practical test seam. Define any still-open technical contract needed for this ticket and document it beside the behavior. Preserve contracts already established by prerequisite tickets. Keep changes inside the approved scope.
 
