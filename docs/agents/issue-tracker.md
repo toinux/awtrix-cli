@@ -10,7 +10,7 @@ Issues and specifications for this repository live in GitHub Issues for `toinux/
 - Comment: `gh issue comment <number> --repo toinux/awtrix-cli --body-file <file>`.
 - Apply/remove labels: `gh issue edit <number> --repo toinux/awtrix-cli --add-label "..."` / `--remove-label "..."`. Use the strings in `triage-labels.md`.
 - Claim: `gh issue edit <number> --repo toinux/awtrix-cli --add-assignee @me`.
-- Complete: append acceptance and integration evidence, then `gh issue close <number> --repo toinux/awtrix-cli --reason completed`. Reopen with `gh issue reopen` when further work is required.
+- Complete implementation work through a PR into `main`, with a separate `Closes #<number>` reference for the spec and each delivered ticket. Issues remain open until human merge; GitHub performs the closures. See `implementation.md` for evidence and resume gates. A local merge or PR ready is integration progress, not ticket completion. Reopen with `gh issue reopen` when further work is required, after inspecting the live evidence.
 
 When a skill says **publish to the issue tracker**, create a GitHub issue. When it says **fetch the relevant ticket**, read the live issue and its comments. Bare issue numbers refer to GitHub issue numbers.
 
@@ -21,8 +21,8 @@ When a skill says **publish to the issue tracker**, create a GitHub issue. When 
 - Fetch an issue's database ID with `gh api repos/toinux/awtrix-cli/issues/<number> --jq .id`. It differs from both the issue number and node ID.
 - Add a blocker using `gh api --method POST repos/toinux/awtrix-cli/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-database-id>`; read blockers with `gh api --paginate repos/toinux/awtrix-cli/issues/<child>/dependencies/blocked_by`.
 - Native dependencies are canonical. If unavailable, use a `Blocked by: #<number>, ...` body line and inspect each blocker's live state.
-- The ready frontier contains open, unclaimed issues whose blockers are all completed. Inspect closed blockers' completion reason/evidence; `ready-for-agent` means specified, not necessarily unblocked.
-- Update the parent checklist after completing a child. Close the parent when all required children and final acceptance checks are complete.
+- The implementation frontier uses verified integration evidence, not issue closure: reviewed and checked prerequisites reachable from the current integration HEAD can unlock dependents while still open. External completed prerequisites must have verified delivery evidence on main; `not planned` does not satisfy a blocker. `ready-for-agent` means specified, not necessarily unblocked.
+- Record integration progress in comments. Check completed children in the parent only after verified merge into main. Keep the parent open while its PR is draft or ready, or any mandatory acceptance check is blocked.
 
 ## Pull requests as a triage surface
 
