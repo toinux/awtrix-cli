@@ -144,7 +144,10 @@ fn parse_version(value: &str) -> Option<(u64, u64, u64)> {
 }
 
 fn parse_component(value: &str) -> Option<u64> {
-    if value.is_empty() || (value.len() > 1 && value.starts_with('0')) {
+    if value.is_empty()
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+        || (value.len() > 1 && value.starts_with('0'))
+    {
         return None;
     }
     value.parse().ok()
