@@ -5124,6 +5124,46 @@ fn script_deploy_minifies_payload_but_keeps_original_conditional_reference_and_f
 }
 
 #[test]
+fn script_deploy_minification_failure_sends_no_device_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("invalid.ax");
+    std::fs::write(
+        &file,
+        "class Demo\n  def draw()\n    return \"unterminated\n  end\nend\n",
+    )
+    .unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        assert!(server
+            .recv_timeout(Duration::from_millis(150))
+            .unwrap()
+            .is_none());
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args([
+            "--target",
+            &url,
+            "--json",
+            "script",
+            "deploy",
+            "demo",
+            "--file",
+            file.to_str().unwrap(),
+            "--expected-source",
+            "original",
+            "--minify",
+        ])
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(!output.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "MINIFY_SYNTAX");
+}
+
+#[test]
 fn script_deploy_surfaces_conflict_without_fallback_or_overwrite() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
