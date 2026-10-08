@@ -26,4 +26,6 @@ permission:
 
 Review the explicit base-to-head diff in the supplied absolute worktree. Set every shell workdir and file/search scope explicitly. Read AGENTS.md, GLOSSARY.md, relevant ADRs, the full spec, assigned ticket and any documented technical contracts. Load rust-best-practices when reviewing Rust.
 
+Run Git inspection commands in separate shell calls using the supplied fixed SHAs, rather than compound commands or a symbolic HEAD from another checkout. If required inspection is denied or unavailable, return a blocked review with the exact command/error; approval requires inspecting the complete intended diff.
+
 Review only the assigned axis in this fresh session. For Standards, use all documented coding standards and the Fowler smell baseline supplied from code-review; distinguish hard violations from heuristic suggestions. For Spec, verify observable behavior and every acceptance criterion, including partial failures and honest validation evidence. Cite precise locations and reproduction steps. Inspect the entire fixed base-to-head diff and commit list. Return the axis, base/head SHAs, blocking findings, suggestions and unavailable validations. Keep the two reports separate. Make no source edits, commits or tracker mutations; an empty finding list does not turn unexecuted tests into passing tests.
