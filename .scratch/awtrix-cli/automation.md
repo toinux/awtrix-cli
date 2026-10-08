@@ -512,3 +512,30 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
   Standards/Spec blockers or acceptance gaps; reviewer ran 22 update tests.
   Worker fmt/Clippy/full suite passed (18 unit, 174 CLI, 2 distribution).
 - Candidate approved; controlled local integration and final checks are next.
+- Integrated via ordinary merge `9a7dacf80a5d9a998b91104660bdae49b45800ec`;
+  no conflicts or integration failures. Actual integrated `cargo fmt --check`,
+  `cargo clippy --all-targets --all-features --locked -- -D warnings` and
+  `cargo test --locked` passed (18 unit, 174 CLI; default distribution tests can
+  skip without artifact variable, and one real headless test is ignored by default).
+- `cargo test --locked --test cli update_` passed 22 matches, including two
+  unrelated substring matches. New HTTP end-to-end fixture cases prove exact
+  latest-only request lists for equal/newer/invalid outcomes, prefixed/unprefixed
+  forced equal checksum+binary sequences, unchanged/replaced executable bytes,
+  and both force states. Existing real update/failure/protection tests remain green.
+- Real headless end-to-end regression explicitly executed with
+  AWTRIX_LINUX_BIN=/tmp/opencode/awtrix-ng-build/awtrix-linux and
+  AWTRIX_WEBUI=/tmp/opencode/awtrix-ng-src/webui/index.html:
+  `cargo test --locked --test headless -- --ignored --nocapture` passed 1, 21.48s.
+  Existing official AWTRIX NG 1.2.2 build/source provenance recorded above;
+  executable and UI availability verified before execution. No acquisition needed.
+- `cargo build --release --locked` passed; explicit AWTRIX_DISTRIBUTION_BINARY
+  pointing to integration workspace target/release/awtrix-cli passed both packaged
+  help/version and local HTTP diagnosis tests. No real self-update download or
+  modification of the user's installed CLI was performed.
+- Final independent Luna review `ses_ee2fdc051ffeB4TvYZRZLC630V`, original
+  `4f4186c` through integrated `9a7dacf`: Standards 0, Spec 0, acceptance gaps 0.
+  All #35 mandatory criteria satisfied. Native macOS/Windows and physical checks
+  NOT EXECUTED, not required by this ticket; no compatibility claims added.
+- Next close-out: append GitHub evidence, close #35 as completed, mark parent
+  checklist and close #34, reconcile live graph, then remove only clean integrated
+  ticket-35 worktree while retaining its branch and commits. No push/release.
