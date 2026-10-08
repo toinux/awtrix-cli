@@ -43,3 +43,11 @@ _Avoid_: Berry module, library
 **Rotation** :
 La succession des applications presentees sur l'ecran de l'appareil.
 _Avoid_: App rotation, carousel
+
+**Version installée** :
+La version du binaire AWTRIX CLI actuellement exécuté.
+_Avoid_: Local version
+
+**Release stable** :
+Une version publiée d’AWTRIX CLI qui n’est ni une préversion ni un brouillon.
+_Avoid_: Latest build
