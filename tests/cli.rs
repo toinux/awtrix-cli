@@ -5067,6 +5067,103 @@ fn script_deploy_uses_atomic_expected_source_route_and_does_not_pre_read() {
 }
 
 #[test]
+fn script_deploy_minifies_payload_but_keeps_original_conditional_reference_and_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("main.ax");
+    let original =
+        "# @mystery keep\nclass Demo\n  def draw()\n    return 1\n  end\nend\nreturn Demo()\n";
+    std::fs::write(&file, original).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Put);
+        assert_eq!(request.url(), "/api/v1/apps/script-update/demo");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(payload["expected_source"], original);
+        assert_eq!(
+            payload["source"],
+            "# @mystery keep\nclass a\ndef draw()\nreturn 1\nend\nend\nreturn a()\n"
+        );
+        request
+            .respond(Response::from_string(r#"{"ok":true,"error":null}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":false}"#))
+            .unwrap();
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "deploy",
+        "demo",
+        "--file",
+        file.to_str().unwrap(),
+        "--expected-source",
+        original,
+        "--minify",
+    ]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(file).unwrap(), original);
+}
+
+#[test]
+fn script_deploy_minification_failure_sends_no_device_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("invalid.ax");
+    std::fs::write(
+        &file,
+        "class Demo\n  def draw()\n    return \"unterminated\n  end\nend\n",
+    )
+    .unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        assert!(server
+            .recv_timeout(Duration::from_millis(150))
+            .unwrap()
+            .is_none());
+    });
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args([
+            "--target",
+            &url,
+            "--json",
+            "script",
+            "deploy",
+            "demo",
+            "--file",
+            file.to_str().unwrap(),
+            "--expected-source",
+            "original",
+            "--minify",
+        ])
+        .env("AWTRIX_NO_UPDATE_CHECK", "1")
+        .output()
+        .unwrap();
+    worker.join().unwrap();
+    assert!(!output.status.success());
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "MINIFY_SYNTAX");
+}
+
+#[test]
 fn script_deploy_surfaces_conflict_without_fallback_or_overwrite() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
@@ -5092,6 +5189,7 @@ fn script_deploy_surfaces_conflict_without_fallback_or_overwrite() {
         "new",
         "--expected-source",
         "original",
+        "--minify",
     ]);
     worker.join().unwrap();
     assert_eq!(output.status.code(), Some(1));
@@ -5120,6 +5218,7 @@ fn script_deploy_without_update_capability_does_not_write() {
         "new",
         "--expected-source",
         "original",
+        "--minify",
     ]);
     worker.join().unwrap();
     assert_eq!(output.status.code(), Some(6));

@@ -41,6 +41,9 @@ pub enum Command {
         /// After saving, run verification for this many seconds (1..3600).
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..=3600))]
         verify_secs: Option<u64>,
+        /// Minify the deployment payload; the source file and expected-source reference stay original.
+        #[arg(long)]
+        minify: bool,
     },
     /// Enable a script without changing other apps.
     Enable { name: String },
@@ -111,6 +114,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             create,
             force,
             verify_secs,
+            minify,
         } => {
             validate(name)?;
             let source = match (source, file) {
@@ -127,8 +131,13 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             if source.is_empty() {
                 return Err(("ARGUMENT", "Berry source must not be empty".into()));
             }
+            let payload = if *minify {
+                crate::minify::minify_source(&source)?
+            } else {
+                source.clone()
+            };
             if *force {
-                let result = api.raw_put(&format!("/api/v1/apps/script/{name}"), &source)?;
+                let result = api.raw_put(&format!("/api/v1/apps/script/{name}"), &payload)?;
                 let saved = operational_result(result, false, None)?;
                 chain_verification(saved, api, name, *verify_secs)
             } else {
@@ -141,7 +150,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                 } else {
                     Value::String(expected_source.clone().ok_or(("ARGUMENT", "conditional update requires --expected-source or --create; source was not reread".into()))?)
                 };
-                match api.conditional_put(name, &expected, &source) {
+                match api.conditional_put(name, &expected, &payload) {
                     Err(("CONFLICT", message)) => Err(("CONFLICT", message)),
                     Err(e) => Err(e),
                     Ok(result) => {
