@@ -21,11 +21,11 @@ struct Asset {
     browser_download_url: String,
 }
 
-pub(crate) fn run() -> Result<String, (&'static str, String)> {
-    run_for(current_exe()?)
+pub(crate) fn run(force: bool) -> Result<(bool, String), (&'static str, String)> {
+    run_for(current_exe()?, force)
 }
 
-fn run_for(target: PathBuf) -> Result<String, (&'static str, String)> {
+fn run_for(target: PathBuf, force: bool) -> Result<(bool, String), (&'static str, String)> {
     let (api, asset_base) = endpoints();
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -45,6 +45,33 @@ fn run_for(target: PathBuf) -> Result<String, (&'static str, String)> {
             "UPDATE_RELEASE",
             format!("No stable release is available; install manually from {RELEASE_PAGE}"),
         ));
+    }
+    let installed = installed_version();
+    let release_version = release
+        .tag_name
+        .strip_prefix('v')
+        .unwrap_or(&release.tag_name);
+    let installed_version =
+        parse_version(&installed).ok_or_else(|| invalid_version("installed", &installed))?;
+    let release_version = parse_version(release_version)
+        .ok_or_else(|| invalid_version("stable release", &release.tag_name))?;
+    match installed_version.cmp(&release_version) {
+        std::cmp::Ordering::Equal if !force => {
+            return Ok((
+                false,
+                format!("Already up to date: awtrix-cli {} is installed.", installed),
+            ));
+        }
+        std::cmp::Ordering::Greater => {
+            return Ok((
+                false,
+                format!(
+                    "Installed awtrix-cli {} is newer than stable release {}; not downgrading.",
+                    installed, release.tag_name
+                ),
+            ));
+        }
+        _ => {}
     }
     let name = asset_name().ok_or_else(|| manual("this host is not supported"))?;
     let asset = release
@@ -88,10 +115,46 @@ fn run_for(target: PathBuf) -> Result<String, (&'static str, String)> {
         "Updated to {}. Restart awtrix-cli to use the new version.",
         release.tag_name
     );
-    Ok(match cleanup_warning {
-        Some(warning) => format!("{message} Warning: {warning}"),
-        None => message,
-    })
+    Ok((
+        true,
+        match cleanup_warning {
+            Some(warning) => format!("{message} Warning: {warning}"),
+            None => message,
+        },
+    ))
+}
+
+#[cfg(debug_assertions)]
+fn installed_version() -> String {
+    std::env::var("AWTRIX_UPDATE_INSTALLED_VERSION")
+        .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_owned())
+}
+
+#[cfg(not(debug_assertions))]
+fn installed_version() -> String {
+    env!("CARGO_PKG_VERSION").to_owned()
+}
+
+fn parse_version(value: &str) -> Option<(u64, u64, u64)> {
+    let mut components = value.split('.');
+    let major = parse_component(components.next()?)?;
+    let minor = parse_component(components.next()?)?;
+    let patch = parse_component(components.next()?)?;
+    components.next().is_none().then_some((major, minor, patch))
+}
+
+fn parse_component(value: &str) -> Option<u64> {
+    if value.is_empty() || (value.len() > 1 && value.starts_with('0')) {
+        return None;
+    }
+    value.parse().ok()
+}
+
+fn invalid_version(which: &str, value: &str) -> (&'static str, String) {
+    (
+        "UPDATE_VERSION",
+        format!("invalid {which} version '{value}'; expected numeric major.minor.patch"),
+    )
 }
 
 fn endpoints() -> (String, String) {
