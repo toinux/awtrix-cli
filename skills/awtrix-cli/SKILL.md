@@ -1,12 +1,14 @@
 ---
 name: awtrix-cli
 description: >-
-  Use when a task involves an AWTRIX NG display: send build or job notifications,
-  show progress with temporary apps, inspect device capabilities or settings,
-  capture the screen, deploy and debug persistent Berry scripts, manage their
-  modules and resources, or validate and test awtrix.toml projects. Guides use
-  and installation of the awtrix-cli executable, structured output, protected
-  updates, and bounded runtime verification.
+  Use for AWTRIX context: questions or tasks about the awtrix-cli version,
+  availability, location, installation, update, use, or troubleshooting, as well
+  as AWTRIX NG devices and displays, firmware, notifications and progress,
+  capabilities and settings, screen capture, persistent Berry scripts, their
+  modules and resources, or awtrix.toml projects. Not for an incidental AWTRIX
+  mention or an unrelated generic CLI request. Guides use and installation of
+  the executable, structured output, protected updates, and bounded runtime
+  verification.
 ---
 
 # AWTRIX CLI

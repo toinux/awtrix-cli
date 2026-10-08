@@ -14,7 +14,43 @@ INSTALLATION_GUIDE = ROOT / "skills/awtrix-cli/references/installation.md"
 SKILL = ROOT / "skills/awtrix-cli/SKILL.md"
 
 
+def skill_description():
+    lines = SKILL.read_text().splitlines()
+    description_start = next(index for index, line in enumerate(lines) if line == "description: >-") + 1
+    description_lines = []
+    for line in lines[description_start:]:
+        if line and not line.startswith(" "):
+            break
+        description_lines.append(line.strip())
+    return " ".join(description_lines)
+
+
 class SkillInstallationGuidanceTests(unittest.TestCase):
+    def test_skill_description_selects_awtrix_cli_information_and_setup_requests(self):
+        description = skill_description()
+
+        for intent in (
+            "AWTRIX context",
+            "awtrix-cli version",
+            "availability",
+            "location",
+            "installation",
+            "update",
+            "use",
+            "troubleshooting",
+            "displays",
+            "firmware",
+            "Berry scripts",
+            "modules",
+            "resources",
+            "awtrix.toml projects",
+        ):
+            with self.subTest(intent=intent):
+                self.assertIn(intent, description, f"Skill selection description should cover {intent!r}")
+
+        self.assertIn("incidental AWTRIX mention", description, "Incidental AWTRIX mentions should be excluded")
+        self.assertIn("unrelated generic CLI request", description, "Unrelated generic CLI requests should be excluded")
+
     def test_guidance_prefers_verified_binaries_and_uses_explicit_update(self):
         guide = INSTALLATION_GUIDE.read_text()
         skill = SKILL.read_text()
