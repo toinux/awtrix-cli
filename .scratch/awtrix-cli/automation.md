@@ -547,3 +547,27 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
   clean before this journal note; main GLOSSARY.md diff and untracked TODO.md
   confirmed preserved. Other worktrees untouched. Run complete, no blockers.
   Changes are local only; publication requires a separate user request.
+
+## Specification #34 publication and main merge — 2026-10-08
+
+- User subsequently explicitly requested publishing and merging the integration
+  branch to finalize #34. This supersedes the earlier run-scoped no-push
+  authorization; it authorizes these code commits to `integration/awtrix-cli`
+  and `main`, not a release.
+- Pushed `integration/awtrix-cli` at `3dfb332c36db8664d59e8c3b089479953f451786`.
+  Merged it locally into main with merge commit
+  `2c61df740f637ba016f1c919cc02d2f73d6161e5`, then pushed main successfully.
+  Remote main and integration refs verified at those SHAs.
+- Post-merge local fmt, Clippy and full locked Rust suite passed (18 unit, 174
+  CLI, 2 distribution; one optional headless test ignored by default). The explicit
+  real headless test and release artifact checks had already passed before merge.
+- GitHub Actions push run https://github.com/toinux/awtrix-cli/actions/runs/37837022652
+  completed successfully on Linux GNU, macOS ARM64 and Windows MSVC. Host checks,
+  including native updater behavior, packaging and artifact layout, passed.
+  Release and release-install jobs were skipped for this branch/main push; no
+  release was published.
+- GitHub #34/#35 remain CLOSED as completed; their prior local-only evidence is
+  superseded by this publication and successful native CI evidence. No PR was
+  created; the requested integration branch was merged directly into main.
+- Separate setup-document edits in the user's main checkout remain uncommitted
+  and outside these implementation commits. Untracked TODO.md is untouched.
