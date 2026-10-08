@@ -1,378 +1,135 @@
 # awtrix-cli
 
-**Bring your AWTRIX display into your terminal — and your AI agent's workflow.**
+**Give your AI agent a practical way to work with your AWTRIX NG display.**
 
-`awtrix-cli` is a command-line toolkit for [AWTRIX NG](https://github.com/Blueforcer/awtrix-ng).
-Send notifications, display live status, manage apps, and develop persistent Berry
-scripts from the same tool. Go from a local project to deployment, runtime logs,
-and a PNG screen capture without assembling your own HTTP client.
+`awtrix-cli` is a command-line toolkit for [AWTRIX NG](https://github.com/Blueforcer/awtrix-ng). It lets an agent or shell workflow send notifications, manage temporary apps, deploy persistent Berry scripts, inspect runtime behavior, and capture the display—all through one command-line interface.
 
-The executable is `awtrix-cli`. It is built in Rust, with readable output for people
-and structured JSON for scripts and AI agents that can run shell commands.
+## Install the skill
 
-```sh
-# Tell your display that a build has finished
-awtrix-cli --target http://awtrix.local notify send --payload '{"text":"Build passed"}'
-
-# Add a temporary status app to the rotation
-awtrix-cli --target http://awtrix.local apps create build \
-  --payload '{"text":"Tests: OK","lifetimeMs":60000}'
-
-# Save the current framebuffer as a PNG
-awtrix-cli --target http://awtrix.local screen capture --output screen.png
-```
-
-[Quick start](#quick-start) · [Features](#features) · [Examples](#everyday-examples) ·
-[AI agents](#built-for-ai-agent-workflows) · [Script projects](#develop-deploy-and-test-script-projects) ·
-[Documentation](#documentation)
-
-## Why awtrix-cli?
-
-- **Make your desk display useful.** Turn build results, job progress, or a service
-  status into notifications and rotating apps from shell scripts or CI jobs that
-  can reach your device.
-- **Keep the development loop in one place.** Deploy Berry source, inspect its
-  configuration and stored data, follow logs, observe runtime errors, and capture
-  the rendered pixels.
-- **Give agents a discoverable interface.** `describe` exposes command parameters,
-  inputs, outputs, and examples; `--json` produces machine-readable results and
-  errors; `--fields` keeps responses focused.
-- **Manage projects, not a pile of HTTP calls.** Declare scripts, modules,
-  resources, configuration, and tests in `awtrix.toml`. Validate locally, deploy
-  additively, and explicitly prune obsolete project-owned entries.
-- **Test without occupying your display.** On Linux, run declarative project tests
-  against a caller-provided AWTRIX headless executable in a disposable instance.
-
-## Quick start
-
-### Install a published binary
-
-[GitHub releases](https://github.com/toinux/awtrix-cli/releases) provide binaries
-for Linux x86_64 (GNU/glibc), macOS Apple Silicon, and Windows x86_64.
-No Rust toolchain is needed. From this checkout, the bundled installers select
-the host asset, verify SHA-256, and check version/help before installation:
-
-```sh
-# Linux or macOS
-sh skills/awtrix-cli/scripts/install.sh
-export PATH="$HOME/.local/bin:$PATH"
-awtrix-cli --version
-```
-
-```powershell
-# Windows PowerShell
-& .\skills\awtrix-cli\scripts\install.ps1
-$env:PATH = "$env:LOCALAPPDATA\Programs\awtrix-cli\bin;$env:PATH"
-awtrix-cli --version
-```
-
-An existing working `awtrix-cli` is reused. To bootstrap a specific version or
-directory, use `--version v0.2.0 --install-dir DIR` (PowerShell: `-Version` and
-`-InstallDir`). See [distribution](docs/distribution.md) for release assets and
-checksums, or build from source for a host without a published binary.
-
-### Build and install from this checkout
-
-With a stable [Rust toolchain](https://rustup.rs/) installed:
-
-```sh
-cargo install --path . --locked
-awtrix-cli --help
-```
-
-To build without installing, use `cargo build --release --locked` and run
-`./target/release/awtrix-cli` instead. See [distribution](docs/distribution.md) for
-standalone artifact names and the Linux, macOS, and Windows build matrix.
-
-### Connect your display
-
-Use an AWTRIX NG HTTP(S) endpoint reachable from your machine. Replace the example
-URL with your device's address.
-
-```sh
-# Save a personal device profile
-awtrix-cli profile add desk --target http://awtrix.local
-
-# Inspect the device and its advertised capabilities
-awtrix-cli --profile desk device diagnose
-
-# Send your first notification
-awtrix-cli --profile desk notify send --payload '{"text":"Hello from the terminal"}'
-```
-
-Use `--profile desk` to select this device, or make it the default with
-`awtrix-cli profile set-default desk`. For one-off commands, use `--target URL`;
-`AWTRIX_URL` is also supported.
-
-Personal configuration defaults to `~/.config/awtrix-cli/config.json` on Linux
-and macOS, `%APPDATA%/awtrix-cli/config.json` on Windows, or
-`%USERPROFILE%/AppData/Roaming/awtrix-cli/config.json` when `APPDATA` is unset.
-`AWTRIX_CONFIG` selects an exact config file instead. The headless process
-ownership record is `headless.json` alongside that file. The old `awtrix`
-directory is neither searched nor migrated; to retain existing profiles,
-manually move its `config.json` into the new `awtrix-cli` directory.
-
-On ordinary CLI startup, `awtrix-cli` makes a best-effort check for a newer
-stable GitHub release no more than once every 24 hours. It only prints a notice;
-it never installs automatically. Set `AWTRIX_NO_UPDATE_CHECK=1` to disable
-release checks. Network failures are ignored so they cannot prevent commands
-from running.
-
-If HTTP Basic authentication is enabled, supply `AWTRIX_USERNAME` and
-`AWTRIX_PASSWORD`, or credentials in your personal profile. Project manifests
-reference profiles by name and do not store credentials. Examples use POSIX-shell
-quoting; adapt quotes and environment-variable syntax for your shell.
-
-## Features
-
-| Area | What you can do | Commands |
-| --- | --- | --- |
-| Device inspection | Read identity, firmware version, state, capabilities, and diagnostics | `device identity`, `state`, `capabilities`, `diagnose` |
-| Device profiles | Save multiple targets and choose a default; keep credentials in personal configuration | `profile add`, `update`, `list`, `show`, `set-default`, `delete` |
-| Temporary apps | Create or replace JSON-driven content, inspect the app inventory, select an app, and set rotation order | `apps create`, `update`, `delete`, `list`, `select`, `active-get`, `order-get`, `order-set` |
-| Notifications | Send, queue, hold, wake the display, and dismiss active or named notifications | `notify send`, `delete-active`, `delete` |
-| Display settings | Read settings, adjust brightness and power, configure supported overlays, and request reboot | `settings get`, `patch`, `brightness`, `display-get`, `display-patch`, `power`, `system-get`, `reboot` |
-| Persistent Berry scripts | Read and deploy source, enable or disable scripts, inspect runtime state, edit declared configuration, and read stored data | `script get`, `deploy`, `enable`, `disable`, `delete`, `state`, `config-get`, `config-put`, `data` |
-| Berry minification | Create a smaller local script without changing the readable source | `minify` |
-| Runtime feedback | Observe script health over a bounded window; read or follow incremental logs | `script verify`, `logs read`, `logs follow` |
-| Screen capture | Export the device framebuffer to a PNG using its reported dimensions | `screen capture` |
-| Modules and resources | Deploy reusable Berry modules and upload icon/resource files | `resources modules` (`list`, `get`, `deploy`, `delete`), `resources files` (`list`, `upload`, `delete`) |
-| TOML projects | Scaffold, validate, deploy, preview pruning, and reconcile uncertain tracking state | `project init`, `validate`, `deploy`, `prune`, `reconcile` |
-| Declarative tests | Assert script activity, stored values, log messages, and rendered pixels against PNG references with explicit tolerances | `test project` |
-| Linux headless lifecycle | Start, inspect, and stop a locally owned AWTRIX Linux instance | `headless start`, `status`, `stop` |
-| Agent-friendly interface | Discover operations, select output fields, consume JSON results and JSONL log streams | `describe`, `--json`, `--fields` |
-
-## Everyday examples
-
-The examples below use the `desk` profile created in the quick start.
-
-### Display progress, then announce completion
-
-```sh
-awtrix-cli --profile desk apps create build --payload '{"text":"Building..."}'
-awtrix-cli --profile desk apps update build --payload '{"text":"Tests: OK"}'
-awtrix-cli --profile desk notify send --payload '{"text":"Ready to ship"}' --stack --wakeup
-awtrix-cli --profile desk apps delete build
-```
-
-Pushed apps are temporary: they can expire and are lost on reboot. Both `create`
-and `update` create or replace the named app. For logic that lives on the device,
-use a persistent Berry script.
-
-### Adjust the display
-
-```sh
-awtrix-cli --profile desk settings brightness 80 --auto false
-awtrix-cli --profile desk settings power off
-awtrix-cli --profile desk settings power on
-```
-
-### Deploy a new script and inspect it
-
-```sh
-# Create a local project with a starter Berry script
-awtrix-cli project init ./demo
-
-# Create the script only if its name is absent, then observe it for 10 seconds
-awtrix-cli --profile desk script deploy main --file ./demo/src/main.ax \
-  --create --verify-secs 10
-
-# Inspect stored data and collect runtime feedback
-awtrix-cli --profile desk --json script data main
-awtrix-cli --profile desk logs follow --duration-secs 15
-awtrix-cli --profile desk script verify main --duration-secs 10 --capture main.png
-```
-
-Protected deployment requires the device's `scriptUpdates` capability. For an
-existing script, supply the original source with `--expected-source`, or use the
-project manifest's `expected_source_file`. A stale reference produces a conflict
-instead of overwriting a concurrent edit. `--force` explicitly opts into an
-unprotected overwrite.
-
-### Minify a local Berry script
-
-```sh
-awtrix-cli minify ./demo/src/main.ax
-```
-
-The command writes `main.min.ax` beside the source, preserves every `# @...`
-AWTRIX directive, and enables class and variable renaming by default. Use
-`--no-classes` or `--no-variables` to disable either transformation; `--force`
-is required to replace an existing output. The source is never modified. Class
-field renaming only recognizes literal `self.field` access; accesses through an
-alias cannot be safely renamed by this minifier.
-
-## Built for AI agent workflows
-
-### Install the Agent Skill
-
-This repository includes an [Agent Skills](https://agentskills.io)-compatible
-[awtrix-cli skill](skills/awtrix-cli/SKILL.md) for OpenCode, Claude Code, Codex,
-and other compatible coding agents. It covers CLI discovery, installation,
-structured output, protected deployment, and runtime verification, with detailed
-workflows loaded only when needed.
+Install the `awtrix-cli` skill so your coding agent knows how to install, configure, and use the CLI:
 
 ```sh
 npx skills add toinux/awtrix-cli --skill awtrix-cli
 ```
 
-Choose your agent in the installer. `skills add` installs instructions and bundled
-scripts; it does not execute a binary-install hook. When first used, the skill
-checks for `awtrix-cli` and guides the agent to install the matching GitHub release
-binary with checksum verification if it is missing. Cargo remains a fallback.
-The skill completes this bootstrap before asking about app requirements or the
-device address, and uses an absolute executable path across separate shell calls.
-For example, ask: “Use awtrix-cli; install the CLI if needed, then inspect my
-display at http://awtrix.local.” To inspect or install the skill from a local checkout:
+Then ask your agent to use `awtrix-cli`, for example:
+
+> Set up awtrix-cli, connect to my display at http://awtrix.local, and show its capabilities.
+
+The skill guides the agent through checking for the executable and installing it if needed. It also teaches the agent how to select a device, use structured output, and verify changes. You do not need to run the skill's bundled installer scripts yourself.
+
+## Get started
+
+Ask your agent to connect to your AWTRIX NG device and configure a profile. A profile saves the device address so you do not need to repeat it for each command:
 
 ```sh
-npx skills add . --list
-npx skills add . --skill awtrix-cli
+awtrix-cli profile add desk --target http://awtrix.local
+awtrix-cli profile set-default desk
+awtrix-cli device diagnose
 ```
 
-### Use the executable
-
-An agent with shell access can use the same executable as a person. Discover an
-operation, inspect the target, perform it, and collect runtime evidence:
+Once a default profile is set, commands use it automatically. For a one-off command without a configured default, pass a target explicitly:
 
 ```sh
-# Discover an operation without contacting a device
-awtrix-cli --json describe "script verify"
-
-# Inspect live capabilities and a focused app inventory
-awtrix-cli --profile desk --json device capabilities
-awtrix-cli --profile desk --json --fields apps apps list
-
-# Observe a script and return a structured report plus a PNG
-awtrix-cli --profile desk --json script verify main \
-  --duration-secs 10 --capture main.png
-
-# Stream bounded runtime logs as JSONL
-awtrix-cli --profile desk --json logs follow --duration-secs 15
+awtrix-cli --target http://awtrix.local notify send --payload '{"text":"Build passed"}'
 ```
 
-- **Discoverable commands:** `awtrix-cli --help` lists command families;
-  `awtrix-cli describe "<topic>"` describes an operation offline. Pass an explicit
-  `--target` to refine the description with the connected device's capabilities.
-- **Predictable output:** `--json` requests compact JSON independently of terminal
-  detection. `logs follow --json` streams typed JSONL records. `--fields a,b`
-  selects known top-level result fields for non-streaming output.
-- **Actionable failures:** machine-readable error codes and nonzero exit codes
-  distinguish argument, authentication, timeout, HTTP, and compatibility errors.
-- **Bounded observation:** log following and script verification have explicit
-  time windows, so an agent can collect feedback and continue its workflow.
-- **Evidence-aware results:** reports distinguish HTTP acceptance, saved source,
-  observed runtime state, and unavailable evidence.
+You can also ask your agent to do something directly:
 
-For example, ask your shell-capable coding agent:
+> Show “Tests passed” on my display, then remove the temporary status app.
 
-> Use `awtrix-cli` with the `desk` profile. Inspect its capabilities and the description
-> of script verification, verify `main` for 10 seconds, save a screen capture, and
-> summarize any reported Berry errors.
+## Common workflows
 
-See the [CLI contract](docs/cli-contract.md) for exact output, error, target
-selection, and exit-code semantics.
+### Show progress and announce completion
 
-## Develop, deploy, and test script projects
+```sh
+awtrix-cli apps create build --payload '{"text":"Building..."}'
+awtrix-cli apps update build --payload '{"text":"Tests: OK"}'
+awtrix-cli notify send --payload '{"text":"Ready to ship"}' --stack --wakeup
+awtrix-cli apps delete build
+```
 
-Keep your display code and its dependencies together in a versionable project:
+Pushed apps are temporary: they can expire and are lost on reboot. For logic that should live on the device, use a persistent Berry script.
+
+### Deploy a Berry script with on-the-fly minification
+
+Create a project scaffold, then deploy its readable source with `--minify`. The CLI minifies the deployment payload in memory; it does not rewrite your source file.
 
 ```sh
 awtrix-cli project init ./demo
-awtrix-cli project validate --manifest ./demo/awtrix.toml
-awtrix-cli --profile desk --json project deploy --manifest ./demo/awtrix.toml
+awtrix-cli script deploy main --file ./demo/src/main.ax --create --minify --verify-secs 10
 ```
 
-An `awtrix.toml` manifest declares scripts, Berry modules, resources, configuration
-patches, and optional tests. Paths resolve relative to the manifest. Local
-validation checks the manifest and dependencies before deployment contacts a
-device. See the [complete example project](examples/project/awtrix.toml), including
-a module, script, GIF resource, and test assertions.
+For an existing script, use `--expected-source` with the original remote source to protect against overwriting a concurrent change. The source file remains unchanged when minification is enabled.
 
-Deployments are additive and run modules, resources, scripts, then configuration.
-They do not delete undeclared content or provide a transaction across operations.
-The generated starter uses create-only deployment; to update an existing script,
-replace `create = true` with an `expected_source_file` reference to its original
-remote source.
-
-Preview obsolete, previously tracked project entries before pruning them:
+You can also minify a local file without deploying it. This writes a `.min.ax` sibling and leaves the original untouched:
 
 ```sh
-awtrix-cli --profile desk project prune --manifest ./demo/awtrix.toml --dry-run
+awtrix-cli minify ./demo/src/main.ax
 ```
 
-### Test in an isolated Linux instance
-
-Provide the AWTRIX Linux executable yourself; it is separate from this CLI and is
-not bundled or downloaded. For a project with test assertions:
+### Adjust the display
 
 ```sh
-awtrix-cli --json test project --manifest examples/project/awtrix.toml \
-  --binary /path/to/awtrix-linux --webui /path/to/webui/index.html
+awtrix-cli settings brightness 80 --auto false
+awtrix-cli settings power off
+awtrix-cli settings power on
 ```
 
-The runner starts an instance on an available loopback port, deploys the project,
-checks its assertions, then stops the instance and removes temporary data and
-tracking files. Tests can check that a script remains active, that a stored value
-matches, or that a log message appears during the observation window. Visual
-assertions compare the framebuffer with a reference PNG using explicit color and
-pixel-count tolerances; captures are not synchronized to an exact animation frame.
-
-To deploy and run those tests on an existing device, select its URL explicitly:
+### Inspect runtime behavior
 
 ```sh
-awtrix-cli --target http://awtrix.local --json test project \
-  --manifest examples/project/awtrix.toml
+awtrix-cli --json script data main
+awtrix-cli logs follow --duration-secs 15
+awtrix-cli script verify main --duration-secs 10 --capture main.png
 ```
 
-External test runs require `--target`; profiles and environment target defaults
-do not select the test device. Use a project whose create/update declarations
-match that device's existing scripts.
+## What you can do
 
-## Compatibility and validation status
+- **Control the display:** inspect device information and capabilities, adjust settings, change brightness or power, and reboot.
+- **Manage temporary content:** create, update, list, select, order, and delete apps; send, queue, or dismiss notifications.
+- **Develop Berry scripts:** deploy scripts, manage their configuration and data, inspect state and logs, and verify runtime behavior.
+- **Manage reusable content:** deploy Berry modules and upload icons or other resources.
+- **Work with projects:** declare scripts, modules, resources, configuration, and tests in an `awtrix.toml` project; validate and deploy it, then preview obsolete project-owned entries before pruning.
+- **Capture the screen:** save the display framebuffer as a PNG.
+- **Automate from agents and shell scripts:** discover commands, request JSON output, select relevant fields, and consume bounded JSONL log streams.
 
-The CLI targets the **AWTRIX NG HTTP API**, with contracts checked against the
-ESP32, ESP32-S3, and TC002 definitions. Available features depend on the connected
-device's advertised capabilities. The client-host distribution matrix is Linux
-x86_64 (GNU/glibc), macOS arm64, and Windows x86_64 (MSVC); headless lifecycle and
-isolated headless testing are Linux-only.
+## Configure a device
 
-Tickets 01–19 are complete. See [end-to-end workflow and compatibility
-evidence](docs/validation.md) for the reproducible agent scenario and the
-separate HTTP simulation, actual headless, host distribution, and physical
-evidence. The physical main path was executed on one ESP32 running AWTRIX NG
-1.2.2; ESP32-S3 and TC002 physical checks were not executed. Linux checks, HTTP
-fixtures, and headless runs are not physical-device validation. Headless tests do
-not validate sensors, audio, or hardware memory/instruction budgets.
+Profiles keep device addresses and optional credentials in your personal CLI configuration. The setup above makes `desk` the default, so commands use it automatically. Use `awtrix-cli profile show desk` to inspect a profile or `awtrix-cli profile update desk --target URL` to change its address. For a single command, `--target URL` selects a device directly. `AWTRIX_URL` can also supply a target. If the device uses HTTP Basic authentication, configure credentials on the profile or set `AWTRIX_USERNAME` and `AWTRIX_PASSWORD`.
 
-HTTP acceptance alone does not prove that content is visible, and a bounded
-verification window does not prove future script correctness. Device logs retain
-only the latest 34 lines, so log collection is not exhaustive.
+## Ask your agent
 
-The [distribution documentation](docs/distribution.md) and
-[physical validation ticket](https://github.com/toinux/awtrix-cli/issues/20)
-record release artifacts and observed compatibility scope, including explicitly
-unavailable hardware checks.
+The installed skill teaches your agent the CLI workflows. You can ask it to perform tasks in natural language, for example:
 
-## Documentation
+> Deploy `./demo` to my default display, minify the script during deployment, and verify it for 10 seconds.
 
-- [CLI contracts](docs/cli-contract.md) — command behavior, authentication,
-  profiles, structured output, script protection, projects, and tests.
-- [App contracts](docs/apps-contract.md) — pushed payloads, rotation, lifetime,
-  request limits, and device acceptance semantics.
-- [Distribution](docs/distribution.md) — build targets, standalone artifacts,
-  native validation, and headless prerequisites.
-- [Validation evidence](docs/validation.md) — agent workflow, correction path,
-  evidence classes, compatibility limits, and physical resumption protocol.
-- [Example project](examples/project/awtrix.toml) — scripts, module, resource,
-  and declarative assertions ready to inspect and test.
-- [AWTRIX NG](https://github.com/Blueforcer/awtrix-ng) — the upstream firmware
-  and Linux runtime this CLI talks to.
+For direct shell use, `awtrix-cli --help` lists command groups. `awtrix-cli describe "script verify"` explains an operation without contacting a device. Add `--json` for machine-readable results, and `--fields a,b` to select top-level fields from a result.
 
-For the real headless integration suite, supply the executable and web assets:
+## Technical notes
+
+### Install or build the executable yourself
+
+The skill normally handles CLI installation for the agent. If you prefer to install or build it yourself, published binaries are available from [GitHub Releases](https://github.com/toinux/awtrix-cli/releases) for Linux x86_64 (GNU/glibc), macOS Apple Silicon, and Windows x86_64. The CLI also supports building from source with Rust:
 
 ```sh
-AWTRIX_LINUX_BIN=/path/to/awtrix-linux AWTRIX_WEBUI=/path/to/webui/index.html \
-  cargo test --test headless -- --ignored --exact \
-  real_awtrix_headless_declarative_runs_cover_success_failure_berry_error_and_isolation
+cargo install --git https://github.com/toinux/awtrix-cli --locked
 ```
+
+Or, from a local checkout:
+
+```sh
+cargo install --path . --locked
+```
+
+Run `awtrix-cli update` to explicitly update an installed release. The optional startup update check only prints a notice; it never installs automatically. Set `AWTRIX_NO_UPDATE_CHECK=1` to disable that check.
+
+### Projects and testing
+
+An `awtrix.toml` project can describe scripts, Berry modules, resources, configuration patches, and optional tests. Start with `awtrix-cli project init ./demo`, then validate and deploy the generated manifest. See the [example project](examples/project/awtrix.toml) for a complete project with a module, script, resource, and test assertions.
+
+Project deployments are additive and are not transactional: they do not delete undeclared device content. Review `project prune --dry-run` before removing previously tracked project entries. Linux headless testing is also available, but requires a separately supplied AWTRIX Linux executable and web assets; they are not bundled with this CLI.
+
+### Compatibility
+
+This client targets the AWTRIX NG HTTP API. Available operations depend on the capabilities advertised by the connected device. The headless lifecycle and isolated headless tests are Linux-only. A successful HTTP request alone does not prove that content is visible on the physical display; use runtime verification and screen capture when you need evidence of the result.
