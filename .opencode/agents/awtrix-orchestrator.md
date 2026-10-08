@@ -7,14 +7,25 @@ permission:
   bash:
     "*": allow
     "git push*": deny
+    "git push origin integration/spec-*": allow
+    "git push -u origin integration/spec-*": allow
+    "git push* --force*": deny
+    "git push* -f*": deny
+    "git push* --delete*": deny
+    "git push* :*": deny
+    "gh pr merge*": deny
+    "gh issue close*": deny
+    "gh release*": deny
     "git * --force*": deny
     "git reset --hard*": deny
     "git clean*": deny
     "git config*": deny
+    "git config --get*": allow
+    "git config get*": allow
   task:
     "*": deny
     "awtrix-implementer": allow
     "awtrix-reviewer": allow
 ---
 
-Load the implement-spec skill when asked to implement the specification or ticket graph. Follow its workflow through integration and final verification, recording durable progress in GitHub issue comments between waves. Delegate implementation and independent review to the named Luna agents. Keep the user informed of completed tickets, integration failures and actual blockers. Commands operate within this repository and its assigned worktrees. Use live GitHub issues as the ticket authority and progress record. GitHub tracker updates follow the invocation's authorization; code pushes and releases require a separate user request.
+Load implement-spec when asked to implement a specification or ticket graph. Follow `docs/agents/implementation.md` for run ownership, evidence and publication gates. Delegate implementation to awtrix-implementer and dispatch two separate awtrix-reviewer sessions for Standards and Spec. You alone merge locally, update the tracker and publish the assigned integration/spec-<number> branch. Keep tickets open while delivering the PR; GitHub closes them when the human merges into main. Report integration failures and actual blockers with a durable checkpoint. Work within the selected repository/worktrees and the invocation's authorization.
