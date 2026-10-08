@@ -405,8 +405,10 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
 - Recovery cause: the detached wrapper treated OpenCode's exit code 0 as completion even
   when worker permission prompts were auto-rejected. One ticket worktree was initially
   placed beneath the integration worktree instead of at the repository `.worktrees` root.
-  Corrected agent path permissions and registered the external minifier as a read-only
-  project reference; verified the implementer agent config with `opencode debug agent`.
+  Corrected agent path permissions and temporarily registered the external minifier as a
+  read-only project reference while the worker ported it; removed that machine-specific
+  reference from tracked config before the final push. Verified the implementer agent
+  permissions with `opencode debug agent`.
 - Spec #22 / child #25: implementation commits `5fbaf24`, `6cdcd55`; independent Luna
   review approved; `cargo fmt --check`, Clippy, and full tests passed. Integrated at
   `2561c8f`, pushed in `6d0f10c`, and GitHub #25/#22 closed as completed.
@@ -470,3 +472,6 @@ This checkpoint supersedes earlier ticket18/native-runner/session blockers.
 - The user checkout's pre-existing `GLOSSARY.md` and untracked `TODO.md` changes remained
   untouched. Local integration branch is `integration/awtrix-cli`; no release tag or
   release publication was created.
+- The run-scoped absolute path reference to the external TypeScript minifier was removed
+  from `.opencode/opencode.json` before final publication; the Rust implementation and
+  checked-in fixture are self-contained for future clones.

@@ -1,9 +1,0 @@
-{
-  "$schema": "https://opencode.ai/config.json",
-  "references": {
-    "berry-minifier": {
-      "path": "/home/toine/Projects/awtrixng/minify-berry",
-      "description": "Read-only source for the existing Berry minification algorithm; consult when implementing issue #29 and keep all changes in the assigned repository worktree."
-    }
-  }
-}
