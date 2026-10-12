@@ -20,18 +20,20 @@ const MAX_IMAGE_PIXELS: u64 = 4_194_304;
 pub(crate) enum Command {
     /// Deploy a project, then evaluate its declared assertions.
     #[command(
-        long_about = "Deploy a project and evaluate its assertions over a bounded window. Visual assertions use manifest-relative 8-bit RGB/RGBA PNG references (RGBA alpha is ignored) and explicit max_channel_diff and max_different_pixels tolerances. They may select a known app before capture, but capture is not synchronized to an exact animation frame. Clock, animations and network activity can vary. Framebuffer output does not include physical brightness, LED color correction, or other physical display effects; headless visual checks are not physical validation."
+        long_about = "Deploy the project first, then poll script_active, script/path/equals, log_contains, and visual assertions over tests.window_secs (default 10 seconds, 1..3600). This observation bound excludes deployment and readiness. Supply --binary or AWTRIX_LINUX_BIN for a fresh isolated Linux run; its child, data and tracking are cleaned up on completion, failure and Ctrl-C. Only an explicit command-line --target reuses an external device, deploys to it, and never stops it; environment/default targets do not select this mode. Explicit --target and --binary conflict. Visual references are manifest-relative 8-bit RGB/RGBA PNGs (alpha ignored), with max_channel_diff and max_different_pixels tolerances (default zero). Optional select_app selects before capture. Captures are not exact-frame synchronized and do not model physical brightness or LED corrections. JSON reports passed, assertions, errors, deployment, target_mode, observed_window and isolated paths. See describe test project --offline for the schema and examples."
     )]
     Project(ArgsProject),
 }
 
 #[derive(Args)]
 pub(crate) struct ArgsProject {
+    /// Project TOML with scripts/resources and a non-empty [tests] plan.
     #[arg(long, default_value = "awtrix.toml")]
     manifest: PathBuf,
     /// Caller-provided AWTRIX Linux executable used for an isolated local run.
     #[arg(long, env = "AWTRIX_LINUX_BIN")]
     binary: Option<PathBuf>,
+    /// Optional Web UI assets for isolated mode; requires a binary.
     #[arg(long, requires = "binary")]
     webui: Option<PathBuf>,
     /// Bound isolated AWTRIX readiness wait (1..300 seconds).
@@ -707,9 +709,39 @@ fn evaluate(
     )
 }
 
-#[allow(unreachable_code)]
-pub(crate) fn describe() -> Value {
-    // Kept here so offline structured discovery has the same visual contract as the runner.
-    return json!({"command":"test project","parameters":{"--manifest":"project TOML path","--target":"explicit external target, never stopped","--binary":"caller-supplied AWTRIX Linux executable","--webui":"optional Web UI asset path","--ready-timeout-secs":"1..300 seconds"},"outputs":{"passed":"overall boolean","assertions":[{"name":"safe unique assertion name","passed":"boolean","observed":"metrics plus capture and diff artifact paths; no pixel arrays"}],"errors":[{"code":"IMAGE_INVALID, IMAGE_DIMENSIONS, or collection error; distinct from render mismatch"}]},"schema":{"[tests]":{"window_secs":"integer 1..3600; bounds all observation requests including app selection and capture"},"[[tests.assertion]] visual":{"name":"unique alphanumeric/underscore/hyphen name","reference":"required 8-bit RGB/RGBA PNG path relative to manifest; RGBA alpha is ignored","max_channel_diff":"0..255, default 0; pixel differs if any RGB channel absolute difference is greater than this","max_different_pixels":"0..4,194,304, default 0; maximum differing pixel count","select_app":"optional app name; PUT /api/v1/apps/active with {name,fast:true} before capture"},"artifact":"<reference stem>.<assertion name>.capture.png plus same stem .diff.png beside reference; reference is never overwritten"},"examples":["[[tests.assertion]]\nname='berry-display'\nreference='visual/berry.png'\nmax_channel_diff=2\nmax_different_pixels=1\nselect_app='main'"],"limitations":["No exact-frame synchronization is promised. Clock, animation and network activity affect captures. Framebuffer PNGs do not model physical brightness or LED corrections."]});
+fn describe_base() -> Value {
     json!({"command":"test project","parameters":{"--manifest":"project TOML path (default awtrix.toml)","--target":"explicit external HTTP target; required in reuse mode; never stopped","--binary":"caller-provided AWTRIX Linux executable for isolated tests (or AWTRIX_LINUX_BIN)","--webui":"optional AWTRIX web UI asset path; only valid with --binary","--ready-timeout-secs":"isolated readiness bound 1..300 seconds (default 15)","--username":"HTTP Basic username, or AWTRIX_USERNAME","--password":"HTTP Basic password, or AWTRIX_PASSWORD","--timeout":"maximum HTTP request time in milliseconds (default 3000)","--json":"compact JSON result","--fields":"comma-separated output fields","--profile":"not used to select external test target"},"inputs":["project TOML and relative script/module/resource/config files","bounded AWTRIX NG HTTP state, app inventory and log routes"],"outputs":{"passed":"boolean","assertions":[{"name":"string","passed":"boolean","observed":"assertion-specific evidence"}],"errors":[{"assertion":"name","code":"Berry or collection error","runtime_error":"reported device diagnostic when available"}],"deployment":"ordinary additive project deployment report","isolation":{"data_path":"fresh temporary data directory (isolated mode)","project_tracking_path":"temporary project tracking state (isolated mode)","removed_after_command":true},"observed_window":{"requested_secs":"integer","duration_secs":"number","complete":"boolean"},"logs":{"history_limit":34,"exhaustive":false},"runtime_success_guaranteed":false},"schema":{"[tests]":{"window_secs":"integer 1..3600, default 10"},"[[tests.assertion]]":{"name":"string","script_active":"script name; must remain enabled with origin=script and explicit error=null at every poll","script + path + equals":"script data value equals JSON value at least once during the window","log_contains":"literal substring observed in current bounded log buffer during the window"}},"examples":["awtrix-cli --json test project --manifest awtrix.toml --binary ./awtrix-linux","awtrix-cli --json --target http://192.0.2.1 test project --manifest awtrix.toml"],"prerequisites":["test plan with at least one assertion","caller-provided AWTRIX Linux executable for isolated mode; or explicit --target URL for external reuse"],"limitations":["log ring buffer retains at most 34 lines; historical completeness is not guaranteed","active means no error observed at each poll, not proof of general correctness","headless does not validate sensors, audio, or physical ESP32 resource budgets"]})
+}
+
+pub(crate) fn describe() -> Value {
+    let mut description = describe_base();
+    description["purpose"] = json!("Deploy a project first, then evaluate all declared assertions over a bounded observation window");
+    description["parameters"]["--target"] = json!("command-line external target only; AWTRIX_URL and profile/default targets do not select external mode; conflicts with explicit --binary; overrides AWTRIX_LINUX_BIN");
+    description["outputs"]["target"] = json!("effective HTTP endpoint");
+    description["outputs"]["target_mode"] = json!("isolated-headless or external-reuse");
+    description["outputs"]["assertions"][0]["observed"] = json!("assertion-specific active/state/log evidence; visual metrics with capture and diff artifact paths, never pixel arrays");
+    description["outputs"]["errors"][0]["code"] = json!("Berry or collection error; IMAGE_INVALID and IMAGE_DIMENSIONS are distinct from render mismatch");
+    description["schema"]["[tests]"]["window_secs"] = json!("integer 1..3600, default 10; bounds observation including HTTP, app selection and capture, excluding deployment/readiness");
+    description["schema"]["[[tests.assertion]]"]["name"] = json!("unique non-empty alphanumeric/underscore/hyphen name; exactly one assertion form per table; active/state scripts must be declared in the project");
+    description["schema"]["[[tests.assertion]] visual"] = json!({
+        "reference":"required manifest-relative 8-bit RGB/RGBA PNG; alpha ignored",
+        "max_channel_diff":"0..255, default 0; pixel differs if any channel exceeds this absolute difference",
+        "max_different_pixels":"0..4,194,304, default 0; maximum differing pixels",
+        "select_app":"optional known app name selected with {name,fast:true} before capture"
+    });
+    description["schema"]["artifact"] = json!("<reference stem>.<assertion name>.capture.png and .capture.diff.png beside reference; artifacts can be replaced, references are never overwritten");
+    description["workflow"] = json!([
+        "Validate all local inputs, then perform ordinary additive deployment (modules, resources, scripts, config); no global rollback",
+        "Isolated mode creates fresh data/tracking, stops only its own child and removes the temporary root on completion, errors or Ctrl-C; persistent headless ownership is untouched",
+        "External mode writes to the explicit target and keeps ordinary project tracking beside the manifest; external processes are never stopped",
+        "Poll every 200 ms between sweeps; observe declared scripts for Berry errors throughout; active must pass every poll, state/log/visual need a match at least once",
+        "Failed assertions exit 1; no observed error is not general correctness or physical display proof"
+    ]);
+    description["examples"] = json!([
+        "awtrix-cli --json test project --manifest awtrix.toml --binary ./awtrix-linux",
+        "awtrix-cli --target http://127.0.0.1:8080 --json test project --manifest awtrix.toml",
+        "[tests]\nwindow_secs=10\n\n[[tests.assertion]]\nname='active'\nscript_active='main'\n\n[[tests.assertion]]\nname='state'\nscript='main'\npath='count'\nequals=7\n\n[[tests.assertion]]\nname='log'\nlog_contains='ready'\n\n[[tests.assertion]]\nname='display'\nreference='visual/main.png'\nmax_channel_diff=2\nmax_different_pixels=1\nselect_app='main'"
+    ]);
+    description["limitations"] = json!(["No exact-frame synchronization; clock, animation and network activity affect captures. Framebuffer PNGs do not model physical brightness or LED corrections.", "Log history is bounded to 34 entries and is not exhaustive; shell commands/build hooks are unsupported."]);
+    description
 }

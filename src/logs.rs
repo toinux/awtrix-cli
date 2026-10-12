@@ -24,7 +24,7 @@ pub enum Command {
         interval_ms: u64,
         #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=3600))]
         duration_secs: u64,
-        /// Keep only lines containing this literal script-name prefix.
+        /// Keep lines containing this literal substring anywhere (case-sensitive; no script-name parsing).
         #[arg(long)]
         script: Option<String>,
     },
@@ -208,7 +208,8 @@ pub fn describe(topic: &str) -> crate::CliResult<Value> {
         parameters["--interval-ms"] = json!("poll interval, 1..60000 (default 1000)");
         parameters["--duration-secs"] =
             json!("total follow deadline, 1..3600 (default 30), including HTTP requests");
-        parameters["--script"] = json!("literal substring filter");
+        parameters["--script"] =
+            json!("case-sensitive literal substring anywhere in the line; no script-name parsing");
     }
     let output_fields = if follow {
         json!([

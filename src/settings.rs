@@ -8,10 +8,11 @@ use std::{
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Read system settings (secret-like keys are redacted recursively).
+    /// Read device settings as returned by /api/v1/settings.
     Get,
     /// Patch a JSON object of known, typed fields.
     Patch {
+        /// Non-empty JSON object: brightness (integer 0..255), autoBrightness (boolean).
         #[arg(long)]
         values: String,
     },
@@ -19,6 +20,7 @@ pub enum Command {
     DisplayGet,
     /// Patch display configuration.
     DisplayPatch {
+        /// Non-empty JSON object: power, overlay, overlaySettings (see describe settings display-patch).
         #[arg(long)]
         values: String,
     },
@@ -30,7 +32,7 @@ pub enum Command {
     },
     /// Turn display power on or off.
     Power { state: PowerState },
-    /// Read system configuration with secret redaction.
+    /// Read system configuration with recursive secret-like-key redaction.
     SystemGet,
     /// Request reboot once and optionally wait for HTTP to return.
     Reboot {
@@ -286,6 +288,31 @@ fn redact(value: &mut Value) {
 }
 
 pub fn describe(topic: &str) -> Value {
+    let mut parameters = json!({"--target":"HTTP base URL","--profile":"named device profile; AWTRIX_PROFILE","--username":"HTTP Basic user; AWTRIX_USERNAME","--password":"HTTP Basic password; AWTRIX_PASSWORD","--timeout":"request timeout milliseconds (default 3000)","--json":"compact JSON output","--fields":"comma-separated top-level result fields"});
+    let operation_parameters = match topic {
+        "settings patch" => {
+            json!({"--values":"non-empty JSON object: brightness integer 0..255, autoBrightness boolean"})
+        }
+        "settings display-patch" => {
+            json!({"--values":"non-empty JSON object: power boolean, overlay string|null, overlaySettings object"})
+        }
+        "settings brightness" => {
+            json!({"level":"brightness integer 0..255","--auto":"optional boolean"})
+        }
+        "settings power" => json!({"state":"on|off"}),
+        "settings reboot" => {
+            json!({"--wait-secs":"optional offline-to-online observation deadline, 0..300"})
+        }
+        "settings" => {
+            json!({"--values":"patch/display-patch: non-empty JSON object","--auto":"brightness: optional boolean","level":"brightness integer 0..255","state":"power: on|off","--wait-secs":"reboot: optional offline-to-online observation deadline, 0..300"})
+        }
+        _ => json!({}),
+    };
+    if let (Some(shared), Some(operation)) =
+        (parameters.as_object_mut(), operation_parameters.as_object())
+    {
+        shared.extend(operation.clone());
+    }
     let (route, example) = match topic {
         "settings patch" => (
             "PATCH /api/v1/settings",
@@ -314,17 +341,6 @@ pub fn describe(topic: &str) -> Value {
         _ => ("GET /api/v1/settings", "awtrix-cli settings get"),
     };
     let fields = match topic {
-        "settings get" => vec!["settings"],
-        "settings patch" => vec!["resulting settings"],
-        "settings display" | "settings display-get" => vec![
-            "power",
-            "overlay",
-            "overlaySettings",
-            "display runtime state",
-        ],
-        "settings display-patch" | "settings power" => vec!["accepted", "device_result"],
-        "settings brightness" => vec!["resulting settings"],
-        "settings system-get" => vec!["redacted system configuration"],
         "settings reboot" => vec![
             "accepted",
             "offline_observed",
@@ -332,9 +348,9 @@ pub fn describe(topic: &str) -> Value {
             "waited",
             "error",
         ],
-        _ => vec!["device result"],
+        _ => vec![],
     };
-    let schemas = match topic {
+    let mut schemas = match topic {
         "settings patch" => json!({"brightness":"integer 0..255","autoBrightness":"boolean"}),
         "settings brightness" => json!({"level":"integer 0..255","--auto":"optional boolean"}),
         "settings display-patch" => {
@@ -346,5 +362,16 @@ pub fn describe(topic: &str) -> Value {
         }
         _ => json!({}),
     };
-    json!({"command":topic,"parameters":{"--target":"HTTP base URL","--username":"HTTP Basic user; AWTRIX_USERNAME","--password":"HTTP Basic password; AWTRIX_PASSWORD","--timeout":"request timeout milliseconds (default 3000)","--json":"compact JSON output","--fields":"comma-separated top-level result fields","--values":"non-empty JSON object; settings fields brightness integer 0..255 and autoBrightness boolean; display fields power boolean, overlay string|null, overlaySettings object","--auto":"optional boolean for brightness","level":"brightness integer 0..255","state":"on|off","--wait-secs":"optional offline-to-online observation deadline, 0..300"},"inputs":[route],"schemas":schemas,"outputs":fields,"output_fields":fields,"examples":[example],"prerequisites":["AWTRIX NG route; display overlay names are checked against GET /api/v1/capabilities overlays"],"limitations":["A 507 reports application/persistence as unknown unless the specific route contract establishes more","reboot online observation requires an offline response followed by a successful post-reboot response"],"offline_reference_variant":"ESP32"})
+    let output = match topic {
+        "settings system-get" => "Server-defined /api/v1/system JSON response with recursive secret-like-key redaction; no CLI wrapper",
+        "settings reboot" => "CLI observation result: accepted, online_observed, waited; offline_observed is present only when waiting, and error only on observation timeout",
+        "settings patch" | "settings display-patch" | "settings brightness" | "settings power" => "Server-defined mutation JSON response returned directly; no CLI accepted/device_result wrapper and no promise of resulting settings",
+        _ => "Server-defined route JSON response returned directly; no CLI settings wrapper or redaction",
+    };
+    schemas["output"] = if topic == "settings reboot" {
+        json!({"accepted":true,"online_observed":"boolean","waited":"boolean","offline_observed":"boolean; present only when waiting","error":"object {code, message}; present only on observation timeout"})
+    } else {
+        json!({"source":"server-defined","description":output,"cli_wrapper":false})
+    };
+    json!({"command":topic,"parameters":parameters,"inputs":[route],"schemas":schemas,"outputs":[output],"output_fields":fields,"output_fields_source":if topic == "settings reboot" {"CLI-defined; some fields are conditional"} else {"server-defined; no fixed CLI top-level keys; inspect the response before using --fields"},"examples":[example],"prerequisites":["AWTRIX NG route; display overlay names are checked against GET /api/v1/capabilities overlays"],"limitations":["A 507 reports application/persistence as unknown unless the specific route contract establishes more","reboot online observation requires an offline response followed by a successful post-reboot response"],"offline_reference_variant":"ESP32"})
 }

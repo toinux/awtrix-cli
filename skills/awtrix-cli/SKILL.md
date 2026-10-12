@@ -53,8 +53,10 @@ are reliable enough to execute directly when they match the need.
 
 - Use `--help` only for unknown exact syntax or required options. If the operation
   itself is unknown, inspect its family, e.g. `awtrix-cli script --help`.
-- Use `describe "<topic>"` for missing semantics, schemas, capabilities, or
-  structured details, e.g. `awtrix-cli --json describe "apps create"`.
+- Use `describe <topic> --offline` for missing semantics, schemas, outputs, or
+  examples, e.g. `awtrix-cli --json describe apps create --offline`. Topics accept
+  separate words or a quoted string. Use `describe --list` only when the required
+  topic is unknown.
 - Stop discovery once the question is answered. Do not pair help and describe
   mechanically, repeat help in the same session without a reason, or use help
   to confirm syntax already supplied by the skill or a loaded reference.
@@ -63,9 +65,15 @@ are reliable enough to execute directly when they match the need.
 - Reuse inspection results while relevant; refresh only after a change, stale
   evidence, or a new unresolved question. Fetch only task-relevant sources/data.
 
-Descriptions are offline unless a target is supplied (including `AWTRIX_URL`).
-Connected capabilities take precedence. Some topics are family-level (`script`,
-`screen`); consult subcommand help only if exact flags remain unknown.
+Default to `--offline` for local documentation, even when `AWTRIX_URL` is set.
+Descriptions document operations without executing them or validating payloads.
+Omitting `--offline` with `--target` or `AWTRIX_URL` optionally fetches connected
+capabilities; failures propagate and connected capability names are authoritative.
+Named/default profiles alone do not connect. `--list`, profile descriptions, and
+`describe update` are always local. Offline documentation is not proof of device
+support. `script get`, `script deploy`, and `script re-minify` share the script
+family description; `screen capture` accepts the screen description. Consult
+execution help only if exact flags remain unknown.
 
 ## 3. Ensure the executable and target
 
@@ -86,9 +94,12 @@ A known notification/app operation needs no routine diagnostic preflight.
 For ordinary device commands, selection precedence is `--target`, `AWTRIX_URL`,
 `--profile`/`AWTRIX_PROFILE`, project profile (project operations), default profile.
 An environment URL can therefore override a named profile. Basic authentication
-uses `AWTRIX_USERNAME` and `AWTRIX_PASSWORD` or personal profile credentials;
-keep credentials out of project manifests and reports. `--timeout` is a per-request
-bound in milliseconds, not an observation duration.
+uses `--username`/`--password`, then `AWTRIX_USERNAME`/`AWTRIX_PASSWORD`, then
+credentials of the selected profile only. URL overrides do not inherit profile
+credentials. `profile update` fully replaces the entry and clears omitted
+credentials; `profile add` also replaces an existing entry. Supply credentials
+again when retaining them, and keep them out of project manifests and reports.
+`--timeout` is a per-request bound in milliseconds, not an observation duration.
 
 ## 4. Perform the requested operation
 
@@ -116,8 +127,15 @@ rules above only for syntax or semantics still missing.
 ## 5. Interpret evidence and failures
 
 - Use `--json` for machine output. `--fields a,b` selects known top-level result
-  fields; choose them from `describe` or a complete result, preserving evidence
-  needed for the task. `logs follow` emits JSONL and does not accept `--fields`.
+  fields; choose them from the specific operation's documented output or a complete
+  result, preserving needed evidence. Generic family descriptions and nested keys
+  are not field catalogs; inspect server-defined responses before projecting.
+  On `describe`, projection selects the description's own top-level fields.
+  `logs follow` emits JSONL and does not accept `--fields`.
+- Field selection is evaluated after execution; projection errors do not undo
+  device writes, saved files, profile changes, or executable updates. Inspect the
+  outcome rather than retrying a write solely because projection failed. Error
+  envelopes are not projected.
 - Preserve stdout, stderr, and the process exit status. Failures usually include
   `error.code`/`error.message` on JSON stdout and diagnostics on stderr; verification
   and test failures can instead return a detailed report. Read both streams.

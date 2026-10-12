@@ -6,7 +6,7 @@
 
 ## Install the skill
 
-Install the `awtrix-cli` skill so your coding agent knows how to install, configure, and use the CLI:
+Optionally install the `awtrix-cli` skill for installation guidance and efficient agent workflows. The executable also supports autonomous discovery through `--help` and `describe`:
 
 ```sh
 npx skills add toinux/awtrix-cli --skill awtrix-cli
@@ -96,7 +96,9 @@ awtrix-cli script verify main --duration-secs 10 --capture main.png
 
 ## Configure a device
 
-Profiles keep device addresses and optional credentials in your personal CLI configuration. The setup above makes `desk` the default, so commands use it automatically. Use `awtrix-cli profile show desk` to inspect a profile or `awtrix-cli profile update desk --target URL` to change its address. For a single command, `--target URL` selects a device directly. `AWTRIX_URL` can also supply a target. If the device uses HTTP Basic authentication, configure credentials on the profile or set `AWTRIX_USERNAME` and `AWTRIX_PASSWORD`.
+Profiles keep device addresses and optional credentials in your personal CLI configuration. Use `awtrix-cli profile show desk` to inspect a profile without revealing credentials. `profile update desk --target URL` fully replaces the entry and clears omitted credentials; `profile add` also replaces an existing entry. Supply credentials again when retaining them.
+
+For ordinary device commands, target precedence is `--target` → `AWTRIX_URL` → `--profile`/`AWTRIX_PROFILE` → project profile (project commands only) → default profile. Thus an environment URL overrides a named profile. Basic authentication uses `--username`/`--password` → `AWTRIX_USERNAME`/`AWTRIX_PASSWORD` → credentials of the selected profile only; a URL override does not inherit profile credentials.
 
 ## Ask your agent
 
@@ -104,7 +106,22 @@ The installed skill teaches your agent the CLI workflows. You can ask it to perf
 
 > Deploy `./demo` to my default display, minify the script during deployment, and verify it for 10 seconds.
 
-For direct shell use, `awtrix-cli --help` lists command groups. `awtrix-cli describe "script verify"` explains an operation without contacting a device. Add `--json` for machine-readable results, and `--fields a,b` to select top-level fields from a result.
+### Discover the CLI without a skill
+
+The executable provides its own discovery path for humans and agents:
+
+```sh
+awtrix-cli --help                                # command groups and discovery hints
+awtrix-cli --json describe --list                # supported topics and usage guidance
+awtrix-cli --json describe apps create --offline  # semantics, payload schema, outputs, examples
+awtrix-cli apps create --help                    # exact execution syntax and flags
+```
+
+`describe` reads documentation; it does not execute the documented operation or validate a payload. Topics can be separate words (`describe script verify`) or a quoted string (`describe "script verify"`). With no topic it describes `device`. Some operations share a family-level description, notably `script get`, `script deploy`, and `script re-minify`; use their execution help for exact flags.
+
+Descriptions use a local ESP32 reference by default. Supplying `--target` **or setting `AWTRIX_URL`** requests live capabilities from `/api/v1/capabilities`; failures propagate, and connected capability names are authoritative. Use `--offline` to read local documentation regardless of those target settings. Named/default profiles alone do not trigger a connection; `--list`, profile descriptions, and `describe update` are always local. Offline documentation does not prove that a particular device supports an operation.
+
+Descriptions are JSON objects (pretty by default, compact with `--json`). `--fields a,b` selects top-level fields of the description itself. For execution, choose fields from that operation's documented output or a complete result, especially for server-defined responses. Projection happens **after execution**: a field-selection error does not undo a device write, saved file, profile change, or executable update. Inspect the outcome before retrying. Check the exit status and both stdout and stderr on failure.
 
 ## Technical notes
 
@@ -128,7 +145,35 @@ Run `awtrix-cli update` to explicitly update an installed release. The optional 
 
 An `awtrix.toml` project can describe scripts, Berry modules, resources, configuration patches, and optional tests. Start with `awtrix-cli project init ./demo`, then validate and deploy the generated manifest. See the [example project](examples/project/awtrix.toml) for a complete project with a module, script, resource, and test assertions.
 
-Project deployments are additive and are not transactional: they do not delete undeclared device content. Review `project prune --dry-run` before removing previously tracked project entries. Linux headless testing is also available, but requires a separately supplied AWTRIX Linux executable and web assets; they are not bundled with this CLI.
+Project deployment validates local inputs, then writes **modules → resources → scripts → config**, in manifest order within each group. It is additive and nontransactional: prior successes remain after a later failure, with no global rollback. Modules are unconditional raw replacements. Scripts require exactly one of `create = true` or `expected_source_file`; `project deploy --force` changes script writes to unconditional replacements but still requires a valid manifest. Review `project prune --dry-run` before removing previously tracked project entries.
+
+A minimal manifest for `src/main.ax` is:
+
+```toml
+[project]
+name = "demo"
+version = "0.1.0"
+
+[[scripts]]
+name = "main"
+file = "src/main.ax"
+create = true
+```
+
+For an existing script, first save its exact remote source with `awtrix-cli script get main > original.ax` beside the manifest. Keep that reference unchanged, edit a separate source file, and replace `create = true` with `expected_source_file = "original.ax"`. A stale reference produces a conflict rather than overwriting a concurrent edit.
+
+Discover and run project tests with:
+
+```sh
+awtrix-cli --json describe test project --offline
+awtrix-cli test project --help
+awtrix-cli --json test project --manifest demo/awtrix.toml --binary ./awtrix-linux
+awtrix-cli --json --target http://127.0.0.1:8080 test project --manifest demo/awtrix.toml
+```
+
+Tests deploy first, then observe `[tests]` assertions for `window_secs` (default 10 seconds; deployment/readiness are outside this bound). Supported forms are `script_active`, `script`/`path`/`equals`, `log_contains`, and visual PNG comparisons. JSON reports include assertion evidence, errors, deployment, target mode and observation completeness. Isolated Linux runs require a caller-supplied AWTRIX executable (optional Web UI assets), and clean up their child, temporary data and tracking on completion, failure or Ctrl-C. External reuse requires command-line `--target`; environment/default targets do not select it. Explicit `--target` and `--binary` conflict. External tests write to that endpoint and never stop it.
+
+For the independent local lifecycle, describe `headless start`, `headless status` or `headless stop` with `--offline`, then use the matching command help. Ownership is recorded in `headless.json` beside the selected personal config. `status` checks recorded process identity, not HTTP health. `stop` sends SIGTERM and waits up to five seconds; temporary data is removed on successful stop, while explicit `--data` directories are retained. Device target settings do not select the local process.
 
 ### Compatibility
 

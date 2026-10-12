@@ -8,6 +8,7 @@ type Result<T> = std::result::Result<T, (&'static str, String)>;
 
 #[derive(Subcommand)]
 pub enum ProfileCommand {
+    /// Save a profile, overwriting any existing entry; omitted credentials are cleared.
     Add {
         name: String,
         #[arg(long)]
@@ -17,6 +18,7 @@ pub enum ProfileCommand {
         #[arg(long)]
         password: Option<String>,
     },
+    /// Fully replace an existing profile, including credentials; omitted credentials are cleared.
     Update {
         name: String,
         #[arg(long)]
@@ -26,16 +28,14 @@ pub enum ProfileCommand {
         #[arg(long)]
         password: Option<String>,
     },
+    /// List saved profile names/targets and the default, without credentials.
     List,
-    Show {
-        name: String,
-    },
-    SetDefault {
-        name: String,
-    },
-    Delete {
-        name: String,
-    },
+    /// Show a profile's target and credential-presence flags, without credentials.
+    Show { name: String },
+    /// Select an existing profile as the default for target resolution.
+    SetDefault { name: String },
+    /// Delete an existing profile; deleting the default also clears its selection.
+    Delete { name: String },
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -258,7 +258,9 @@ pub fn describe(action: Option<&str>) -> Result<Value> {
         .extend(parameters.as_object().unwrap().clone());
     description["output_fields"] = fields;
     description["outputs"] =
-        json!(["compact JSON object with the documented output_fields; credentials are omitted"]);
+        json!(["JSON object with the documented output_fields (pretty by default, compact with --json); credentials are omitted"]);
+    description["configuration"] = json!({"override":"AWTRIX_CONFIG selects the personal configuration file", "unix":"$HOME/.config/awtrix-cli/config.json", "windows":"%APPDATA%/awtrix-cli/config.json; fallback %USERPROFILE%/AppData/Roaming/awtrix-cli/config.json"});
+    description["semantics"] = json!(["Profile operations are local and do not contact a device", "add overwrites an existing entry; update requires an existing entry and fully replaces it. Both clear omitted credentials", "Deleting the default profile also clears the default selection", "Device target precedence: --target > AWTRIX_URL > explicit/env profile > project profile (project commands only) > default profile", "Credentials: flags > AWTRIX_USERNAME/AWTRIX_PASSWORD > selected profile only; URL overrides do not inherit profile credentials", "--fields projects the result after execution; projection failure does not undo a saved change"]);
     description["examples"] = json!([example]);
     Ok(description)
 }
@@ -380,7 +382,7 @@ pub fn resolve(
                 .or_else(|| std::env::var("AWTRIX_PASSWORD").ok()),
         });
     }
-    // Project profile reference is reserved here; ticket 13 will supply it between environment and default.
+    // Project commands supply their manifest profile through resolve_project.
     let c = load()?;
     let name = profile.or(c.default.as_deref());
     if let Some(name) = name {

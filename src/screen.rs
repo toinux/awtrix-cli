@@ -16,6 +16,7 @@ pub enum Command {
         long_about = "Framebuffer captures do not reproduce physical brightness or LED corrections and are not synchronized deterministically to a frame."
     )]
     Capture {
+        /// PNG destination; atomically replaces an existing file. Parent directory must already exist and be writable.
         #[arg(long)]
         output: PathBuf,
     },
@@ -142,5 +143,5 @@ pub(crate) fn persist_sibling(path: &PathBuf, bytes: &[u8]) -> crate::CliResult<
 }
 
 pub fn describe() -> Value {
-    json!({"command":"screen capture","parameters":{"--output":"required PNG destination path"},"inputs":["GET /api/v1/display/screen; row-major pixels are unsigned decimal packed 0xRRGGBB"],"outputs":["path, format, width, height"],"examples":["awtrix-cli screen capture --output capture.png","awtrix-cli --json screen capture --output capture.png"],"prerequisites":["AWTRIX NG framebuffer route"],"limitations":["Framebuffer does not reproduce physical brightness or LED corrections and is not synchronized deterministically to a frame"]})
+    json!({"command":"screen capture","parameters":{"--output":"required PNG destination path; atomically replaces an existing file; parent directory must already exist and be writable"},"inputs":["GET /api/v1/display/screen; row-major pixels are unsigned decimal packed 0xRRGGBB"],"outputs":["path, format, width, height"],"examples":["awtrix-cli screen capture --output capture.png","awtrix-cli --json screen capture --output capture.png"],"prerequisites":["AWTRIX NG framebuffer route", "existing writable destination parent directory; missing parents are not created"],"semantics":["Validate and encode the complete PNG before writing a sibling temporary file and atomically replacing the destination", "--fields projects the result after saving; projection failure does not undo replacement"],"limitations":["Framebuffer does not reproduce physical brightness or LED corrections and is not synchronized deterministically to a frame"]})
 }
