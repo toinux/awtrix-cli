@@ -6,9 +6,14 @@ use std::{fs, path::PathBuf};
 #[derive(Subcommand)]
 pub enum Command {
     /// Queue a notification (a device-defined upsert/queue operation).
+    #[command(
+        after_help = "Payload fields and constraints: awtrix-cli describe notify send --offline --json\nProvide exactly one of --payload or --file. --raw allows unknown keys; known\nfields remain validated. Missing hold, stack and wakeup default to false.\nHTTP acceptance does not guarantee that the notification was displayed."
+    )]
     Send {
+        /// Inline non-empty JSON object; provide exactly one of --payload or --file.
         #[arg(long, conflicts_with = "file", required_unless_present = "file")]
         payload: Option<String>,
+        /// Read notification content from a UTF-8 JSON file instead of --payload.
         #[arg(long, conflicts_with = "payload", required_unless_present = "payload")]
         file: Option<PathBuf>,
         /// Keep the notification visible until explicitly dismissed.
@@ -20,10 +25,10 @@ pub enum Command {
         /// Wake the display for this notification.
         #[arg(long)]
         wakeup: bool,
-        /// Optional caller-defined name used only to address dismissal.
+        /// Optional dismissal name [A-Za-z0-9_-]{1,32}; active is reserved.
         #[arg(long)]
         name: Option<String>,
-        /// Explicitly forward unknown fields without local type checks.
+        /// Forward unknown device-specific keys; known fields remain validated.
         #[arg(long)]
         raw: bool,
     },
@@ -219,7 +224,16 @@ pub fn describe(topic: &str) -> Value {
             json!({"command":"notify delete","parameters":{"name":"[A-Za-z0-9_-]{1,32}; active is reserved"},"inputs":["caller-defined notification name"],"schemas":{"output":{"accepted":"boolean","operation":"dismiss-named","name":"string"}},"outputs":["dismisses the named notification wherever it sits in the queue; 404 means no matching notification"],"output_fields":["accepted","operation","name"],"examples":["awtrix-cli --json notify delete build"],"prerequisites":["AWTRIX NG HTTP API"]})
         }
         "send" => {
-            json!({"command":"notify send","parameters":{"--payload":"non-empty JSON object of pushed-app fields; notification extras hold, stack, wakeup and name are validated","--file":"UTF-8 JSON file","--hold":"set hold true; conflicts with payload hold:false","--stack":"set stack true; conflicts with payload stack:false; API stacks at most 32 notifications","--wakeup":"set wakeup true; conflicts with payload wakeup:false","--name":"optional validated name for targeted dismissal; must agree with payload name","--raw":"forward unknown device-specific fields; known fields remain validated"},"inputs":["notification content and optional hold/stack/wakeup/name"],"schemas":{"input":"typed pushed-app fields reused from apps; hold, stack and wakeup must be booleans; name must match [A-Za-z0-9_-]{1,32} and cannot be active","output":{"accepted":"boolean","visibility":"unknown","name":"string|null","queue":"device-managed","runtime_success_guaranteed":false}},"outputs":["HTTP acceptance only; visibility is not guaranteed"],"output_fields":["accepted","visibility","name","queue","runtime_success_guaranteed"],"examples":["awtrix-cli --json notify send --payload '{\"text\":\"Ready\"}' --stack --wakeup --name build"],"prerequisites":["AWTRIX NG /api/v1/notifications"],"limitations":["No deduplication guarantee for names or options","HTTP 507 remains generic insufficient storage; queue-full is not inferred","uncertain POST outcomes are not retried"]})
+            let mut payload = crate::apps::payload_schema();
+            payload["description"] = json!(format!(
+                "{} Notification extras are also supported. Supply a non-empty object via exactly one of --payload or --file.",
+                payload["description"].as_str().unwrap_or_default()
+            ));
+            for key in ["hold", "stack", "wakeup"] {
+                payload["properties"][key] = json!({"type":"boolean","default":false,"description":format!("Inserted as false if absent and --{key} is not set; --{key} sets true and conflicts with an explicit false")});
+            }
+            payload["properties"]["name"] = json!({"type":"string","pattern":"^[A-Za-z0-9_-]{1,32}$","not":{"const":"active"},"description":"Optional caller-defined dismissal name; --name must agree with payload name"});
+            json!({"command":"notify send","parameters":{"--payload":"non-empty JSON object of pushed-app fields; exactly one of --payload or --file is required; notification extras hold, stack, wakeup and name are validated","--file":"UTF-8 JSON file instead of --payload","--hold":"set hold true; conflicts with payload hold:false; defaults to false when absent","--stack":"set stack true; conflicts with payload stack:false; defaults to false when absent; API stacks at most 32 notifications","--wakeup":"set wakeup true; conflicts with payload wakeup:false; defaults to false when absent","--name":"optional validated name for targeted dismissal; must agree with payload name","--raw":"forward unknown device-specific fields; known fields remain validated"},"inputs":["notification content and optional hold/stack/wakeup/name"],"schemas":{"input":"typed pushed-app fields reused from apps; hold, stack and wakeup must be booleans and default to false; name must match [A-Za-z0-9_-]{1,32} and cannot be active","payload":payload,"output":{"accepted":"boolean","visibility":"unknown","name":"string|null","queue":"device-managed","runtime_success_guaranteed":false}},"outputs":["HTTP acceptance only; visibility is not guaranteed"],"output_fields":["accepted","visibility","name","queue","runtime_success_guaranteed"],"examples":["awtrix-cli --json notify send --payload '{\"text\":\"Ready\"}' --stack --wakeup --name build"],"prerequisites":["AWTRIX NG /api/v1/notifications"],"limitations":["No deduplication guarantee for names or options","HTTP 507 remains generic insufficient storage; queue-full is not inferred","uncertain POST outcomes are not retried"]})
         }
         _ => {
             json!({"command":"notify delete-active","parameters":{},"inputs":["active notification"],"schemas":{"output":{"accepted":"boolean","operation":"dismiss-active"}},"outputs":["dismisses the current notification"],"output_fields":["accepted","operation"],"examples":["awtrix-cli --json notify delete-active"],"prerequisites":["AWTRIX NG /api/v1/notifications/active"]})

@@ -25,9 +25,13 @@ pub enum Command {
         manifest: PathBuf,
     },
     /// Deploy declared content in dependency order; never deletes undeclared remote content.
+    #[command(
+        long_about = "Validate all local inputs, then deploy modules, resources, scripts and config patches, in manifest order within each group. Modules are always unconditional raw replacements. Scripts use create-only or exact-source conditional updates unless --force is explicit. Deployment stops at the first error, retaining prior successes; it is nontransactional with no global rollback. See describe project deploy --offline for the manifest schema and reports."
+    )]
     Deploy {
         #[arg(long, default_value = "awtrix.toml")]
         manifest: PathBuf,
+        /// Replace declared scripts unconditionally; still requires a valid create/reference manifest.
         #[arg(long)]
         force: bool,
     },
@@ -913,7 +917,7 @@ fn encode(s: &str) -> String {
         .collect()
 }
 
-pub fn describe(topic: &str) -> Value {
+fn describe_base(topic: &str) -> Value {
     let command = topic.strip_prefix("project ").unwrap_or("project");
     if command == "project reconcile" || command == "reconcile" {
         return json!({
@@ -925,4 +929,59 @@ pub fn describe(topic: &str) -> Value {
         });
     }
     json!({"command":command,"parameters":{"PATH":"project directory","MANIFEST":"manifest path (default awtrix.toml)","--force":"explicit unprotected overwrite for declared scripts","project prune --dry-run":"preview explicit tracked deletions"},"inputs":["awtrix.toml identity, target profile, scripts/modules/resources/config paths relative to manifest","private project-local identity-keyed .awtrix-tracking-*.json state"],"outputs":["validation counts","ordered deploy report with succeeded/failed/not_run/uncertain/tracking_error","prune report with planned/deleted/failed/not_run/uncertain/tracking_error"],"examples":["awtrix-cli project init ./demo","awtrix-cli project validate --manifest demo/awtrix.toml","awtrix-cli --json project deploy --manifest demo/awtrix.toml","awtrix-cli --json project prune --manifest demo/awtrix.toml --dry-run","awtrix-cli --json project prune --manifest demo/awtrix.toml"],"prerequisites":["personal profile configuration for named targets; no credentials in project manifest","scriptUpdates capability for protected scripts","prune requires valid tracking state matching project, normalized endpoint, and available device ID; uncertain entries must be manually reconciled"],"tracking_contract":{"version":2,"identity":"project name plus normalized effective endpoint, and UID/deviceId/serial from /api/v1/device when supplied; credentials are never stored","entries":"successfully deployed scripts, modules and resources only; config patches are not deletable resources","uncertain":"failed operations are durably recorded separately; prune is blocked until manual reconciliation","safety":"missing, corrupt, foreign-project, foreign-endpoint, or changed-device state fails closed; deploy remains additive","state_file":".awtrix-tracking-<identity-key>.json beside the manifest, mode 0600 on Unix, atomically persisted after each successful operation; separate from credential configuration"},"schema":{"project":{"name":"string","version":"string"},"target":{"profile":"optional personal profile name"},"scripts":[{"name":"AWTRIX script name","file":"relative Berry source path","create":"boolean","expected_source_file":"relative original source used for conflict protection"}],"modules":[{"name":"module name","file":"relative Berry source with # @module"}],"resources":[{"path":"absolute device file path","file":"relative local binary path"}],"config":[{"script":"declared script name","file":"relative JSON object path"}]}})
+}
+
+pub fn describe(topic: &str) -> Value {
+    let mut description = describe_base(topic);
+    description["command"] = json!(topic);
+    description["purpose"] = json!(match topic {
+        "project init" => "Create and locally validate a minimal manifest and Berry starter script",
+        "project validate" =>
+            "Validate the whole manifest and local dependencies without device access",
+        "project deploy" =>
+            "Additively deploy declared modules, resources, scripts and configuration",
+        "project prune" =>
+            "Delete only obsolete, previously tracked project entries; preview with --dry-run",
+        "project reconcile" =>
+            "Release uncertain local ownership after inspection without changing remote state",
+        _ => "Author, validate, deploy and explicitly prune TOML Berry projects",
+    });
+    description["parameters"] = match topic {
+        "project init" => {
+            json!({"PATH":"new project directory","--name":"project identity; defaults to directory name"})
+        }
+        "project validate" => {
+            json!({"--manifest":"manifest path (default awtrix.toml); offline local validation"})
+        }
+        "project deploy" => {
+            json!({"--manifest":"manifest path (default awtrix.toml)","--force":"unconditional raw PUT for scripts only; manifest still requires create=true XOR expected_source_file; modules are always raw replacements"})
+        }
+        "project prune" => {
+            json!({"--manifest":"manifest path (default awtrix.toml)","--dry-run":"preview tracked obsolete entries without deletion"})
+        }
+        "project reconcile" => description["parameters"].clone(),
+        _ => description["parameters"].clone(),
+    };
+    if topic != "project reconcile" {
+        description["schema"]["scripts"][0]["create"] = json!("true for create-only; mutually exclusive with expected_source_file; one is required even under --force");
+        description["schema"]["scripts"][0]["expected_source_file"] = json!("manifest-relative exact original remote source, captured before editing; required unless create=true; never automatically refreshed");
+        description["schema"]["modules"][0]["file"] = json!("relative Berry source with leading # @module; always unconditionally replaced using raw PUT");
+        description["deployment_contract"] = json!({
+            "order":["modules","resources","scripts","config"],
+            "within_group":"manifest order",
+            "modules":"unconditional raw PUT replacement; no source comparison or automatic reference rewrite",
+            "scripts":"exactly one of create=true or expected_source_file is required, even with --force; create=false alone is insufficient",
+            "failure":"stop at first error; previous successful writes remain; no global rollback; uncertain outcomes are tracked",
+            "transactional":false,
+            "additive":true
+        });
+        description["minimal_manifest"] = json!("[project]\nname = 'demo'\nversion = '0.1.0'\n\n[[scripts]]\nname = 'main'\nfile = 'src/main.ax'\ncreate = true\n");
+        description["existing_script_workflow"] = json!([
+            "Save the exact remote source before editing: awtrix-cli script get main > original.ax",
+            "Keep original.ax unchanged; edit a separate src/main.ax",
+            "Replace create=true with expected_source_file='original.ax' in the script table; paths are manifest-relative",
+            "Validate, then deploy; stale references fail with CONFLICT and are never refreshed automatically"
+        ]);
+    }
+    description
 }

@@ -542,8 +542,16 @@ fn local_minify_force_preserves_an_existing_output_when_atomic_replace_fails() {
 fn update_help_is_explicit_and_version_remains_available() {
     let help = run(&["update", "--help"]);
     assert!(help.status.success());
-    assert!(String::from_utf8_lossy(&help.stdout).contains("Install the latest stable"));
+    let text = String::from_utf8_lossy(&help.stdout);
+    assert!(text.contains("Replace the current CLI executable"));
+    assert!(text.contains("latest stable checksum-verified release"));
     assert!(String::from_utf8_lossy(&help.stdout).contains("--force"));
+    let version = run(&["--version"]);
+    assert!(version.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&version.stdout).trim(),
+        format!("awtrix-cli {}", env!("CARGO_PKG_VERSION"))
+    );
 }
 
 #[test]
@@ -1645,10 +1653,48 @@ fn settings_descriptions_and_help_expose_each_command_schema_and_globals() {
             String::from_utf8_lossy(&output.stderr)
         );
         let description: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert!(
-            !description["output_fields"].as_array().unwrap().is_empty(),
-            "{topic}"
-        );
+        if topic == "settings reboot" {
+            assert_eq!(
+                description["output_fields"],
+                serde_json::json!([
+                    "accepted",
+                    "offline_observed",
+                    "online_observed",
+                    "waited",
+                    "error"
+                ]),
+                "{topic}"
+            );
+            let output_schema = description["schemas"]["output"].as_object().unwrap();
+            for field in description["output_fields"].as_array().unwrap() {
+                assert!(
+                    output_schema.contains_key(field.as_str().unwrap()),
+                    "{topic}"
+                );
+            }
+            assert!(description["output_fields_source"]
+                .as_str()
+                .unwrap()
+                .contains("CLI-defined"));
+        } else {
+            assert_eq!(
+                description["output_fields"],
+                serde_json::json!([]),
+                "{topic}"
+            );
+            assert_eq!(
+                description["schemas"]["output"]["source"], "server-defined",
+                "{topic}"
+            );
+            assert_eq!(
+                description["schemas"]["output"]["cli_wrapper"], false,
+                "{topic}"
+            );
+            assert!(description["output_fields_source"]
+                .as_str()
+                .unwrap()
+                .contains("server-defined"));
+        }
         assert!(
             !description["examples"].as_array().unwrap().is_empty(),
             "{topic}"
@@ -3428,6 +3474,81 @@ fn help_version_and_offline_description_are_available() {
     let output = run(&["--json", "describe"]);
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).contains("ESP32"));
+}
+
+#[test]
+fn describe_catalog_leads_to_working_documentation_and_execution_help() {
+    let help = run(&["--help"]);
+    assert!(String::from_utf8_lossy(&help.stdout).contains("describe --list"));
+    let catalog = run(&["--json", "describe", "--list"]);
+    assert!(catalog.status.success());
+    let catalog: serde_json::Value = serde_json::from_slice(&catalog.stdout).unwrap();
+    for topic in catalog["topics"].as_array().unwrap() {
+        let topic = topic.as_str().unwrap();
+        let description = run(&["--json", "describe", topic, "--offline"]);
+        assert!(description.status.success(), "{topic}: {:?}", description);
+        let description: serde_json::Value = serde_json::from_slice(&description.stdout).unwrap();
+        assert!(description["examples"].is_array(), "{topic}");
+        let mut args: Vec<_> = topic.split_whitespace().collect();
+        args.push("--help");
+        assert!(run(&args).status.success(), "{topic}");
+    }
+}
+
+#[test]
+fn describe_accepts_quoted_and_separate_topic_words() {
+    let quoted = run(&["--json", "describe", "apps create", "--offline"]);
+    let words = run(&["--json", "describe", "apps", "create", "--offline"]);
+    assert!(quoted.status.success());
+    assert!(words.status.success());
+    assert_eq!(quoted.stdout, words.stdout);
+    let description: serde_json::Value = serde_json::from_slice(&words.stdout).unwrap();
+    assert_eq!(description["syntax_help"], "awtrix-cli apps create --help");
+}
+
+#[test]
+fn describe_offline_and_catalog_never_request_configured_device() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    for args in [
+        vec!["--json", "describe", "apps", "create", "--offline"],
+        vec![
+            "--target",
+            &url,
+            "--json",
+            "describe",
+            "device",
+            "--offline",
+        ],
+        vec!["--target", &url, "--json", "describe", "--list"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+            .args(args)
+            .env("AWTRIX_URL", &url)
+            .env("AWTRIX_NO_UPDATE_CHECK", "1")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(result.get("connected_capabilities").is_none());
+    }
+    assert!(server
+        .recv_timeout(Duration::from_millis(100))
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn describe_unknown_topic_explains_how_to_recover() {
+    for topic in ["apps typo", "profile typo"] {
+        let output = run(&["--json", "describe", topic, "--offline"]);
+        assert_eq!(output.status.code(), Some(2));
+        let error: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("describe --list"));
+    }
 }
 
 #[test]

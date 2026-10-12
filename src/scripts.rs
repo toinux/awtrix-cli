@@ -12,14 +12,21 @@ pub enum Command {
     /// List apps and the currently observed script state, including Berry errors.
     State,
     /// Verify a script over a bounded observation window (not a proof of correctness).
+    #[command(
+        long_about = "Observe an existing script without deployment. Start evidence requires scriptingEnabled=true and an enabled origin=script app with explicit error=null; a missing error field is inconclusive. Poll state and bounded logs over the requested duration, including HTTP time. Optional capture uses the same deadline. JSON reports start_verified, observed_window, runtime_error, not_available (with collection phase), logs and capture metadata; no observed error proves general correctness. See describe script verify --offline for the full report contract."
+    )]
     Verify {
         name: String,
+        /// Total observation bound, including HTTP and optional capture (1..3600 seconds).
         #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u64).range(1..=3600))]
         duration_secs: u64,
+        /// Poll spacing (1..60000 milliseconds).
         #[arg(long, default_value_t = 500, value_parser = clap::value_parser!(u64).range(1..=60000))]
         interval_ms: u64,
+        /// Initial incremental log cursor; history is bounded and not exhaustive.
         #[arg(long, default_value_t = 0)]
         after: u64,
+        /// Optional PNG destination; capture failures are reported with phase=capture.
         #[arg(long)]
         capture: Option<PathBuf>,
     },
@@ -32,7 +39,7 @@ pub enum Command {
         #[arg(long)]
         no_backup: bool,
     },
-    /// Deploy a raw Berry source file.
+    /// Deploy Berry source using create-only or exact-source conditional protection; --force opts out.
     Deploy {
         name: String,
         #[arg(long, conflicts_with = "file")]
@@ -331,8 +338,8 @@ fn verify(
         .and_then(|a| a.get("error"))
         .filter(|e| !e.is_null())
         .cloned();
-    let start_verified =
-        scripting == Some(true) && enabled && app.is_some() && runtime_error.is_none();
+    let error_is_null = app.and_then(|a| a.get("error")).is_some_and(Value::is_null);
+    let start_verified = scripting == Some(true) && enabled && error_is_null;
     if scripting != Some(true) || app.is_none() || !enabled || !start_verified {
         let reason = if scripting != Some(true) {
             "scripting_disabled"
@@ -340,6 +347,8 @@ fn verify(
             "script_absent"
         } else if runtime_error.is_some() {
             "berry_error"
+        } else if enabled && !error_is_null {
+            "error_state_unavailable"
         } else {
             "script_disabled"
         };
@@ -406,6 +415,16 @@ fn verify(
                     );
                     break;
                 }
+                if !final_state
+                    .as_ref()
+                    .and_then(|app| app.get("error"))
+                    .is_some_and(Value::is_null)
+                {
+                    collection_error = Some(
+                        json!({"code":"INVALID_RESPONSE","message":"script error field is missing; explicit error=null is required for verification","phase":"state_observation"}),
+                    );
+                    break;
+                }
             }
             Err((code, message)) => {
                 collection_error =
@@ -441,7 +460,8 @@ fn verify(
             Ok(value) => Some(value),
             Err((code, message)) => {
                 if collection_error.is_none() {
-                    collection_error = Some(json!({"code":code,"message":message}));
+                    collection_error =
+                        Some(json!({"code":code,"message":message,"phase":"capture"}));
                 }
                 None
             }
@@ -552,7 +572,11 @@ fn operational_result(
     if result.get("error").is_some_and(|e| !e.is_null()) {
         return Err((
             "BERRY_ERROR",
-            "source saved, but Berry compilation/setup returned an error".into(),
+            if atomic {
+                "conditional update failed Berry compilation/setup; the old script is restored when replacing an existing script; new source was not confirmed saved".into()
+            } else {
+                "source saved, but Berry compilation/setup returned an error".into()
+            },
         ));
     }
     let start_verified = atomic && verified == Some(true);

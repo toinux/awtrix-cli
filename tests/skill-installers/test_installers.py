@@ -15,7 +15,7 @@ SKILL = ROOT / "skills/awtrix-cli/SKILL.md"
 
 
 def skill_description():
-    lines = SKILL.read_text().splitlines()
+    lines = SKILL.read_text(encoding="utf-8").splitlines()
     description_start = next(index for index, line in enumerate(lines) if line == "description: >-") + 1
     description_lines = []
     for line in lines[description_start:]:
@@ -52,8 +52,8 @@ class SkillInstallationGuidanceTests(unittest.TestCase):
         self.assertIn("unrelated generic CLI request", description, "Unrelated generic CLI requests should be excluded")
 
     def test_guidance_prefers_verified_binaries_and_uses_explicit_update(self):
-        guide = INSTALLATION_GUIDE.read_text()
-        skill = SKILL.read_text()
+        guide = INSTALLATION_GUIDE.read_text(encoding="utf-8")
+        skill = SKILL.read_text(encoding="utf-8")
         self.assertLess(guide.index("Preferred path: verified GitHub release binary"), guide.index("Source-build fallback: Cargo"))
         self.assertIn("awtrix-cli update", guide)
         self.assertIn("SHA256SUMS", guide)

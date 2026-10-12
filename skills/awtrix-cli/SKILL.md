@@ -3,7 +3,8 @@ name: awtrix-cli
 description: >-
   Use for AWTRIX context: questions or tasks about the awtrix-cli version,
   availability, location, installation, update, use, or troubleshooting, as well
-  as AWTRIX NG devices and displays, firmware, notifications and progress,
+  as AWTRIX NG devices, current app, app inventory and rotation, displays,
+  firmware, notifications and progress,
   capabilities and settings, screen capture, persistent Berry scripts, their
   modules and resources, or awtrix.toml projects. Not for an incidental AWTRIX
   mention or an unrelated generic CLI request. Guides use and installation of
@@ -23,13 +24,17 @@ Match the user's intent to the smallest suitable capability:
 
 | Intent | Capability |
 | --- | --- |
+| Identify the currently displayed app | `apps active-get` → `current_app` |
+| List installed/pushed apps and their enabled/loop state | `apps list` |
+| Select an app or inspect/change rotation | `apps select`, `apps order-get`, `apps order-set` |
+| See rendered pixels or save an image | `screen capture` |
 | Temporary content or progress | `apps` |
 | One-off notification | `notify` |
 | Inspect/change an existing script; quick standalone experiment | `script` |
 | Develop/maintain source files; coordinate resources or configuration | Consider `project` |
 | Validate/deploy an `awtrix.toml` project | `project` |
 | Automated assertions | `test` |
-| Device information, settings, image, diagnostics, resources | `device`, `settings`, `screen`, `logs`, `resources` respectively |
+| Device identity/state, settings, connection diagnostics, logs, resources | `device`, `settings`, `device diagnose`, `logs`, `resources` respectively |
 
 Standalone persistent scripts are legitimate. Consider `project` when creating
 files to retain/edit, managing multiple resources or configuration, iterating,
@@ -53,19 +58,29 @@ are reliable enough to execute directly when they match the need.
 
 - Use `--help` only for unknown exact syntax or required options. If the operation
   itself is unknown, inspect its family, e.g. `awtrix-cli script --help`.
-- Use `describe "<topic>"` for missing semantics, schemas, capabilities, or
-  structured details, e.g. `awtrix-cli --json describe "apps create"`.
+- Use `describe <topic> --offline` for missing semantics, schemas, outputs, or
+  examples, e.g. `awtrix-cli --json describe apps create --offline`. Topics accept
+  separate words or a quoted string. Use `describe --list` only when the required
+  topic is unknown.
 - Stop discovery once the question is answered. Do not pair help and describe
   mechanically, repeat help in the same session without a reason, or use help
   to confirm syntax already supplied by the skill or a loaded reference.
 - Never guess subcommands or probe supposed names. Discover only when the
   required operation is actually unknown.
 - Reuse inspection results while relevant; refresh only after a change, stale
-  evidence, or a new unresolved question. Fetch only task-relevant sources/data.
+  evidence, or a new unresolved question. A question about the current app needs
+  a fresh observation because rotation can change it without an agent write.
+  Fetch only task-relevant sources/data.
 
-Descriptions are offline unless a target is supplied (including `AWTRIX_URL`).
-Connected capabilities take precedence. Some topics are family-level (`script`,
-`screen`); consult subcommand help only if exact flags remain unknown.
+Default to `--offline` for local documentation, even when `AWTRIX_URL` is set.
+Descriptions document operations without executing them or validating payloads.
+Omitting `--offline` with `--target` or `AWTRIX_URL` optionally fetches connected
+capabilities; failures propagate and connected capability names are authoritative.
+Named/default profiles alone do not connect. `--list`, profile descriptions, and
+`describe update` are always local. Offline documentation is not proof of device
+support. `script get`, `script deploy`, and `script re-minify` share the script
+family description; `screen capture` accepts the screen description. Consult
+execution help only if exact flags remain unknown.
 
 ## 3. Ensure the executable and target
 
@@ -86,11 +101,42 @@ A known notification/app operation needs no routine diagnostic preflight.
 For ordinary device commands, selection precedence is `--target`, `AWTRIX_URL`,
 `--profile`/`AWTRIX_PROFILE`, project profile (project operations), default profile.
 An environment URL can therefore override a named profile. Basic authentication
-uses `AWTRIX_USERNAME` and `AWTRIX_PASSWORD` or personal profile credentials;
-keep credentials out of project manifests and reports. `--timeout` is a per-request
-bound in milliseconds, not an observation duration.
+uses `--username`/`--password`, then `AWTRIX_USERNAME`/`AWTRIX_PASSWORD`, then
+credentials of the selected profile only. URL overrides do not inherit profile
+credentials. `profile update` fully replaces the entry and clears omitted
+credentials; `profile add` also replaces an existing entry. Supply credentials
+again when retaining them, and keep them out of project manifests and reports.
+`--timeout` is a per-request bound in milliseconds, not an observation duration.
 
 ## 4. Perform the requested operation
+
+### Read the current app or display
+
+For “which app is currently displayed?”, read the structured device state:
+
+```sh
+awtrix-cli --json apps active-get
+```
+
+Use the resolved target from section 3. Answer with `current_app`, preserving
+its exact name, then stop when that answers the question.
+If the value is null or the request fails, report that the current app could not
+be determined. `apps list` reports inventory, not which app is displayed;
+enabled, present, and in-loop flags do not establish current visibility.
+
+`current_app` reads device `currentApp`; a notification can cover the display
+without changing it. Use `screen capture` for a request about rendered content,
+a screenshot, or a visual discrepancy. A capture establishes pixels at capture
+time, not an app's identity; state and capture are separate observations and
+rotation can occur between them.
+
+`apps select` acknowledges selection without guaranteeing visibility or
+dismissing notifications. `apps order-get` reports inventory slot projections,
+not the full persisted rotation document. Before `apps order-set`, determine
+the intended complete disabled-name set: omitted `--disabled` defaults to `[]`
+and can re-enable apps; omitted `--order` preserves the existing order.
+
+### Send a notification or maintain a pushed app
 
 For an authorized notification or named temporary status app:
 
@@ -101,8 +147,6 @@ awtrix-cli --target http://awtrix.local --json apps create build \
   --payload '{"text":"Building...","lifetimeMs":60000}'
 awtrix-cli --target http://awtrix.local --json apps update build \
   --payload '{"text":"Tests: OK","lifetimeMs":60000}'
-awtrix-cli --target http://awtrix.local --json --fields apps apps list
-awtrix-cli --target http://awtrix.local --json screen capture --output screen.png
 ```
 
 `apps create` and `apps update` both create or replace the named pushed app;
@@ -116,8 +160,15 @@ rules above only for syntax or semantics still missing.
 ## 5. Interpret evidence and failures
 
 - Use `--json` for machine output. `--fields a,b` selects known top-level result
-  fields; choose them from `describe` or a complete result, preserving evidence
-  needed for the task. `logs follow` emits JSONL and does not accept `--fields`.
+  fields; choose them from the specific operation's documented output or a complete
+  result, preserving needed evidence. Generic family descriptions and nested keys
+  are not field catalogs; inspect server-defined responses before projecting.
+  On `describe`, projection selects the description's own top-level fields.
+  `logs follow` emits JSONL and does not accept `--fields`.
+- Field selection is evaluated after execution; projection errors do not undo
+  device writes, saved files, profile changes, or executable updates. Inspect the
+  outcome rather than retrying a write solely because projection failed. Error
+  envelopes are not projected.
 - Preserve stdout, stderr, and the process exit status. Failures usually include
   `error.code`/`error.message` on JSON stdout and diagnostics on stderr; verification
   and test failures can instead return a detailed report. Read both streams.
@@ -138,5 +189,7 @@ rules above only for syntax or semantics still missing.
   evidence explicitly. Logs retain only 34 lines; successful observation is not
   a guarantee of future correctness.
 
-Finish by reporting the selected target, what changed, observed evidence/artifact
+For a read-only question, return the requested fact concisely; include target or
+evidence details only when needed to disambiguate the answer. For a mutation,
+report the selected target, what changed, relevant observed evidence/artifact
 paths, and any error or uncertain outcome.

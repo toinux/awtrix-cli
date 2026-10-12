@@ -16,26 +16,36 @@ use std::{
 
 #[derive(Subcommand)]
 pub(crate) enum CommandAction {
+    /// Start a caller-supplied local Linux executable and record ownership after HTTP readiness.
     Start(StartArgs),
+    /// SIGTERM only the recorded owned process; wait up to five seconds and clean temporary data.
     Stop,
+    /// Check recorded process existence and identity; does not probe HTTP health.
     Status,
 }
 pub(crate) type Command = CommandAction;
 
 #[derive(Args)]
 pub(crate) struct StartArgs {
+    /// Caller-supplied AWTRIX Linux executable; no automatic download.
     #[arg(long, env = "AWTRIX_LINUX_BIN")]
     binary: Option<PathBuf>,
+    /// Loopback HTTP port (1024..65535).
     #[arg(long, default_value_t = 8080)]
     port: u16,
+    /// Framebuffer width (8..128).
     #[arg(long, default_value_t = 52)]
     width: u16,
+    /// Framebuffer height (8..32).
     #[arg(long, default_value_t = 16)]
     height: u16,
+    /// Persistent data directory retained after stop/errors; omitted creates temporary data.
     #[arg(long)]
     data: Option<PathBuf>,
+    /// Optional caller-supplied Web UI asset file.
     #[arg(long)]
     webui: Option<PathBuf>,
+    /// Startup HTTP readiness bound (1..300 seconds).
     #[arg(long, default_value_t = 15)]
     ready_timeout_secs: u64,
 }
@@ -527,6 +537,39 @@ fn stop() -> Result<Value, (&'static str, String)> {
 }
 
 pub(crate) fn describe(topic: &str) -> Value {
-    let action = topic.strip_prefix("headless ").unwrap_or("all");
-    json!({"command":format!("headless {action}"),"parameters":{"--binary":"provided awtrix-linux executable; alternatively AWTRIX_LINUX_BIN","--port":"loopback HTTP port 1024..65535","--width":"display width 8..128","--height":"display height 8..32","--data":"persistent directory; omitted creates isolated temporary data","--webui":"optional AWTRIX web UI asset file path","--ready-timeout-secs":"bounded HTTP readiness wait, 1..300 (default 15)"},"outputs":["start returns owned target URL, PID and data directory","status reports only the recorded CLI-owned process","stop signals only a process matching the recorded Linux PID and start time"],"examples":["awtrix-cli headless start --binary ./awtrix-linux","awtrix-cli headless start --binary ./awtrix-linux --webui ./webui/index.html --data ./dev-data --port 8081 --width 52 --height 16","awtrix-cli headless status","awtrix-cli headless stop"],"prerequisites":["Linux host and caller-supplied AWTRIX Linux executable; no automatic download","headless does not validate sensors, audio, or real ESP32 memory/instruction budgets"]})
+    let start_parameters = json!({"--binary":"provided awtrix-linux executable; alternatively AWTRIX_LINUX_BIN; no automatic download","--port":"loopback HTTP port 1024..65535 (default 8080)","--width":"display width 8..128 (default 52)","--height":"display height 8..32 (default 16)","--data":"persistent directory retained on stop or startup failure; omitted creates temporary data removed on successful stop or startup failure/Ctrl-C","--webui":"optional caller-supplied Web UI asset file","--ready-timeout-secs":"bounded HTTP readiness wait 1..300 seconds (default 15)"});
+    let (purpose, parameters, output_fields, examples) = match topic {
+        "headless start" => (
+            "Launch a local Linux child, verify its own HTTP listener, and record ownership",
+            start_parameters.clone(),
+            json!(["running", "pid", "target", "data", "temporary_data", "owned"]),
+            json!(["awtrix-cli headless start --binary ./awtrix-linux", "awtrix-cli headless start --binary ./awtrix-linux --webui ./webui/index.html --data ./dev-data --port 8081 --width 52 --height 16"]),
+        ),
+        "headless status" => (
+            "Check existence and start-time identity of the locally recorded process; no HTTP health probe",
+            json!({}),
+            json!(["running", "owned", "pid", "target", "data", "temporary_data"]),
+            json!(["awtrix-cli --json headless status"]),
+        ),
+        "headless stop" => (
+            "Signal only the recorded owned process, wait up to five seconds, and clean temporary data",
+            json!({}),
+            json!(["stopped", "pid", "data_removed"]),
+            json!(["awtrix-cli --json headless stop"]),
+        ),
+        _ => (
+            "Manage the local lifecycle of a caller-supplied AWTRIX Linux executable",
+            json!({"start":start_parameters,"status":"no operation-specific options","stop":"no operation-specific options"}),
+            json!({"start":["running","pid","target","data","temporary_data","owned"],"status":["running","owned","pid","target","data","temporary_data"],"stop":["stopped","pid","data_removed"]}),
+            json!(["awtrix-cli headless start --binary ./awtrix-linux", "awtrix-cli headless status", "awtrix-cli headless stop"]),
+        ),
+    };
+    let process_outputs = json!({"running":"recorded process exists with matching start time; status does not establish HTTP health","owned":"CLI process ownership confirmed","pid":"local child PID","target":"loopback endpoint, not selected by --target","data":"local data directory","temporary_data":"whether data is disposable and removed on successful stop"});
+    let stop_outputs = json!({"stopped":"true after owned process exits","pid":"recorded local PID","data_removed":"true for temporary data, false for retained explicit --data"});
+    let outputs = match topic {
+        "headless start" | "headless status" => process_outputs,
+        "headless stop" => stop_outputs,
+        _ => json!({"start":process_outputs,"status":process_outputs,"stop":stop_outputs}),
+    };
+    json!({"command":topic,"purpose":purpose,"parameters":parameters,"global_options":{"--json":"compact JSON report","--fields":"comma-separated top-level report fields"},"output_fields":output_fields,"outputs":outputs,"ownership_record":"headless.json beside the selected personal config; AWTRIX_CONFIG selects the config file, otherwise $HOME/.config/awtrix-cli/config.json on Linux","lifecycle":{"target_selection":"--target, AWTRIX_URL and profile/default device targets are irrelevant for local start/status/stop","readiness":"successful /api/v1/device response plus spawned PID ownership of the listening socket","stop":"SIGTERM via pidfd after start-time identity check; waits five seconds; STOP_TIMEOUT does not escalate","cleanup":"startup errors/Ctrl-C kill and reap the spawned child and remove temporary data; successful stop removes temporary data and ownership record; explicit --data directories are retained","status":"reads ownership record and /proc only; missing record returns NOT_RUNNING"},"examples":examples,"prerequisites":["Linux host; start requires a caller-supplied AWTRIX Linux executable","headless does not validate sensors, audio, physical LEDs, or ESP32 memory/instruction budgets"]})
 }

@@ -24,14 +24,20 @@ pub enum Command {
     OrderGet,
     /// Set rotation order and complete disabled-name set (omitted order is preserved).
     OrderSet {
+        /// JSON array of app names; omitted order preserves the existing order.
         #[arg(long)]
         order: Option<String>,
+        /// Complete JSON array of disabled app names; defaults to an empty set.
         #[arg(long, default_value = "[]")]
         disabled: String,
     },
     /// Create or replace a pushed app (the device route is an upsert, not create-only).
+    #[command(
+        after_help = "Payload fields and constraints: awtrix-cli describe apps create --offline --json\nProvide exactly one of --payload or --file. --raw allows unknown keys; known\nfields remain validated. Pushed apps are temporary and lost on device restart."
+    )]
     Create {
         name: String,
+        /// Inline non-empty JSON object; provide exactly one of --payload or --file.
         #[arg(long)]
         payload: Option<String>,
         /// Read the JSON payload from a UTF-8 file (useful for large TC002 bodies).
@@ -39,13 +45,17 @@ pub enum Command {
         file: Option<PathBuf>,
         #[arg(
             long,
-            help = "Allow untyped device-specific fields in this JSON object"
+            help = "Forward unknown device-specific keys; known fields remain validated (see describe apps create --offline)"
         )]
         raw: bool,
     },
     /// Create or replace a pushed app using the same upsert route; existence is not required.
+    #[command(
+        after_help = "Payload fields and constraints: awtrix-cli describe apps update --offline --json\nProvide exactly one of --payload or --file. --raw allows unknown keys; known\nfields remain validated. Pushed apps are temporary and lost on device restart."
+    )]
     Update {
         name: String,
+        /// Inline non-empty JSON object; provide exactly one of --payload or --file.
         #[arg(long)]
         payload: Option<String>,
         /// Read the JSON payload from a UTF-8 file (useful for large TC002 bodies).
@@ -53,7 +63,7 @@ pub enum Command {
         file: Option<PathBuf>,
         #[arg(
             long,
-            help = "Allow untyped device-specific fields in this JSON object"
+            help = "Forward unknown device-specific keys; known fields remain validated (see describe apps update --offline)"
         )]
         raw: bool,
     },
@@ -411,6 +421,61 @@ fn accepts_icons(value: &Value) -> bool {
     })
 }
 
+/// Discoverable local validation contract; device-side content validation remains authoritative.
+pub(crate) fn payload_schema() -> Value {
+    let integer = json!({"type":"integer","minimum":i64::MIN,"maximum":i64::MAX});
+    let nonnegative = json!({"type":"integer","minimum":0,"maximum":i64::MAX});
+    let color = json!({"type":["string","integer","array"],"minimum":i64::MIN,"maximum":i64::MAX,"description":"Device color encoding, e.g. #ff0000, packed RGB integer or [\"HSV\",0,100,100]; CLI checks only the top-level type (integers must fit i64), not array contents"});
+    let chart = json!({"type":"array","maxItems":16,"items":integer,"description":"Up to 16 signed integer chart samples"});
+    json!({
+        "type":"object", "minProperties":1, "additionalProperties":false,
+        "description":"All 35 official pushed-app keys validated locally; all are optional but the object must be non-empty. Integer values require JSON integer lexical representation and must fit signed i64: decimals and exponents parsed as floats (e.g. 1.0 or 1e0) are rejected even if mathematically integral. This is stricter than standard JSON Schema integer semantics and applies to every integer field, nested integer and integer color encoding. --raw permits unknown top-level keys only; known-field and nested validation still applies. Device validation may impose additional content constraints.",
+        "properties":{
+            "text":{"type":["string","array"],"description":"Text or device-defined text fragments; CLI does not validate array contents"},
+            "icon":{"type":"string","description":"Device icon identifier"},
+            "textCase":{"type":"string","enum":["inherit","upper","asTyped"]},
+            "font":{"type":"string","description":"Device font name"},
+            "textColor":color,
+            "textBlinkMs":nonnegative,
+            "textFadeMs":nonnegative,
+            "textAlign":{"type":"string","enum":["start","center","end"]},
+            "scroll":{"oneOf":[
+                {"type":"string","description":"Device-defined shorthand; any string passes local validation"},
+                {"type":"object","additionalProperties":false,"properties":{
+                    "mode":{"type":"string","enum":["static","wrap","loop","bounce"]},
+                    "direction":{"type":"string","enum":["left","right"]},
+                    "entry":{"type":"string","enum":["inline","offscreen"]},
+                    "whenFits":{"type":"string","enum":["static","scroll"]},
+                    "speed":nonnegative,"gap":nonnegative,"holdMs":nonnegative
+                }}
+            ]},
+            "textOffsetX":integer,
+            "textInFront":{"type":"boolean"},
+            "iconMode":{"type":"string","enum":["fixed","pushOnce","push"]},
+            "iconOffsetX":integer,
+            "iconGap":{"type":"integer","minimum":0,"maximum":128},
+            "icons":{"type":"array","maxItems":4,"items":{"type":"object","required":["icon"],"additionalProperties":false,"properties":{
+                "icon":{"type":"string"},"x":{"type":"integer","minimum":-65535,"maximum":65535},"y":{"type":"integer","minimum":-65535,"maximum":65535}
+            }}},
+            "durationMs":{"type":"integer","minimum":i64::MIN,"maximum":i64::MAX,"description":"Dwell time in milliseconds; <= 0 uses device app duration"},
+            "lifetimeMs":{"type":"integer","minimum":i64::MIN,"maximum":i64::MAX,"description":"Expiration time in milliseconds; <= 0 disables expiry"},
+            "lifetimeExpiry":{"type":"string","enum":["remove","mark"]},
+            "repeat":integer,
+            "backgroundColor":color,
+            "barChart":chart,"lineChart":chart,
+            "chartAutoscale":{"type":"boolean"},"chartColor":color,
+            "progress":integer,"progressColor":color,"progressTrackColor":color,
+            "effect":{"type":"string","description":"Device effect name"},
+            "effectSpeed":{"type":"number","minimum":0.1,"maximum":10.0},
+            "palette":{"type":["string","array"],"maxItems":16,"description":"Device palette name or up to 16 entries; CLI does not validate entry contents"},
+            "paletteBlend":{"type":"boolean"},"paletteSpan":integer,
+            "paletteSpeed":{"type":"number","minimum":0.0,"maximum":10.0},
+            "overlay":{"type":"string","description":"Device overlay name"},
+            "draw":{"type":"array","minItems":1,"description":"Device drawing instructions; CLI checks only that the array is non-empty"}
+        }
+    })
+}
+
 pub fn describe(topic: &str) -> Value {
     let action = topic.strip_prefix("apps ").unwrap_or("create");
     if matches!(
@@ -424,12 +489,34 @@ pub fn describe(topic: &str) -> Value {
             "order-get" => ("GET /api/v1/apps; project inventory slot values", json!({}), "rotation_slots and implicit_apps; persisted_order_exposed=false", "awtrix-cli --json apps order-get"),
             _ => ("PUT /api/v1/apps/order", json!({"--order":"optional JSON string array; repeated names are allowed", "--disabled":"JSON string array, complete set of switched-off app names (default [])"}), "accepted, order_included, disabled, device_result", "awtrix-cli apps order-set --order '[\"clock\",\"demo\"]' --disabled '[\"weather\"]'"),
         };
-        return json!({"command":format!("apps {action}"),"route":route,"parameters":parameters,"inputs":[],"schemas":{"output":output},"outputs":[output],"output_fields":["apps","count","name","origin","enabled","present","slot","in_loop","error","accepted","visibility","order_included","disabled","device_result","current_app","observed","rotation_slots","implicit_apps","persisted_order_exposed"],"examples":[example],"prerequisites":["AWTRIX NG app API; device routes remain authoritative"],"limitations":["select acceptance does not guarantee current visibility or dismiss notifications","order-set disabled is the complete off-set; omitted order preserves existing order","order-get projects GET /api/v1/apps slot assignments and implicit apps; it cannot retrieve the complete persisted order"]});
+        let schema = match action {
+            "list" => {
+                json!({"apps":{"type":"array","items":{"name":"server value|null","origin":"server value|null","enabled":"server value|null","present":"server value|null","slot":"server value|null","in_loop":"server inLoop value|null","error":"server value|null"}},"count":"integer"})
+            }
+            "active-get" => {
+                json!({"current_app":"server currentApp value|null","observed":true,"meaning":"string"})
+            }
+            "select" => {
+                json!({"name":"string","accepted":true,"visibility":"unknown","device_result":"server-defined JSON response","notification_effect":"none_claimed"})
+            }
+            "order-get" => {
+                json!({"rotation_slots":{"type":"array","items":{"slot":"unsigned integer","name":"server value|null"}},"implicit_apps":"array of server name values|null for explicitly null slots","persisted_order_exposed":false,"meaning":"string"})
+            }
+            _ => {
+                json!({"accepted":true,"order_included":"boolean","disabled":"array of strings","device_result":"server-defined JSON response"})
+            }
+        };
+        let fields: Vec<&str> = schema
+            .as_object()
+            .into_iter()
+            .flat_map(|map| map.keys().map(String::as_str))
+            .collect();
+        return json!({"command":format!("apps {action}"),"route":route,"parameters":parameters,"inputs":[],"schemas":{"output":schema},"outputs":[output],"output_fields":fields,"examples":[example],"prerequisites":["AWTRIX NG app API; device routes remain authoritative"],"limitations":["output_fields lists only CLI result top-level keys; item fields are nested under apps or rotation_slots","select acceptance does not guarantee current visibility or dismiss notifications","order-set disabled is the complete off-set; omitted order preserves existing order","order-get projects GET /api/v1/apps slot assignments and implicit apps; it cannot retrieve the complete persisted order"]});
     }
     let parameters = if action == "delete" {
         json!({"name":"[A-Za-z0-9_-]{1,32}"})
     } else {
-        json!({"name":"[A-Za-z0-9_-]{1,32}","--payload":"JSON object using pushed-app fields; durationMs controls dwell time, lifetimeMs/lifetimeExpiry control expiration", "--file":"UTF-8 JSON payload file; enables large TC002 request bodies", "--raw":"explicitly pass unknown device-specific fields without typed validation", "route_semantics":"create and update both use the device's PUT upsert; neither requires presence/absence"})
+        json!({"name":"[A-Za-z0-9_-]{1,32}","--payload":"Inline non-empty JSON object using pushed-app fields; exactly one of --payload or --file is required; durationMs controls dwell time, lifetimeMs/lifetimeExpiry control expiration", "--file":"UTF-8 JSON payload file instead of --payload; enables large TC002 request bodies", "--raw":"Forward unknown top-level device-specific keys; known fields and nested constraints remain validated", "route_semantics":"create and update both use the device's PUT upsert; neither requires presence/absence"})
     };
     let (outputs, schema, output_fields) = if action == "delete" {
         (
@@ -444,7 +531,17 @@ pub fn describe(topic: &str) -> Value {
             json!(["name", "operation", "accepted", "visibility", "persistent"]),
         )
     };
-    json!({"command":format!("apps {action}"),"parameters":parameters,"inputs":["non-empty JSON pushed-app object"],"schemas":{"input":"All 35 official pushed-app keys have local top-level type checks; unknown keys require --raw. Time fields are integer milliseconds. durationMs <= 0 uses device app duration; lifetimeMs <= 0 disables expiry; lifetimeExpiry is remove|mark.","output":schema},"outputs":[outputs],"output_fields":output_fields,"examples":[format!("awtrix-cli --target http://awtrix.local apps {action} build --payload '{{\"text\":\"working\",\"lifetimeMs\":60000}}'"),"awtrix-cli --json apps delete build"],"prerequisites":["AWTRIX NG pushed app routes; device capacity and 413/422/507 validation remain authoritative"],"limitations":["At most 50 pushed apps reside at once; replacing an existing name does not consume another slot. HTTP request body limits are 8192 bytes on ESP32/ESP32-S3 and 2 MiB on TC002; identity is queried before sending payloads above 8192 bytes. HTTP acceptance does not guarantee visibility; pushed apps are lost on device restart"]})
+    let (inputs, schemas, examples, route) = if action == "delete" {
+        (
+            json!(["pushed-app name; no JSON payload"]),
+            json!({"output":schema}),
+            json!(["awtrix-cli --json apps delete build"]),
+            "DELETE /api/v1/apps/{name}",
+        )
+    } else {
+        (json!(["non-empty JSON pushed-app object; exactly one of --payload or --file"]), json!({"input":"All 35 official pushed-app keys have local type checks; unknown keys require --raw. Time fields are integer milliseconds. durationMs <= 0 uses device app duration; lifetimeMs <= 0 disables expiry; lifetimeExpiry is remove|mark.","payload":payload_schema(),"output":schema}), json!([format!("awtrix-cli --target http://awtrix.local apps {action} build --payload '{{\"text\":\"working\",\"lifetimeMs\":60000}}'"),format!("awtrix-cli apps {action} build --file payload.json")]), "PUT /api/v1/apps/pushed/{name}")
+    };
+    json!({"command":format!("apps {action}"),"route":route,"parameters":parameters,"inputs":inputs,"schemas":schemas,"outputs":[outputs],"output_fields":output_fields,"examples":examples,"prerequisites":["AWTRIX NG pushed app routes; device capacity and 413/422/507 validation remain authoritative"],"limitations":["At most 50 pushed apps reside at once; replacing an existing name does not consume another slot. HTTP request body limits are 8192 bytes on ESP32/ESP32-S3 and 2 MiB on TC002; identity is queried before sending payloads above 8192 bytes. HTTP acceptance does not guarantee visibility; pushed apps are lost on device restart"]})
 }
 
 #[cfg(test)]
