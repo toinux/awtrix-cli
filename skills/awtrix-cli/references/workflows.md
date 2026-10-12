@@ -35,6 +35,10 @@ inventory and runtime state; `script data NAME` reads persisted data; `script
 verify NAME` collects bounded runtime/log evidence and optional capture; `logs
 follow` observes logs. Reuse deploy verification if it already answers the need.
 
+Enabled/in-loop/present state and `start_verified` concern runtime health, not
+which app is currently displayed. Use `apps active-get` for current app identity
+and `screen capture` for rendered pixels, as explained in the skill.
+
 ```sh
 awtrix-cli --target http://awtrix.local --json script state
 awtrix-cli --target http://awtrix.local --json script data main
@@ -72,8 +76,8 @@ the exact original remote source (a project-relative file captured before edits)
 For an update replace the create-only declaration with that reference; do not
 refresh the reference immediately before deployment to bypass a conflict.
 For manifest fields not present in the scaffold and genuinely needed, use
-`awtrix-cli --json describe "project deploy"`. Add runtime verification only
-when the request needs evidence beyond the deployment report.
+`awtrix-cli --json describe "project deploy" --offline`. Add runtime verification
+only when the request needs evidence beyond the deployment report.
 
 Deploy runs modules, resources, scripts, then configuration. It is additive,
 stops at the first failure, and is not transactional. A partial failure can
@@ -110,7 +114,7 @@ awtrix-cli --json test project --manifest ./hello-world/awtrix.toml \
 ```
 
 The scaffold has no assertions. If the assertion schema is unknown, consult
-`awtrix-cli --json describe "test project"`; consult the
+`awtrix-cli --json describe "test project" --offline`; consult the
 [example manifest](https://github.com/toinux/awtrix-cli/blob/HEAD/examples/project/awtrix.toml)
 only for details still missing.
 The runner starts a disposable instance, deploys, observes assertions, then
