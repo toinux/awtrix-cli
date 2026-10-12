@@ -563,6 +563,12 @@ fn evaluate(
     let mut errors: Vec<Value> = Vec::new();
     let mut active_failed = vec![false; plan.assertion.len()];
     while started.elapsed() < deadline {
+        // Do not begin another observation when the window is about to end:
+        // its bounded HTTP timeout would otherwise turn an otherwise-complete
+        // observation into a spurious timeout error under scheduler jitter.
+        if deadline.saturating_sub(started.elapsed()) < Duration::from_millis(100) {
+            break;
+        }
         if interrupted.load(Ordering::SeqCst) {
             return Err((
                 "INTERRUPTED",
