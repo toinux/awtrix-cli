@@ -48,11 +48,9 @@ pub(crate) fn run_with_timeout(
     api: &crate::ApiClient,
     timeout: Duration,
 ) -> crate::CliResult<Value> {
+    validate(command)?;
     match command {
         Command::Capture { output, format } => {
-            if *format == Format::Png && output.is_none() {
-                return Err(("ARGUMENT", "--output is required for PNG capture".into()));
-            }
             let bytes = api.raw_bytes_get_with_timeout(
                 "/api/v1/display/screen",
                 MAX_RESPONSE_BYTES,

@@ -834,9 +834,6 @@ fn run_command(cli: &Cli) -> CliResult<Value> {
     if let Command::Settings { action } = &cli.command {
         settings::validate(action).map_err(|message| ("ARGUMENT", message))?;
     }
-    if let Command::Screen { action } = &cli.command {
-        screen::validate(action)?;
-    }
     let explicit_target =
         std::env::args().any(|arg| arg == "--target" || arg.starts_with("--target="));
     let resolved = profiles::resolve(

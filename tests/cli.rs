@@ -7518,6 +7518,36 @@ fn screen_capture_ansi_invalid_frame_preserves_existing_output() {
 }
 
 #[test]
+fn screen_capture_ansi_persistence_failure_preserves_existing_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("capture.ansi");
+    std::fs::create_dir(&path).unwrap();
+    let marker = path.join("keep.txt");
+    std::fs::write(&marker, "keep me").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"{"width":1,"height":2,"pixels":[16711680,65280]}"#,
+            ))
+            .unwrap()
+    });
+    let path_arg = path.to_string_lossy().into_owned();
+    let output = run(&[
+        "--target", &url, "--json", "screen", "capture", "--format", "ansi", "--output", &path_arg,
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "FILE_WRITE");
+    assert!(path.is_dir());
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), "keep me");
+}
+
+#[test]
 fn screen_capture_ansi_fields_projection_and_discovery_are_documented() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
