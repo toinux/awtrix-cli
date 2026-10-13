@@ -24,11 +24,12 @@ target/x86_64-unknown-linux-gnu/release/awtrix-cli --version
 On macOS use `aarch64-apple-darwin` and on Windows use
 `x86_64-pc-windows-msvc`; install the Rust target with `rustup target add`
 before building on a different host. The matching native linker/SDK is
-required. `.github/workflows/verify.yml` runs on branch pushes, pull requests,
-and version tags. Every native check uploads its binary artifact, retaining the
-existing CI artifact behavior on ordinary branches and pull requests. Those
-ordinary verification runs do not publish a release. Workflow runs use the
-host-native runners: their help/version and
+required. `.github/workflows/verify.yml` runs quick format, lint and test checks
+on branch pushes, pull requests and version tags. The native three-platform
+matrix runs on pull requests and version tags; each native check uploads its
+binary artifact. Ordinary branch and pull request verification runs do not
+publish a release.
+Workflow runs use the host-native runners: their help/version and
 HTTP contract test executes the just-built release artifact (selected by
 `AWTRIX_DISTRIBUTION_BINARY`) against a local deterministic HTTP fixture; it
 does not substitute Cargo's debug test executable. Headless process control is
@@ -38,14 +39,15 @@ recorded process as not running when Linux process identity cannot be checked.
 
 ## Tagged releases
 
-Pushing a stable tag whose name is exactly `v<package version>` (currently
-`v0.2.0`; prerelease/build-metadata versions are rejected) starts the same three
-native verification jobs. Each job builds once with
+Pushing an annotated stable tag whose name is exactly `v<package version>`
+(currently `v0.3.2`; prerelease/build-metadata versions are rejected) starts
+the three native verification jobs. Each job builds once with
 `--locked`, exercises the release executable, and uploads that verified binary;
 the release job reuses those artifacts rather than rebuilding. A tag that does
 not exactly match the `awtrix-cli` version in `Cargo.toml` fails before release
-publication. Wait for all native jobs to pass before considering the release
-available.
+publication. The annotated tag message supplies the release notes and must
+contain a short explanation of the release. Wait for all native jobs to pass
+before considering the release available.
 
 Native jobs also exercise the skill's installers with offline fixtures, including
 the freshly built Windows executable. After publication, a second native matrix
@@ -102,8 +104,7 @@ and `AWTRIX_UPDATE_EXECUTABLE` allow local fixture servers and temporary target
 files. These overrides are compiled out of release binaries and do not make
 production destinations configurable.
 
-To cut a release, update the package version and lockfile as appropriate, tag
-the matching commit (for example `git tag v0.2.0`), and push that tag. The
+To cut a release, follow [the agent release procedure](agents/release.md). The
 workflow needs repository `contents: write` permission for its release job.
 
 The crate disables reqwest's default TLS backend and selects `rustls-tls`;
