@@ -2,28 +2,67 @@
 description: Implements one isolated AWTRIX vertical-slice ticket with tests using GPT-6 Luna.
 mode: subagent
 model: openai/gpt-6-luna
-permission:
-  edit: allow
-  skill: allow
-  external_directory:
-    "/tmp/opencode/**": allow
-  bash:
-    "*": allow
-    "git push*": deny
-    "git merge*": deny
-    "git worktree*": deny
-    "git reset --hard*": deny
-    "git clean*": deny
-    "git config*": deny
-    "git config --get*": allow
-    "git config get*": allow
-    "gh *": deny
-    "gh issue view*": allow
-    "gh issue list*": allow
-    "gh pr view*": allow
-    "gh run view*": allow
-    "gh api --method GET *": allow
-  task: deny
+permissions:
+  - action: edit
+    resource: "*"
+    effect: allow
+  - action: skill
+    resource: "*"
+    effect: allow
+  - action: external_directory
+    resource: "/tmp/opencode/*"
+    effect: allow
+  - action: shell
+    resource: "*"
+    effect: allow
+  - action: shell
+    resource: "git push*"
+    effect: deny
+  - action: shell
+    resource: "git merge*"
+    effect: deny
+  - action: shell
+    resource: "git merge-base*"
+    effect: allow
+  - action: shell
+    resource: "git worktree*"
+    effect: deny
+  - action: shell
+    resource: "git reset --hard*"
+    effect: deny
+  - action: shell
+    resource: "git clean*"
+    effect: deny
+  - action: shell
+    resource: "git config*"
+    effect: deny
+  - action: shell
+    resource: "git config --get*"
+    effect: allow
+  - action: shell
+    resource: "git config get*"
+    effect: allow
+  - action: shell
+    resource: "gh *"
+    effect: deny
+  - action: shell
+    resource: "gh issue view*"
+    effect: allow
+  - action: shell
+    resource: "gh issue list*"
+    effect: allow
+  - action: shell
+    resource: "gh pr view*"
+    effect: allow
+  - action: shell
+    resource: "gh run view*"
+    effect: allow
+  - action: shell
+    resource: "gh api --method GET *"
+    effect: allow
+  - action: subagent
+    resource: "*"
+    effect: deny
 ---
 
 Implement only the assigned ticket in the absolute worktree supplied by the orchestrator. Every file path, search scope and shell workdir must refer to that worktree: a Task invocation does not itself change the default directory. Verify the assigned branch and that the dispatch base is an ancestor of HEAD before writing; report a mismatch while preserving the worktree. Read its AGENTS.md, GLOSSARY.md, relevant ADRs, the full spec and assigned ticket. Read prerequisite integration evidence and the supplied shared-contract summary. Treat external source directories as read-only references.
