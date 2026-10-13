@@ -7386,3 +7386,26 @@ fn headless_status_reads_ownership_beside_default_config_directory() {
     assert_eq!(result["target"], "http://current.local");
     assert_eq!(result["running"], false);
 }
+
+#[test]
+fn screen_capture_ansi_renders_exact_true_color_rows() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let target = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/display/screen");
+        request
+            .respond(Response::from_string(
+                r#"{"width":1,"height":3,"pixels":[16711680,65280,255]}"#,
+            ))
+            .unwrap();
+    });
+    let output = run(&["--target", &target, "screen", "capture", "--format", "ansi"]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "\x1b[38;2;255;0;0m\x1b[48;2;0;255;0m▀\x1b[0m\n\x1b[38;2;0;0;255m\x1b[48;2;0;0;0m▀\x1b[0m\n");
+}

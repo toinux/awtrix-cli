@@ -16,10 +16,19 @@ pub enum Command {
         long_about = "Framebuffer captures do not reproduce physical brightness or LED corrections and are not synchronized deterministically to a frame."
     )]
     Capture {
-        /// PNG destination; atomically replaces an existing file. Parent directory must already exist and be writable.
+        /// Capture format.
+        #[arg(long, value_enum, default_value = "png")]
+        format: Format,
+        /// Optional destination for rendered text; required for PNG.
         #[arg(long)]
-        output: PathBuf,
+        output: Option<PathBuf>,
     },
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    Png,
+    Ansi,
 }
 
 pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value> {
@@ -31,7 +40,10 @@ pub(crate) fn run_with_timeout(
     timeout: Duration,
 ) -> crate::CliResult<Value> {
     match command {
-        Command::Capture { output } => {
+        Command::Capture { output, format } => {
+            if *format == Format::Png && output.is_none() {
+                return Err(("ARGUMENT", "--output is required for PNG capture".into()));
+            }
             let bytes = api.raw_bytes_get_with_timeout(
                 "/api/v1/display/screen",
                 MAX_RESPONSE_BYTES,
@@ -65,6 +77,7 @@ pub(crate) fn run_with_timeout(
                     "framebuffer pixel count does not match dimensions".into(),
                 ))?;
             let mut rgb = Vec::with_capacity(count as usize * 3);
+            let mut packed_pixels = Vec::with_capacity(count as usize);
             for pixel in pixels {
                 let packed = pixel
                     .as_u64()
@@ -79,6 +92,37 @@ pub(crate) fn run_with_timeout(
                     ((packed >> 8) & 0xff) as u8,
                     (packed & 0xff) as u8,
                 ]);
+                packed_pixels.push(packed);
+            }
+            if *format == Format::Ansi {
+                let mut text = String::new();
+                for y in (0..height as usize).step_by(2) {
+                    for x in 0..width as usize {
+                        let upper = packed_pixels[y * width as usize + x];
+                        let lower = if y + 1 < height as usize {
+                            packed_pixels[(y + 1) * width as usize + x]
+                        } else {
+                            0
+                        };
+                        text.push_str(&format!(
+                            "\x1b[38;2;{};{};{}m\x1b[48;2;{};{};{}m▀",
+                            upper >> 16 & 255,
+                            upper >> 8 & 255,
+                            upper & 255,
+                            lower >> 16 & 255,
+                            lower >> 8 & 255,
+                            lower & 255
+                        ));
+                    }
+                    text.push_str("\x1b[0m\n");
+                }
+                if let Some(path) = output {
+                    persist_sibling(path, text.as_bytes())?;
+                    return Ok(json!({"path":path,"format":"ansi","width":width,"height":height}));
+                }
+                return Ok(
+                    json!({"format":"ansi","width":width,"height":height,"text":text,"__raw_stdout":true}),
+                );
             }
             // Encode everything in memory before opening any file, so malformed input never
             // truncates a previously captured image.
@@ -93,6 +137,9 @@ pub(crate) fn run_with_timeout(
                 .write_image_data(&rgb)
                 .map_err(|_| ("FILE_WRITE", "could not write PNG pixels".into()))?;
             drop(writer);
+            let output = output
+                .as_ref()
+                .ok_or(("ARGUMENT", "--output is required for PNG capture".into()))?;
             persist_sibling(output, &encoded)?;
             Ok(json!({"path":output,"format":"png","width":width,"height":height}))
         }
@@ -106,7 +153,8 @@ pub(crate) fn capture_png(
     timeout: Duration,
 ) -> crate::CliResult<Value> {
     let command = Command::Capture {
-        output: output.to_path_buf(),
+        format: Format::Png,
+        output: Some(output.to_path_buf()),
     };
     run_with_timeout(&command, api, timeout)
 }
