@@ -3084,6 +3084,54 @@ fn project_profile_is_used_below_explicit_and_environment_targets() {
 }
 
 #[test]
+fn concurrent_profile_adds_preserve_both_updates() {
+    let root =
+        std::env::temp_dir().join(format!("awtrix-profile-concurrent-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let config = root.join("config.json");
+    let args = |name: &'static str, target: &'static str| {
+        Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+            .args(["--json", "profile", "add", name, "--target", target])
+            .env("AWTRIX_CONFIG", &config)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let first = args("first", "http://first.local");
+    let second = args("second", "http://second.local");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut first = first;
+    let mut second = second;
+    while first.try_wait().unwrap().is_none() || second.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() >= deadline {
+            let _ = first.kill();
+            let _ = second.kill();
+            panic!("concurrent profile commands exceeded five-second deadline");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let first_output = first.wait_with_output().unwrap();
+    let second_output = second.wait_with_output().unwrap();
+    assert!(
+        first_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first_output.stderr)
+    );
+    assert!(
+        second_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second_output.stderr)
+    );
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    assert_eq!(saved["profiles"]["first"]["target"], "http://first.local");
+    assert_eq!(saved["profiles"]["second"]["target"], "http://second.local");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn profile_crud_persists_isolated_config_and_never_displays_secrets() {
     let dir = std::env::temp_dir().join(format!("awtrix-profile-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

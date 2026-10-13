@@ -266,6 +266,13 @@ pub fn describe(action: Option<&str>) -> Result<Value> {
 }
 
 pub fn run(action: &ProfileCommand) -> Result<Value> {
+    let _lock = match action {
+        ProfileCommand::Add { .. }
+        | ProfileCommand::Update { .. }
+        | ProfileCommand::SetDefault { .. }
+        | ProfileCommand::Delete { .. } => Some(lock_config()?),
+        ProfileCommand::List | ProfileCommand::Show { .. } => None,
+    };
     let mut c = load()?;
     match action {
         ProfileCommand::Add {
@@ -350,6 +357,79 @@ pub fn run(action: &ProfileCommand) -> Result<Value> {
             save(&c)?;
             Ok(json!({"deleted":name}))
         }
+    }
+}
+
+/// Lock the config path for the entire mutation, including read and atomic replacement.
+fn lock_config() -> Result<fs::File> {
+    let path = path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|_| {
+            (
+                "CONFIG_INVALID",
+                "profile configuration cannot be written".into(),
+            )
+        })?;
+    }
+    let lock_path = path.with_extension("lock");
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .map_err(|_| {
+            (
+                "CONFIG_INVALID",
+                "profile configuration cannot be locked".into(),
+            )
+        })?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .map_err(|_| ("CONFIG_INVALID", "profile permissions cannot be set".into()))?;
+    }
+    lock_exclusive(&file)?;
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn lock_exclusive(file: &fs::File) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: flock only borrows the valid descriptor; its lifetime is held by the caller.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+        Ok(())
+    } else {
+        Err((
+            "CONFIG_INVALID",
+            "profile configuration cannot be locked".into(),
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn lock_exclusive(file: &fs::File) -> Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{LockFileEx, LOCKFILE_EXCLUSIVE_LOCK};
+    let mut overlapped = unsafe { std::mem::zeroed() };
+    let result = unsafe {
+        LockFileEx(
+            file.as_raw_handle() as _,
+            LOCKFILE_EXCLUSIVE_LOCK,
+            0,
+            u32::MAX,
+            u32::MAX,
+            &mut overlapped,
+        )
+    };
+    if result != 0 {
+        Ok(())
+    } else {
+        Err((
+            "CONFIG_INVALID",
+            "profile configuration cannot be locked".into(),
+        ))
     }
 }
 pub fn resolve(
