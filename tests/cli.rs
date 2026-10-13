@@ -12,6 +12,22 @@ fn run(args: &[&str]) -> Output {
         .unwrap()
 }
 
+#[test]
+fn device_target_query_or_fragment_is_rejected_before_http() {
+    for suffix in ["?mode=bad", "#section"] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let target = format!("http://{}/base{suffix}", server.server_addr());
+        let output = run(&["--json", "--target", &target, "device", "state"]);
+        assert!(!output.status.success());
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["error"]["code"], "ARGUMENT");
+        assert!(server
+            .recv_timeout(Duration::from_millis(50))
+            .unwrap()
+            .is_none());
+    }
+}
+
 fn update_asset_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "awtrix-cli-x86_64-pc-windows-msvc.exe"
