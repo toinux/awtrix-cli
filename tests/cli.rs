@@ -1789,9 +1789,9 @@ fn visual_server(width: u32, height: u32, pixel: u32) -> (String, thread::JoinHa
     let url = format!("http://{}", server.server_addr());
     let worker = thread::spawn(move || {
         let started = std::time::Instant::now();
-        while started.elapsed() < Duration::from_secs(2) {
+        while started.elapsed() < Duration::from_secs(5) {
             let Some(mut request) = server.recv_timeout(Duration::from_millis(250)).unwrap() else {
-                break;
+                continue;
             };
             let route = request.url().split('?').next().unwrap().to_owned();
             let body = match route.as_str() {
@@ -1811,6 +1811,7 @@ fn visual_server(width: u32, height: u32, pixel: u32) -> (String, thread::JoinHa
                     );
                     r#"{"ok":true}"#.to_owned()
                 }
+                "/__shutdown" => r#"{"ok":true}"#.to_owned(),
                 "/api/v1/display/screen" => {
                     let mut pixels = vec![0_u32; (width * height) as usize];
                     pixels[0] = pixel;
@@ -1819,9 +1820,27 @@ fn visual_server(width: u32, height: u32, pixel: u32) -> (String, thread::JoinHa
                 other => panic!("unexpected visual test route: {other}"),
             };
             request.respond(Response::from_string(body)).unwrap();
+            if route == "/__shutdown" {
+                break;
+            }
         }
     });
     (url, worker)
+}
+
+fn stop_visual_server(url: &str) {
+    let response = reqwest::blocking::get(format!("{url}/__shutdown")).unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+}
+
+#[test]
+fn visual_server_survives_idle_gap_longer_than_poll_interval() {
+    let (url, worker) = visual_server(32, 8, 0xFF0000);
+    thread::sleep(Duration::from_millis(300));
+    let response = reqwest::blocking::get(format!("{url}/api/v1/device"));
+    stop_visual_server(&url);
+    worker.join().unwrap();
+    assert_eq!(response.unwrap().status(), reqwest::StatusCode::OK);
 }
 
 fn run_visual_case(
@@ -1859,6 +1878,7 @@ fn run_visual_case(
         "--manifest",
         root.path().join("awtrix.toml").to_str().unwrap(),
     ]);
+    stop_visual_server(&url);
     worker.join().unwrap();
     (output, root)
 }
