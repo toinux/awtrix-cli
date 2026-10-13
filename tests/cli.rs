@@ -1571,6 +1571,52 @@ fn reboot_wait_requires_offline_then_online_and_uses_official_route() {
 }
 
 #[test]
+fn reboot_wait_window_starts_after_slow_initial_read_and_reboot_response() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        thread::sleep(Duration::from_millis(700));
+        request.respond(Response::from_string("{}")).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device/reboot");
+        thread::sleep(Duration::from_millis(700));
+        request.respond(Response::from_string("{}")).unwrap();
+        let request = server
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request
+            .respond(Response::from_string("offline").with_status_code(503))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request.respond(Response::from_string("{}")).unwrap();
+    });
+    let output = run(&[
+        "--json",
+        "--timeout",
+        "2000",
+        "--target",
+        &url,
+        "settings",
+        "reboot",
+        "--wait-secs",
+        "1",
+    ]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["online_observed"], true);
+}
+
+#[test]
 fn reboot_lost_response_is_uncertain_and_never_retried() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());

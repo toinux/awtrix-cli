@@ -139,7 +139,6 @@ pub fn run(command: &Command, api: &crate::ApiClient, timeout_ms: u64) -> crate:
             )
             .map_err(map_storage_state),
         Command::Reboot { wait_secs } => {
-            let deadline = Instant::now() + Duration::from_secs(*wait_secs);
             let request_timeout = Duration::from_millis(timeout_ms.max(1));
             api.get("/api/v1/device")?;
             // One POST only: if its response is lost, the outcome is ambiguous and not retried.
@@ -162,6 +161,8 @@ pub fn run(command: &Command, api: &crate::ApiClient, timeout_ms: u64) -> crate:
             if *wait_secs == 0 {
                 return Ok(json!({"accepted":true,"online_observed":false,"waited":false}));
             }
+            // The requested observation window begins once the reboot POST is accepted.
+            let deadline = Instant::now() + Duration::from_secs(*wait_secs);
             let mut offline_observed = false;
             while Instant::now() < deadline {
                 let remaining = deadline.saturating_duration_since(Instant::now());
