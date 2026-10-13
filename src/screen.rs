@@ -10,10 +10,10 @@ const MAX_RESPONSE_BYTES: u64 = MAX_PIXELS * 10 + 4096;
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Capture the current framebuffer as PNG or true-color ANSI.
+    /// Capture the current framebuffer as PNG, true-color ANSI, or emoji.
     #[command(
-        about = "Capture the current framebuffer as PNG or ANSI",
-        long_about = "PNG is the default and requires --output. ANSI uses exact 24-bit RGB colors and the upper-half block; stdout needs a true-color ANSI terminal, while --output atomically replaces a text file. Human stdout contains only the rendering. With --json and no output, fields are format,width,height,text; with --output, fields are path,format,width,height. --fields projects those results. Examples: screen capture --format ansi; screen capture --format ansi --output capture.ansi. Framebuffer captures do not reproduce physical brightness or LED corrections and are not synchronized deterministically to a frame."
+        about = "Capture the current framebuffer as PNG, ANSI, or emoji",
+        long_about = "PNG is the default and requires --output. ANSI uses exact 24-bit RGB colors and the upper-half block; emoji maps each pixel to the nearest representative palette emoji by squared Euclidean RGB distance. ANSI stdout needs a true-color terminal; emoji stdout is a text rendering. --output atomically replaces a file for ANSI and emoji. Human stdout contains only the rendering. With --json and no output, fields are format,width,height,text; with --output, fields are path,format,width,height. --fields projects those results. Examples: screen capture --format emoji; screen capture --format emoji --output capture.txt. Color approximation cannot reproduce physical brightness or LED corrections; captures are not synchronized deterministically to a frame."
     )]
     Capture {
         /// Capture format.
@@ -29,6 +29,7 @@ pub enum Command {
 pub enum Format {
     Png,
     Ansi,
+    Emoji,
 }
 
 pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value> {
@@ -131,6 +132,22 @@ pub(crate) fn run_with_timeout(
                     json!({"format":"ansi","width":width,"height":height,"text":text,"__raw_stdout":true}),
                 );
             }
+            if *format == Format::Emoji {
+                let mut text = String::new();
+                for (index, pixel) in packed_pixels.iter().enumerate() {
+                    text.push(nearest_emoji(*pixel));
+                    if index % width as usize == width as usize - 1 {
+                        text.push('\n');
+                    }
+                }
+                if let Some(path) = output {
+                    persist_sibling(path, text.as_bytes())?;
+                    return Ok(json!({"path":path,"format":"emoji","width":width,"height":height}));
+                }
+                return Ok(
+                    json!({"format":"emoji","width":width,"height":height,"text":text,"__raw_stdout":true}),
+                );
+            }
             // Encode everything in memory before opening any file, so malformed input never
             // truncates a previously captured image.
             let mut encoded = Vec::new();
@@ -151,6 +168,36 @@ pub(crate) fn run_with_timeout(
             Ok(json!({"path":output,"format":"png","width":width,"height":height}))
         }
     }
+}
+
+const EMOJI_PALETTE: &[(u32, char)] = &[
+    (0x000000, '⬛'),
+    (0xffffff, '⬜'),
+    (0xff0000, '🟥'),
+    (0xff8000, '🟧'),
+    (0xffff00, '🟨'),
+    (0x00ff00, '🟩'),
+    (0x0064ff, '🟦'),
+    (0xc800ff, '🟪'),
+    (0x804000, '🟫'),
+];
+
+/// Choose the closest representative by squared Euclidean distance in RGB; palette order breaks ties.
+fn nearest_emoji(pixel: u32) -> char {
+    let channel = |color: u32, shift: u32| ((color >> shift) & 0xff) as i32;
+    EMOJI_PALETTE
+        .iter()
+        .min_by_key(|(color, _)| {
+            [16, 8, 0]
+                .into_iter()
+                .map(|shift| {
+                    let diff = channel(*color, shift) - channel(pixel, shift);
+                    diff * diff
+                })
+                .sum::<i32>()
+        })
+        .map(|(_, emoji)| *emoji)
+        .unwrap_or('⬛')
 }
 
 /// Capture one bounded framebuffer to a durable caller-selected PNG path.
@@ -198,5 +245,5 @@ pub(crate) fn persist_sibling(path: &PathBuf, bytes: &[u8]) -> crate::CliResult<
 }
 
 pub fn describe() -> Value {
-    json!({"command":"screen capture","parameters":{"--format":"png (default, requires --output) or ansi (optional --output)","--output":"PNG is required; ANSI is optional. Atomically replaces destination; parent directory must exist and be writable"},"inputs":["GET /api/v1/display/screen; row-major pixels are unsigned decimal packed 0xRRGGBB"],"outputs":["path, format, width, height"],"stdout_json_fields":["format","width","height","text"],"examples":["awtrix-cli screen capture --output capture.png","awtrix-cli screen capture --format ansi","awtrix-cli screen capture --format ansi --output capture.ansi","awtrix-cli --json screen capture --format ansi"],"prerequisites":["AWTRIX NG framebuffer route", "existing writable destination parent directory; missing parents are not created"],"semantics":["PNG is the default; ANSI emits exact 24-bit RGB using ▀, with upper pixel foreground, lower pixel background, black for a missing odd-height lower pixel, and a reset at each output line", "ANSI stdout is a rendering only and requires a true-color ANSI-compatible terminal", "Output files are rendered before sibling-temp atomic replacement", "--fields projects the stdout JSON or file receipt; projection failure does not undo replacement"],"limitations":["Framebuffer does not reproduce physical brightness or LED corrections and is not synchronized deterministically to a frame"]})
+    json!({"command":"screen capture","parameters":{"--format":"png (default, requires --output), ansi, or emoji (ANSI/emoji allow optional --output)","--output":"PNG is required; ANSI and emoji are optional. Atomically replaces destination; parent directory must exist and be writable"},"inputs":["GET /api/v1/display/screen; row-major pixels are unsigned decimal packed 0xRRGGBB"],"outputs":["path, format, width, height"],"stdout_json_fields":["format","width","height","text"],"examples":["awtrix-cli screen capture --output capture.png","awtrix-cli screen capture --format ansi","awtrix-cli screen capture --format emoji","awtrix-cli screen capture --format emoji --output capture.txt","awtrix-cli --json screen capture --format emoji"],"prerequisites":["AWTRIX NG framebuffer route", "existing writable destination parent directory; missing parents are not created"],"semantics":["PNG is the default; ANSI emits exact 24-bit RGB using ▀, with upper pixel foreground, lower pixel background, black for a missing odd-height lower pixel, and a reset at each output line", "ANSI stdout is a rendering only and requires a true-color ANSI-compatible terminal", "Emoji emits one palette square per pixel and newline per row; nearest representative uses squared Euclidean RGB distance, with palette order resolving ties", "Palette RGB representatives: black #000000 ⬛, white #FFFFFF ⬜, red #FF0000 🟥, orange #FF8000 🟧, yellow #FFFF00 🟨, green #00FF00 🟩, blue #0064FF 🟦, purple #C800FF 🟪, brown #804000 🟫", "Output files are rendered before sibling-temp atomic replacement", "--fields projects the stdout JSON or file receipt; projection failure does not undo replacement"],"limitations":["Framebuffer does not reproduce physical brightness or LED corrections and is not synchronized deterministically to a frame"]})
 }
