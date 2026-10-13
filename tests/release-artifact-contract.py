@@ -9,6 +9,14 @@ WORKFLOW = Path(".github/workflows/verify.yml").read_text(encoding="utf-8")
 
 
 class ReleaseArtifactContractTests(unittest.TestCase):
+    def test_fast_checks_run_on_pushes_and_matrix_is_limited_to_prs_and_tags(self):
+        self.assertIn("  quick-check:\n    name: quick-check", WORKFLOW)
+        self.assertIn("uses: Swatinem/rust-cache@v2", WORKFLOW)
+        self.assertRegex(
+            WORKFLOW,
+            re.compile(r"host-test:\s+if: github\.event_name == 'pull_request' \|\| startsWith\(github\.ref, 'refs/tags/v'\)"),
+        )
+
     def test_uploaded_binary_basename_is_kept_inside_target_named_directory(self):
         self.assertIn("name: awtrix-cli-${{ matrix.target }}", WORKFLOW)
         self.assertIn("merge-multiple: false", WORKFLOW)
@@ -27,10 +35,13 @@ class ReleaseArtifactContractTests(unittest.TestCase):
 
     def test_release_job_waits_for_native_checks_and_verifies_assets_first(self):
         release_job = WORKFLOW.split("  release:\n", maxsplit=1)[1]
-        self.assertRegex(release_job, re.compile(r"needs:\s*host-test"))
+        self.assertIn("needs: [quick-check, host-test]", release_job)
         self.assertIn("gh release upload \"$TAG\" release-assets/* --clobber", release_job)
         self.assertIn("sha256sum awtrix-cli-x86_64-unknown-linux-gnu", release_job)
         self.assertIn("gh release edit \"$TAG\" --draft=false --latest", release_job)
+        self.assertIn("annotated release tag must include release notes", release_job)
+        self.assertIn("release_notes=\"$(printf 'AWTRIX CLI %s\\n\\n%s' \"$TAG\" \"$notes\")\"", release_job)
+        self.assertIn('gh release edit "$TAG" --draft --notes "$release_notes"', release_job)
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ import sys
 
 
 HOST_CHECKS = {
+    "quick-check",
     "host-test (x86_64-unknown-linux-gnu)",
     "host-test (aarch64-apple-darwin)",
     "host-test (x86_64-pc-windows-msvc)",
