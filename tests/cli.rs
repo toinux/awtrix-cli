@@ -3132,6 +3132,39 @@ fn concurrent_profile_adds_preserve_both_updates() {
 }
 
 #[test]
+fn failed_profile_save_preserves_existing_configuration() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("config.json");
+    let prior =
+        br#"{"profiles":{"existing":{"target":"http://existing.local"}},"default":"existing"}"#;
+    std::fs::write(&config, prior).unwrap();
+    // save() writes config.json.tmp before renaming it over config.json.
+    std::fs::create_dir(config.with_extension("tmp")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args([
+            "--json",
+            "profile",
+            "add",
+            "new",
+            "--target",
+            "http://new.local",
+        ])
+        .env("AWTRIX_CONFIG", &config)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let saved = std::fs::read(&config).unwrap();
+    assert_eq!(saved, prior);
+    let parsed: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(
+        parsed["profiles"]["existing"]["target"],
+        "http://existing.local"
+    );
+}
+
+#[test]
 fn profile_crud_persists_isolated_config_and_never_displays_secrets() {
     let dir = std::env::temp_dir().join(format!("awtrix-profile-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
