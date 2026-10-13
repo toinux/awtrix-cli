@@ -57,6 +57,12 @@ permissions:
   - action: shell
     resource: "python3 tests/agent-workflow/test_implementation_gate.py*"
     effect: allow
+  - action: shell
+    resource: "python tests/agent-permissions/test_agent_permissions.py*"
+    effect: allow
+  - action: shell
+    resource: "python3 tests/agent-permissions/test_agent_permissions.py*"
+    effect: allow
 ---
 
 Review the explicit base-to-head diff in the supplied absolute worktree. Use the dedicated `glob`, `grep` and `read` tools for file discovery, searching and reading. Keep shell use within the explicit allowlist in this file, with every shell workdir set explicitly. Read AGENTS.md, GLOSSARY.md, relevant ADRs, the full spec, assigned ticket and any documented technical contracts. Load rust-best-practices when reviewing Rust.

@@ -20,12 +20,21 @@ RULE = re.compile(
 def agent(name):
     text = (AGENTS / f"{name}.md").read_text(encoding="utf-8")
     frontmatter = text.split("---", 2)[1]
+    return parse_agent(name, frontmatter), text
+
+
+def parse_agent(name, frontmatter):
     top_level_keys = {
         match.group(1)
         for match in re.finditer(r"^([A-Za-z][\w-]*):", frontmatter, re.MULTILINE)
     }
     rules = [match.groupdict() for match in RULE.finditer(frontmatter)]
-    return text, top_level_keys, rules
+    legacy = top_level_keys & {"permission", "bash", "task"}
+    if legacy:
+        raise AssertionError(f"{name} uses legacy agent fields: {', '.join(sorted(legacy))}")
+    if "permissions" not in top_level_keys or not rules:
+        raise AssertionError(f"{name} is missing V2 permission rules")
+    return top_level_keys, rules
 
 
 def allowed(rules, command):
@@ -43,31 +52,42 @@ class AgentPermissionTests(unittest.TestCase):
         self.assertTrue(files, "no custom agent files found")
         for path in files:
             with self.subTest(agent=path.name):
-                text, keys, rules = agent(path.stem)
-                self.assertNotIn("permission", keys, f"{path.name} uses legacy permission:")
-                self.assertNotIn("bash", keys, f"{path.name} uses legacy bash:")
-                self.assertNotIn("task", keys, f"{path.name} uses legacy task:")
+                (keys, rules), _ = agent(path.stem)
                 self.assertIn("permissions", keys)
                 self.assertTrue(rules, f"{path.name} has no V2 permission rules")
 
     def test_reviewer_merge_base_exception_does_not_allow_git_merge(self):
-        _, _, rules = agent("awtrix-reviewer")
+        (_, rules), _ = agent("awtrix-reviewer")
         self.assertTrue(allowed(rules, "git merge-base --is-ancestor base head"))
         self.assertFalse(allowed(rules, "git merge feature"))
 
     def test_implementer_can_check_ancestry_but_cannot_merge_push_or_mutate_github(self):
-        _, _, rules = agent("awtrix-implementer")
+        (_, rules), _ = agent("awtrix-implementer")
         self.assertTrue(allowed(rules, "git merge-base --is-ancestor base head"))
         self.assertFalse(allowed(rules, "git merge feature"))
         self.assertFalse(allowed(rules, "git push origin feature"))
         self.assertFalse(allowed(rules, "gh issue edit 47 --add-label ready-for-human"))
 
     def test_reviewer_uses_dedicated_file_tools_and_restricted_shell(self):
-        text, _, rules = agent("awtrix-reviewer")
+        (_, rules), text = agent("awtrix-reviewer")
         for tool in ("glob", "grep", "read"):
             self.assertIn(f"`{tool}`", text)
+        allowed_rules = {
+            rule["resource"] for rule in rules
+            if rule["action"] == "shell" and rule["effect"] == "allow"
+        }
+        self.assertEqual(allowed_rules, {
+            "git status*", "git diff*", "git log*", "git show*", "git rev-parse*",
+            "git merge-base*", "gh issue view*", "gh pr view*", "gh run view*",
+            "gh api --method GET *", "cargo fmt --check*", "cargo clippy*", "cargo test*",
+            "python tests/agent-workflow/test_implementation_gate.py*",
+            "python3 tests/agent-workflow/test_implementation_gate.py*",
+            "python tests/agent-permissions/test_agent_permissions.py*",
+            "python3 tests/agent-permissions/test_agent_permissions.py*",
+        })
         self.assertFalse(allowed(rules, "find . -name '*.md'"))
         self.assertFalse(allowed(rules, "cat AGENTS.md"))
+        self.assertFalse(allowed(rules, "git push origin feature"))
         self.assertFalse(allowed(rules, "gh issue comment 47 --body update"))
 
     def test_project_agents_load_with_expected_models(self):
@@ -78,10 +98,14 @@ class AgentPermissionTests(unittest.TestCase):
         }
         for name, model in expected.items():
             with self.subTest(agent=name):
-                _, keys, _ = agent(name)
+                (keys, _), _ = agent(name)
                 self.assertIn("model", keys)
                 text = (AGENTS / f"{name}.md").read_text(encoding="utf-8")
                 self.assertRegex(text, rf"(?m)^model: {re.escape(model)}$")
+
+    def test_legacy_permission_key_is_rejected(self):
+        with self.assertRaisesRegex(AssertionError, "legacy agent fields: permission"):
+            parse_agent("fixture", "permission:\n  bash: allow\n")
 
 
 if __name__ == "__main__":
