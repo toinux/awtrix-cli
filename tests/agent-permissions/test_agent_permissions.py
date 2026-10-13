@@ -20,7 +20,8 @@ RULE = re.compile(
 def agent(name):
     text = (AGENTS / f"{name}.md").read_text(encoding="utf-8")
     frontmatter = text.split("---", 2)[1]
-    return parse_agent(name, frontmatter), text
+    keys, rules = parse_agent(name, frontmatter)
+    return keys, rules, text
 
 
 def parse_agent(name, frontmatter):
@@ -52,24 +53,24 @@ class AgentPermissionTests(unittest.TestCase):
         self.assertTrue(files, "no custom agent files found")
         for path in files:
             with self.subTest(agent=path.name):
-                (keys, rules), _ = agent(path.stem)
+                keys, rules, _ = agent(path.stem)
                 self.assertIn("permissions", keys)
                 self.assertTrue(rules, f"{path.name} has no V2 permission rules")
 
     def test_reviewer_merge_base_exception_does_not_allow_git_merge(self):
-        (_, rules), _ = agent("awtrix-reviewer")
+        _, rules, _ = agent("awtrix-reviewer")
         self.assertTrue(allowed(rules, "git merge-base --is-ancestor base head"))
         self.assertFalse(allowed(rules, "git merge feature"))
 
     def test_implementer_can_check_ancestry_but_cannot_merge_push_or_mutate_github(self):
-        (_, rules), _ = agent("awtrix-implementer")
+        _, rules, _ = agent("awtrix-implementer")
         self.assertTrue(allowed(rules, "git merge-base --is-ancestor base head"))
         self.assertFalse(allowed(rules, "git merge feature"))
         self.assertFalse(allowed(rules, "git push origin feature"))
         self.assertFalse(allowed(rules, "gh issue edit 47 --add-label ready-for-human"))
 
     def test_reviewer_uses_dedicated_file_tools_and_restricted_shell(self):
-        (_, rules), text = agent("awtrix-reviewer")
+        _, rules, text = agent("awtrix-reviewer")
         for tool in ("glob", "grep", "read"):
             self.assertIn(f"`{tool}`", text)
         allowed_rules = {
@@ -98,7 +99,7 @@ class AgentPermissionTests(unittest.TestCase):
         }
         for name, model in expected.items():
             with self.subTest(agent=name):
-                (keys, _), _ = agent(name)
+                keys, _, _ = agent(name)
                 self.assertIn("model", keys)
                 text = (AGENTS / f"{name}.md").read_text(encoding="utf-8")
                 self.assertRegex(text, rf"(?m)^model: {re.escape(model)}$")
