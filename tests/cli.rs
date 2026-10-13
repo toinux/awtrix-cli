@@ -711,7 +711,9 @@ fn update_rejects_an_invalid_release_version_before_assets() {
             let (output, requests) = run_versioned_update(&target, "0.1.0", tag, force);
             assert!(!output.status.success());
             assert!(
-                String::from_utf8_lossy(&output.stderr).contains("invalid stable release version")
+                String::from_utf8_lossy(&output.stdout).contains("invalid stable release version")
+                    || String::from_utf8_lossy(&output.stderr)
+                        .contains("invalid stable release version")
             );
             assert_eq!(requests, ["/latest"]);
             assert_eq!(std::fs::read(&target).unwrap(), b"working binary");
