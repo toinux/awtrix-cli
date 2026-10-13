@@ -84,6 +84,21 @@ awtrix-cli logs follow --duration-secs 15
 awtrix-cli script verify main --duration-secs 10 --capture main.png
 ```
 
+### Capture the screen
+
+PNG is the default and is best when the agent needs to inspect the image. To
+show a text rendering in the conversation, request emoji explicitly (or ask
+your agent to show the screen); ANSI is also available for true-color terminals:
+
+```sh
+awtrix-cli screen capture --output capture.png
+awtrix-cli screen capture --format emoji
+awtrix-cli screen capture --format ansi
+```
+
+Emoji approximates each pixel with a representative color, so it is a readable
+preview rather than an exact image.
+
 ## What you can do
 
 - **Control the display:** inspect device information and capabilities, adjust settings, change brightness or power, and reboot.

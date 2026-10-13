@@ -139,6 +139,14 @@ a screenshot, or a visual discrepancy. A capture establishes pixels at capture
 time, not an app's identity; state and capture are separate observations and
 rotation can occur between them.
 
+Choose the capture format for its consumer. PNG is the default: save it to a
+task-owned `.png` path when the agent will inspect the image. When the user asks
+the agent to show or return a screenshot, treat that as a request to render it
+in the conversation (the user is interacting through a harness): use
+`screen capture --format emoji` by default, unless the user explicitly requests
+another format. Emoji is an approximate text preview, not a pixel-exact image.
+Use ANSI only when requested or when a true-color terminal rendering is wanted.
+
 `apps select` acknowledges selection without guaranteeing visibility or
 dismissing notifications. `apps order-get` reports inventory slot projections,
 not the full persisted rotation document. Before `apps order-set`, determine
