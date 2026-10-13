@@ -10,16 +10,16 @@ const MAX_RESPONSE_BYTES: u64 = MAX_PIXELS * 10 + 4096;
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Capture the current framebuffer to a PNG.
+    /// Capture the current framebuffer as PNG or true-color ANSI.
     #[command(
-        about = "Capture the current framebuffer to PNG",
-        long_about = "Framebuffer captures do not reproduce physical brightness or LED corrections and are not synchronized deterministically to a frame."
+        about = "Capture the current framebuffer as PNG or ANSI",
+        long_about = "PNG is the default and requires --output. ANSI uses exact 24-bit RGB colors and the upper-half block; stdout needs a true-color ANSI terminal, while --output atomically replaces a text file. Human stdout contains only the rendering. With --json and no output, fields are format,width,height,text; with --output, fields are path,format,width,height. --fields projects those results. Examples: screen capture --format ansi; screen capture --format ansi --output capture.ansi. Framebuffer captures do not reproduce physical brightness or LED corrections and are not synchronized deterministically to a frame."
     )]
     Capture {
         /// Capture format.
         #[arg(long, value_enum, default_value = "png")]
         format: Format,
-        /// Optional destination for rendered text; required for PNG.
+        /// Optional destination for rendered text; required for PNG and atomically replaces existing files.
         #[arg(long)]
         output: Option<PathBuf>,
     },
@@ -33,6 +33,15 @@ pub enum Format {
 
 pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value> {
     run_with_timeout(command, api, Duration::from_secs(86400))
+}
+pub(crate) fn validate(command: &Command) -> crate::CliResult<()> {
+    match command {
+        Command::Capture {
+            format: Format::Png,
+            output: None,
+        } => Err(("ARGUMENT", "--output is required for PNG capture".into())),
+        _ => Ok(()),
+    }
 }
 pub(crate) fn run_with_timeout(
     command: &Command,
@@ -191,5 +200,5 @@ pub(crate) fn persist_sibling(path: &PathBuf, bytes: &[u8]) -> crate::CliResult<
 }
 
 pub fn describe() -> Value {
-    json!({"command":"screen capture","parameters":{"--output":"required PNG destination path; atomically replaces an existing file; parent directory must already exist and be writable"},"inputs":["GET /api/v1/display/screen; row-major pixels are unsigned decimal packed 0xRRGGBB"],"outputs":["path, format, width, height"],"examples":["awtrix-cli screen capture --output capture.png","awtrix-cli --json screen capture --output capture.png"],"prerequisites":["AWTRIX NG framebuffer route", "existing writable destination parent directory; missing parents are not created"],"semantics":["Validate and encode the complete PNG before writing a sibling temporary file and atomically replacing the destination", "--fields projects the result after saving; projection failure does not undo replacement"],"limitations":["Framebuffer does not reproduce physical brightness or LED corrections and is not synchronized deterministically to a frame"]})
+    json!({"command":"screen capture","parameters":{"--format":"png (default, requires --output) or ansi (optional --output)","--output":"PNG is required; ANSI is optional. Atomically replaces destination; parent directory must exist and be writable"},"inputs":["GET /api/v1/display/screen; row-major pixels are unsigned decimal packed 0xRRGGBB"],"outputs":["path, format, width, height"],"stdout_json_fields":["format","width","height","text"],"examples":["awtrix-cli screen capture --output capture.png","awtrix-cli screen capture --format ansi","awtrix-cli screen capture --format ansi --output capture.ansi","awtrix-cli --json screen capture --format ansi"],"prerequisites":["AWTRIX NG framebuffer route", "existing writable destination parent directory; missing parents are not created"],"semantics":["PNG is the default; ANSI emits exact 24-bit RGB using ▀, with upper pixel foreground, lower pixel background, black for a missing odd-height lower pixel, and a reset at each output line", "ANSI stdout is a rendering only and requires a true-color ANSI-compatible terminal", "Output files are rendered before sibling-temp atomic replacement", "--fields projects the stdout JSON or file receipt; projection failure does not undo replacement"],"limitations":["Framebuffer does not reproduce physical brightness or LED corrections and is not synchronized deterministically to a frame"]})
 }

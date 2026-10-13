@@ -7409,3 +7409,145 @@ fn screen_capture_ansi_renders_exact_true_color_rows() {
     );
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "\x1b[38;2;255;0;0m\x1b[48;2;0;255;0m▀\x1b[0m\n\x1b[38;2;0;0;255m\x1b[48;2;0;0;0m▀\x1b[0m\n");
 }
+
+#[test]
+fn screen_capture_ansi_file_and_json_outputs_follow_destination_contract() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("capture.ansi");
+    std::fs::write(&path, "old").unwrap();
+    let expected = "\x1b[38;2;255;0;0m\x1b[48;2;0;255;0m▀\x1b[0m\n";
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"{"width":1,"height":2,"pixels":[16711680,65280]}"#,
+            ))
+            .unwrap()
+    });
+    let path_arg = path.to_string_lossy().into_owned();
+    let output = run(&[
+        "--target", &url, "--json", "screen", "capture", "--format", "ansi", "--output", &path_arg,
+    ]);
+    worker.join().unwrap();
+    let receipt: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(receipt["format"], "ansi");
+    assert_eq!(receipt["path"], path_arg);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+    std::fs::remove_file(&path).unwrap();
+
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"{"width":1,"height":2,"pixels":[16711680,65280]}"#,
+            ))
+            .unwrap()
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "--fields",
+        "format,path",
+        "screen",
+        "capture",
+        "--format",
+        "ansi",
+        "--output",
+        &path_arg,
+    ]);
+    worker.join().unwrap();
+    let projected: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        projected,
+        serde_json::json!({"format":"ansi","path":path_arg})
+    );
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
+    std::fs::remove_file(&path).unwrap();
+
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"{"width":1,"height":2,"pixels":[16711680,65280]}"#,
+            ))
+            .unwrap()
+    });
+    let output = run(&[
+        "--target", &url, "--json", "screen", "capture", "--format", "ansi",
+    ]);
+    worker.join().unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["text"], expected);
+    assert_eq!(result["width"], 1);
+}
+
+#[test]
+fn screen_capture_ansi_invalid_frame_preserves_existing_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("capture.ansi");
+    std::fs::write(&path, "existing").unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"{"width":1,"height":2,"pixels":[16777216,0]}"#,
+            ))
+            .unwrap()
+    });
+    let path_arg = path.to_string_lossy().into_owned();
+    let output = run(&[
+        "--target", &url, "--json", "screen", "capture", "--format", "ansi", "--output", &path_arg,
+    ]);
+    worker.join().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "existing");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn screen_capture_ansi_fields_projection_and_discovery_are_documented() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(
+                r#"{"width":1,"height":1,"pixels":[0]}"#,
+            ))
+            .unwrap()
+    });
+    let output = run(&[
+        "--target",
+        &url,
+        "--json",
+        "--fields",
+        "format,width",
+        "screen",
+        "capture",
+        "--format",
+        "ansi",
+    ]);
+    worker.join().unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result, serde_json::json!({"format":"ansi","width":1}));
+    let help = run(&["screen", "capture", "--help"]);
+    let help = String::from_utf8_lossy(&help.stdout);
+    assert!(help.contains("png") && help.contains("ansi"));
+    let description = run(&["describe", "screen", "capture", "--offline"]);
+    let description = String::from_utf8_lossy(&description.stdout);
+    assert!(description.contains("ANSI") && description.contains("terminal"));
+}

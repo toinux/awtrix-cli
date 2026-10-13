@@ -672,7 +672,13 @@ fn main() -> ExitCode {
             if cli.json {
                 let mut value = value;
                 value.as_object_mut().unwrap().remove("__raw_stdout");
-                println!("{}", serde_json::to_string(&value).unwrap());
+                match render(value, &cli.fields, true) {
+                    Ok(rendered) => println!("{rendered}"),
+                    Err(message) => {
+                        emit_error("UNKNOWN_FIELD", &message, true);
+                        return ExitCode::from(2);
+                    }
+                }
             } else if cli.fields.is_empty() {
                 print!("{}", value["text"].as_str().unwrap_or_default());
             } else {
@@ -827,6 +833,9 @@ fn run_command(cli: &Cli) -> CliResult<Value> {
     }
     if let Command::Settings { action } = &cli.command {
         settings::validate(action).map_err(|message| ("ARGUMENT", message))?;
+    }
+    if let Command::Screen { action } = &cli.command {
+        screen::validate(action)?;
     }
     let explicit_target =
         std::env::args().any(|arg| arg == "--target" || arg.starts_with("--target="));
