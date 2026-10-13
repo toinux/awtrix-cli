@@ -30,6 +30,7 @@ Match the user's intent to the smallest suitable capability:
 | See rendered pixels or save an image | `screen capture` |
 | Temporary content or progress | `apps` |
 | One-off notification | `notify` |
+| Minify a local Berry source file | `minify` (local, top-level command) |
 | Inspect/change an existing script; quick standalone experiment | `script` |
 | Develop/maintain source files; coordinate resources or configuration | Consider `project` |
 | Validate/deploy an `awtrix.toml` project | `project` |
@@ -57,7 +58,9 @@ reference, previous command output, or an explicit example. Documented examples
 are reliable enough to execute directly when they match the need.
 
 - Use `--help` only for unknown exact syntax or required options. If the operation
-  itself is unknown, inspect its family, e.g. `awtrix-cli script --help`.
+  itself is unknown, inspect the known family help, or `awtrix-cli --help` when
+  its family is unknown. Discover description topics independently with
+  `describe --list` when needed.
 - Use `describe <topic> --offline` for missing semantics, schemas, outputs, or
   examples, e.g. `awtrix-cli --json describe apps create --offline`. Topics accept
   separate words or a quoted string. Use `describe --list` only when the required
@@ -71,6 +74,12 @@ are reliable enough to execute directly when they match the need.
   evidence, or a new unresolved question. A question about the current app needs
   a fresh observation because rotation can change it without an agent write.
   Fetch only task-relevant sources/data.
+
+For local minification, use `awtrix-cli --json minify ./src/main.ax`.
+It writes sibling `main.min.ax` and leaves the source unchanged.
+Its description topic is `minify`:
+`awtrix-cli --json describe minify --offline`.
+`script re-minify` instead modifies an installed remote script.
 
 Default to `--offline` for local documentation, even when `AWTRIX_URL` is set.
 Descriptions document operations without executing them or validating payloads.
@@ -135,6 +144,9 @@ dismissing notifications. `apps order-get` reports inventory slot projections,
 not the full persisted rotation document. Before `apps order-set`, determine
 the intended complete disabled-name set: omitted `--disabled` defaults to `[]`
 and can re-enable apps; omitted `--order` preserves the existing order.
+For a temporary rotation test requiring restoration, proceed only when the
+original order can be reliably restored; inventory slot projections are
+insufficient. Otherwise, leave the order unchanged and report the limitation.
 
 ### Send a notification or maintain a pushed app
 
