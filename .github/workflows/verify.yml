@@ -126,7 +126,7 @@ jobs:
       - name: Create draft release, upload assets, and publish
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
           set -euo pipefail
           notes="$(git for-each-ref "refs/tags/$TAG" --format='%(contents)')"
