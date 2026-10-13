@@ -2,26 +2,61 @@
 description: Reviews one assigned axis (Standards or Spec) of an AWTRIX diff independently using GPT-6 Luna.
 mode: subagent
 model: openai/gpt-6-luna
-permission:
-  edit: deny
-  task: deny
-  bash:
-    "*": deny
-    "git status*": allow
-    "git diff*": allow
-    "git log*": allow
-    "git show*": allow
-    "git rev-parse*": allow
-    "git merge-base*": allow
-    "gh issue view*": allow
-    "gh pr view*": allow
-    "gh run view*": allow
-    "gh api --method GET *": allow
-    "cargo fmt --check*": allow
-    "cargo clippy*": allow
-    "cargo test*": allow
-    "python tests/agent-workflow/test_implementation_gate.py*": allow
-    "python3 tests/agent-workflow/test_implementation_gate.py*": allow
+permissions:
+  - action: edit
+    resource: "*"
+    effect: deny
+  - action: subagent
+    resource: "*"
+    effect: deny
+  - action: shell
+    resource: "*"
+    effect: deny
+  - action: shell
+    resource: "git status*"
+    effect: allow
+  - action: shell
+    resource: "git diff*"
+    effect: allow
+  - action: shell
+    resource: "git log*"
+    effect: allow
+  - action: shell
+    resource: "git show*"
+    effect: allow
+  - action: shell
+    resource: "git rev-parse*"
+    effect: allow
+  - action: shell
+    resource: "git merge-base*"
+    effect: allow
+  - action: shell
+    resource: "gh issue view*"
+    effect: allow
+  - action: shell
+    resource: "gh pr view*"
+    effect: allow
+  - action: shell
+    resource: "gh run view*"
+    effect: allow
+  - action: shell
+    resource: "gh api --method GET *"
+    effect: allow
+  - action: shell
+    resource: "cargo fmt --check*"
+    effect: allow
+  - action: shell
+    resource: "cargo clippy*"
+    effect: allow
+  - action: shell
+    resource: "cargo test*"
+    effect: allow
+  - action: shell
+    resource: "python tests/agent-workflow/test_implementation_gate.py*"
+    effect: allow
+  - action: shell
+    resource: "python3 tests/agent-workflow/test_implementation_gate.py*"
+    effect: allow
 ---
 
 Review the explicit base-to-head diff in the supplied absolute worktree. Set every shell workdir and file/search scope explicitly. Read AGENTS.md, GLOSSARY.md, relevant ADRs, the full spec, assigned ticket and any documented technical contracts. Load rust-best-practices when reviewing Rust.

@@ -12,6 +12,22 @@ fn run(args: &[&str]) -> Output {
         .unwrap()
 }
 
+#[test]
+fn device_target_query_or_fragment_is_rejected_before_http() {
+    for suffix in ["?mode=bad", "#section"] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let target = format!("http://{}/base{suffix}", server.server_addr());
+        let output = run(&["--json", "--target", &target, "device", "state"]);
+        assert!(!output.status.success());
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["error"]["code"], "ARGUMENT");
+        assert!(server
+            .recv_timeout(Duration::from_millis(50))
+            .unwrap()
+            .is_none());
+    }
+}
+
 fn update_asset_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "awtrix-cli-x86_64-pc-windows-msvc.exe"
@@ -1571,6 +1587,52 @@ fn reboot_wait_requires_offline_then_online_and_uses_official_route() {
 }
 
 #[test]
+fn reboot_wait_window_starts_after_slow_initial_read_and_reboot_response() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        thread::sleep(Duration::from_millis(700));
+        request.respond(Response::from_string("{}")).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device/reboot");
+        thread::sleep(Duration::from_millis(700));
+        request.respond(Response::from_string("{}")).unwrap();
+        let request = server
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request
+            .respond(Response::from_string("offline").with_status_code(503))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/device");
+        request.respond(Response::from_string("{}")).unwrap();
+    });
+    let output = run(&[
+        "--json",
+        "--timeout",
+        "2000",
+        "--target",
+        &url,
+        "settings",
+        "reboot",
+        "--wait-secs",
+        "1",
+    ]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["online_observed"], true);
+}
+
+#[test]
 fn reboot_lost_response_is_uncertain_and_never_retried() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
@@ -3081,6 +3143,87 @@ fn project_profile_is_used_below_explicit_and_environment_targets() {
         "command-line"
     );
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn concurrent_profile_adds_preserve_both_updates() {
+    let root =
+        std::env::temp_dir().join(format!("awtrix-profile-concurrent-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let config = root.join("config.json");
+    let args = |name: &'static str, target: &'static str| {
+        Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+            .args(["--json", "profile", "add", name, "--target", target])
+            .env("AWTRIX_CONFIG", &config)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+    let first = args("first", "http://first.local");
+    let second = args("second", "http://second.local");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut first = first;
+    let mut second = second;
+    while first.try_wait().unwrap().is_none() || second.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() >= deadline {
+            let _ = first.kill();
+            let _ = second.kill();
+            panic!("concurrent profile commands exceeded five-second deadline");
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let first_output = first.wait_with_output().unwrap();
+    let second_output = second.wait_with_output().unwrap();
+    assert!(
+        first_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first_output.stderr)
+    );
+    assert!(
+        second_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second_output.stderr)
+    );
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    assert_eq!(saved["profiles"]["first"]["target"], "http://first.local");
+    assert_eq!(saved["profiles"]["second"]["target"], "http://second.local");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn failed_profile_save_preserves_existing_configuration() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("config.json");
+    let prior =
+        br#"{"profiles":{"existing":{"target":"http://existing.local"}},"default":"existing"}"#;
+    std::fs::write(&config, prior).unwrap();
+    // save() writes config.json.tmp before renaming it over config.json.
+    std::fs::create_dir(config.with_extension("tmp")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
+        .args([
+            "--json",
+            "profile",
+            "add",
+            "new",
+            "--target",
+            "http://new.local",
+        ])
+        .env("AWTRIX_CONFIG", &config)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let saved = std::fs::read(&config).unwrap();
+    assert_eq!(saved, prior);
+    let parsed: serde_json::Value = serde_json::from_slice(&saved).unwrap();
+    assert_eq!(
+        parsed["profiles"]["existing"]["target"],
+        "http://existing.local"
+    );
 }
 
 #[test]
