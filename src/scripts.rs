@@ -450,7 +450,8 @@ fn verify(
         } else {
             crate::screen::run_with_timeout(
                 &crate::screen::Command::Capture {
-                    output: path.clone(),
+                    format: crate::screen::Format::Png,
+                    output: Some(path.clone()),
                 },
                 api,
                 remaining,

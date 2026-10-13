@@ -668,6 +668,32 @@ fn main() -> ExitCode {
             eprintln!("awtrix: {diagnostic_code}: verification did not establish a healthy running script");
             ExitCode::from(1)
         }
+        Ok(value) if value.get("__raw_stdout").and_then(Value::as_bool) == Some(true) => {
+            if cli.json {
+                let mut value = value;
+                value.as_object_mut().unwrap().remove("__raw_stdout");
+                match render(value, &cli.fields, true) {
+                    Ok(rendered) => println!("{rendered}"),
+                    Err(message) => {
+                        emit_error("UNKNOWN_FIELD", &message, true);
+                        return ExitCode::from(2);
+                    }
+                }
+            } else if cli.fields.is_empty() {
+                print!("{}", value["text"].as_str().unwrap_or_default());
+            } else {
+                let mut value = value;
+                value.as_object_mut().unwrap().remove("__raw_stdout");
+                match render(value, &cli.fields, false) {
+                    Ok(rendered) => println!("{rendered}"),
+                    Err(message) => {
+                        emit_error("UNKNOWN_FIELD", &message, false);
+                        return ExitCode::from(2);
+                    }
+                }
+            }
+            ExitCode::SUCCESS
+        }
         Ok(value) => match render(value, &cli.fields, cli.json) {
             Ok(value) => {
                 println!("{value}");
