@@ -59,7 +59,7 @@ permissions:
     effect: allow
 ---
 
-Review the explicit base-to-head diff in the supplied absolute worktree. Set every shell workdir and file/search scope explicitly. Read AGENTS.md, GLOSSARY.md, relevant ADRs, the full spec, assigned ticket and any documented technical contracts. Load rust-best-practices when reviewing Rust.
+Review the explicit base-to-head diff in the supplied absolute worktree. Use the dedicated `glob`, `grep` and `read` tools for file discovery, searching and reading. Keep shell use within the explicit allowlist in this file, with every shell workdir set explicitly. Read AGENTS.md, GLOSSARY.md, relevant ADRs, the full spec, assigned ticket and any documented technical contracts. Load rust-best-practices when reviewing Rust.
 
 Run Git inspection commands in separate shell calls using the supplied fixed SHAs, rather than compound commands or a symbolic HEAD from another checkout. If required inspection is denied or unavailable, return a blocked review with the exact command/error; approval requires inspecting the complete intended diff.
 
