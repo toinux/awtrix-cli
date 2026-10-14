@@ -5,7 +5,6 @@ use serde_json::{json, Value};
 use std::{
     collections::HashSet,
     fs,
-    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -201,26 +200,17 @@ fn valid_uncertain_entry(entry: &str) -> bool {
 fn save_tracking(path: &Path, state: &Tracking) -> Result<()> {
     let bytes = serde_json::to_vec(state)
         .map_err(|_| ("TRACKING_WRITE", "cannot encode tracking state".into()))?;
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|_| {
-        (
-            "TRACKING_WRITE",
-            "cannot create private tracking state temporary file".into(),
-        )
-    })?;
-    tmp.write_all(&bytes)
-        .map_err(|_| ("TRACKING_WRITE", "cannot write tracking state".into()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o600))
-            .map_err(|_| ("TRACKING_WRITE", "cannot secure tracking state".into()))?;
-    }
-    tmp.persist(path).map(|_| ()).map_err(|_| {
-        (
-            "TRACKING_WRITE",
-            "cannot atomically replace tracking state".into(),
-        )
+    crate::persistence::replace(path, &bytes).map_err(|error| {
+        use crate::persistence::Error;
+        let message = match error {
+            Error::Create => "cannot create private tracking state temporary file",
+            #[cfg(unix)]
+            Error::Permissions => "cannot secure tracking state",
+            Error::Write => "cannot write tracking state",
+            Error::Sync => "cannot flush tracking state",
+            Error::Replace => "cannot atomically replace tracking state",
+        };
+        ("TRACKING_WRITE", message.into())
     })
 }
 

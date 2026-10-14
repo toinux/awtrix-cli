@@ -9,6 +9,7 @@ mod headless;
 mod logs;
 mod minify;
 mod notifications;
+mod persistence;
 mod profiles;
 mod project;
 mod release_notice;

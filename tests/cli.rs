@@ -2533,7 +2533,19 @@ fn project_deployment_orders_dependencies_and_reports_partial_failure_additively
         })
         .unwrap();
     let tracking: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(tracking_path).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(&tracking_path).unwrap()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&tracking_path)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
     assert_eq!(tracking["project"], "sample");
     assert_eq!(tracking["target"], url);
     assert_eq!(tracking["device_id"], "device-a");
@@ -3194,14 +3206,13 @@ fn concurrent_profile_adds_preserve_both_updates() {
 }
 
 #[test]
-fn failed_profile_save_preserves_existing_configuration() {
+fn failed_profile_lock_preserves_existing_configuration() {
     let root = tempfile::tempdir().unwrap();
     let config = root.path().join("config.json");
     let prior =
         br#"{"profiles":{"existing":{"target":"http://existing.local"}},"default":"existing"}"#;
     std::fs::write(&config, prior).unwrap();
-    // save() writes config.json.tmp before renaming it over config.json.
-    std::fs::create_dir(config.with_extension("tmp")).unwrap();
+    std::fs::create_dir(config.with_extension("lock")).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args([
@@ -3217,6 +3228,12 @@ fn failed_profile_save_preserves_existing_configuration() {
         .unwrap();
 
     assert!(!output.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error["error"]["code"], "CONFIG_INVALID");
+    assert_eq!(
+        error["error"]["message"],
+        "profile configuration cannot be locked"
+    );
     let saved = std::fs::read(&config).unwrap();
     assert_eq!(saved, prior);
     let parsed: serde_json::Value = serde_json::from_slice(&saved).unwrap();
@@ -3224,6 +3241,84 @@ fn failed_profile_save_preserves_existing_configuration() {
         parsed["profiles"]["existing"]["target"],
         "http://existing.local"
     );
+}
+
+#[test]
+fn profile_save_ignores_an_existing_predictable_temporary_path() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("config.json");
+    let prior =
+        br#"{"profiles":{"existing":{"target":"http://existing.local"}},"default":"existing"}"#;
+    std::fs::write(&config, prior).unwrap();
+    let old_temp = config.with_extension("tmp");
+    std::fs::create_dir(&old_temp).unwrap();
+    std::fs::write(old_temp.join("keep"), b"unrelated").unwrap();
+
+    let output = run_with_config(
+        &[
+            "--json",
+            "profile",
+            "add",
+            "new",
+            "--target",
+            "http://new.local",
+        ],
+        &config,
+    );
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    assert_eq!(
+        saved["profiles"]["existing"]["target"],
+        "http://existing.local"
+    );
+    assert_eq!(saved["profiles"]["new"]["target"], "http://new.local");
+    assert_eq!(saved["default"], "existing");
+    assert_eq!(std::fs::read(old_temp.join("keep")).unwrap(), b"unrelated");
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_save_does_not_follow_a_predictable_temporary_symlink() {
+    let root = tempfile::tempdir().unwrap();
+    let config = root.path().join("config.json");
+    let victim = root.path().join("unrelated");
+    std::fs::write(&victim, b"original").unwrap();
+    let old_temp = config.with_extension("tmp");
+    std::os::unix::fs::symlink(&victim, &old_temp).unwrap();
+
+    let output = run_with_config(
+        &[
+            "--json",
+            "profile",
+            "add",
+            "new",
+            "--target",
+            "http://new.local",
+            "--password",
+            "private-password",
+        ],
+        &config,
+    );
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read(&victim).unwrap(), b"original");
+    assert!(std::fs::symlink_metadata(&old_temp)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    let saved: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    assert_eq!(saved["profiles"]["new"]["password"], "private-password");
 }
 
 #[test]
@@ -3248,6 +3343,14 @@ fn profile_crud_persists_isolated_config_and_never_displays_secrets() {
         &config,
     );
     assert!(added.status.success());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(&config).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
     assert!(run_with_config(
         &[
             "--json",

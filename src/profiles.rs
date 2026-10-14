@@ -164,24 +164,16 @@ fn save(config: &Config) -> Result<()> {
             "profile configuration cannot be serialized".into(),
         )
     })?;
-    let temp = path.with_extension("tmp");
-    fs::write(&temp, bytes).map_err(|_| {
-        (
-            "CONFIG_INVALID",
-            "profile configuration cannot be written".into(),
-        )
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&temp, fs::Permissions::from_mode(0o600))
-            .map_err(|_| ("CONFIG_INVALID", "profile permissions cannot be set".into()))?;
-    }
-    fs::rename(temp, path).map_err(|_| {
-        (
-            "CONFIG_INVALID",
-            "profile configuration cannot be replaced".into(),
-        )
+    crate::persistence::replace(&path, &bytes).map_err(|error| {
+        use crate::persistence::Error;
+        let message = match error {
+            Error::Create | Error::Write => "profile configuration cannot be written",
+            #[cfg(unix)]
+            Error::Permissions => "profile permissions cannot be set",
+            Error::Sync => "profile configuration cannot be flushed",
+            Error::Replace => "profile configuration cannot be replaced",
+        };
+        ("CONFIG_INVALID", message.into())
     })
 }
 fn valid_url(url: &str) -> bool {
