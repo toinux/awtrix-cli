@@ -373,10 +373,10 @@ mod tests {
         let target = format!("http://{}", server.server_addr());
         let api = client_with_timeout(&target, "1000");
         let worker = thread::spawn(move || {
-            assert!(server
-                .recv_timeout(Duration::from_millis(100))
-                .unwrap()
-                .is_none());
+            // A zero deadline can still send headers before reqwest reports the timeout.
+            if let Some(request) = server.recv_timeout(Duration::from_millis(100)).unwrap() {
+                let _ = request.respond(Response::from_string("{}"));
+            }
         });
         assert_eq!(
             api.get_with_timeout("/timeout", Duration::ZERO)
