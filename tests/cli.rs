@@ -4893,6 +4893,84 @@ fn auth_failure_is_structured_and_does_not_leak_password() {
 }
 
 #[test]
+fn device_json_accepts_scalar_and_null_but_rejects_empty_whitespace_and_malformed_bodies() {
+    for (body, succeeds) in [
+        ("7", true),
+        ("null", true),
+        ("", false),
+        ("  \n", false),
+        ("{", false),
+    ] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_string(body))
+                .unwrap();
+        });
+        let output = run(&["--target", &url, "--json", "device", "state"]);
+        worker.join().unwrap();
+        assert_eq!(output.status.success(), succeeds, "body={body:?}");
+        if !succeeds {
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(result["error"]["code"], "INVALID_RESPONSE");
+        }
+    }
+}
+
+#[test]
+fn username_alone_authenticates_and_password_alone_does_not_create_basic_auth() {
+    for (credentials, expected) in [
+        (vec!["--username", "alice"], Some("Basic YWxpY2U6")),
+        (vec!["--password", "secret-only"], None),
+    ] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            let request = server.recv().unwrap();
+            let auth = request
+                .headers()
+                .iter()
+                .find(|header| header.field.equiv("Authorization"));
+            assert_eq!(auth.map(|header| header.value.as_str()), expected);
+            request.respond(Response::from_string("{}")).unwrap();
+        });
+        let mut args = vec!["--target", &url];
+        args.extend(credentials);
+        args.extend(["--json", "device", "state"]);
+        let output = run(&args);
+        worker.join().unwrap();
+        assert!(output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("secret-only"));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("secret-only"));
+    }
+}
+
+#[test]
+fn raw_source_preserves_empty_and_rejects_invalid_utf8() {
+    for (body, succeeds, expected) in [(Vec::new(), true, ""), (vec![0xff], false, "")] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            server
+                .recv()
+                .unwrap()
+                .respond(Response::from_data(body))
+                .unwrap();
+        });
+        let output = run(&["--target", &url, "script", "get", "demo"]);
+        worker.join().unwrap();
+        assert_eq!(output.status.success(), succeeds);
+        assert_eq!(output.stdout, expected.as_bytes());
+        if !succeeds {
+            assert!(String::from_utf8_lossy(&output.stderr).contains("script source is not UTF-8"));
+        }
+    }
+}
+
+#[test]
 fn field_selection_rejects_unknown_keys() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
