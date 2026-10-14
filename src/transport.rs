@@ -51,63 +51,23 @@ impl ApiClient {
     }
 
     pub(crate) fn get_with_timeout(&self, path: &str, timeout: Duration) -> CliResult<Value> {
-        let mut request = self
-            .client
-            .get(format!("{}{path}", self.base))
-            .timeout(timeout.min(self.timeout));
-        if let Some(username) = &self.username {
-            request = request.basic_auth(username, self.password.as_deref());
-        }
-        let response = request.send().map_err(|error| {
-            if error.is_timeout() {
-                ("TIMEOUT", "request timed out".to_string())
-            } else {
-                ("TRANSPORT", "could not reach the HTTP target".to_string())
-            }
-        })?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            return Err((
-                "AUTHENTICATION",
-                "device rejected HTTP Basic credentials".into(),
-            ));
-        }
-        if !response.status().is_success() {
-            return Err((
-                "HTTP",
-                format!("device returned HTTP {}", response.status().as_u16()),
-            ));
-        }
-        response
-            .json::<Value>()
-            .map_err(|_| ("INVALID_RESPONSE", "device returned invalid JSON".into()))
+        let request = self.authorized(
+            self.client
+                .get(format!("{}{path}", self.base))
+                .timeout(timeout.min(self.timeout)),
+        );
+        let response = self.send_ordinary(request)?;
+        self.strict_json_response(response)
     }
 
     pub(crate) fn raw_get(&self, path: &str) -> CliResult<String> {
-        let response = self
-            .authorized(self.client.get(format!("{}{path}", self.base)))
-            .send()
-            .map_err(|e| {
-                if e.is_timeout() {
-                    ("TIMEOUT", "request timed out".into())
-                } else {
-                    ("TRANSPORT", "could not reach the HTTP target".into())
-                }
-            })?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            return Err((
-                "AUTHENTICATION",
-                "device rejected HTTP Basic credentials".into(),
-            ));
-        }
+        let response =
+            self.send_ordinary(self.authorized(self.client.get(format!("{}{path}", self.base))))?;
+        // Source absence is the one route-specific status handled before common HTTP errors.
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(("HTTP", "script not found".into()));
         }
-        if !response.status().is_success() {
-            return Err((
-                "HTTP",
-                format!("device returned HTTP {}", response.status().as_u16()),
-            ));
-        }
+        let response = self.check_status(response)?;
         String::from_utf8(
             response
                 .bytes()
@@ -122,32 +82,13 @@ impl ApiClient {
         max_bytes: u64,
         timeout: Duration,
     ) -> CliResult<Vec<u8>> {
-        let response = self
-            .authorized(
-                self.client
-                    .get(format!("{}{path}", self.base))
-                    .timeout(timeout.min(self.timeout)),
-            )
-            .send()
-            .map_err(|error| {
-                if error.is_timeout() {
-                    ("TIMEOUT", "request timed out".into())
-                } else {
-                    ("TRANSPORT", "could not reach the HTTP target".into())
-                }
-            })?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            return Err((
-                "AUTHENTICATION",
-                "device rejected HTTP Basic credentials".into(),
-            ));
-        }
-        if !response.status().is_success() {
-            return Err((
-                "HTTP",
-                format!("device returned HTTP {}", response.status().as_u16()),
-            ));
-        }
+        let request = self.authorized(
+            self.client
+                .get(format!("{}{path}", self.base))
+                .timeout(timeout.min(self.timeout)),
+        );
+        let response = self.send_ordinary(request)?;
+        let response = self.check_status(response)?;
         if response
             .content_length()
             .is_some_and(|length| length > max_bytes)
@@ -189,73 +130,21 @@ impl ApiClient {
         if let Some(content_type) = content_type {
             request = request.header(reqwest::header::CONTENT_TYPE, content_type);
         }
-        let response = request.send().map_err(|e| {
-            if e.is_timeout() {
-                ("TIMEOUT", "request timed out".into())
-            } else {
-                ("TRANSPORT", "could not reach the HTTP target".into())
-            }
-        })?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            return Err((
-                "AUTHENTICATION",
-                "device rejected HTTP Basic credentials".into(),
-            ));
-        }
-        if !response.status().is_success() {
-            return Err((
-                "HTTP",
-                format!("device returned HTTP {}", response.status().as_u16()),
-            ));
-        }
-        let bytes = response
-            .bytes()
-            .map_err(|_| ("TRANSPORT", "failed reading device response".into()))?;
-        if bytes.is_empty() {
-            return Ok(json!({"ok":true}));
-        }
-        serde_json::from_slice(&bytes)
-            .map_err(|_| ("INVALID_RESPONSE", "device returned invalid JSON".into()))
+        let response = self.send_ordinary(request)?;
+        self.decode_resource_response(self.check_status(response)?)
     }
     pub(crate) fn multipart_post(
         &self,
         path: &str,
         form: reqwest::blocking::multipart::Form,
     ) -> CliResult<Value> {
-        let response = self
-            .authorized(
-                self.client
-                    .post(format!("{}{path}", self.base))
-                    .multipart(form),
-            )
-            .send()
-            .map_err(|e| {
-                if e.is_timeout() {
-                    ("TIMEOUT", "request timed out".into())
-                } else {
-                    ("TRANSPORT", "could not reach the HTTP target".into())
-                }
-            })?;
-        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
-            return Err((
-                "AUTHENTICATION",
-                "device rejected HTTP Basic credentials".into(),
-            ));
-        }
-        if !response.status().is_success() {
-            return Err((
-                "HTTP",
-                format!("device returned HTTP {}", response.status().as_u16()),
-            ));
-        }
-        let bytes = response
-            .bytes()
-            .map_err(|_| ("TRANSPORT", "failed reading device response".into()))?;
-        if bytes.is_empty() {
-            return Ok(json!({"ok":true}));
-        }
-        serde_json::from_slice(&bytes)
-            .map_err(|_| ("INVALID_RESPONSE", "device returned invalid JSON".into()))
+        let request = self.authorized(
+            self.client
+                .post(format!("{}{path}", self.base))
+                .multipart(form),
+        );
+        let response = self.send_ordinary(request)?;
+        self.decode_resource_response(self.check_status(response)?)
     }
     pub(crate) fn raw_put(&self, path: &str, source: &str) -> CliResult<Value> {
         let response = self
@@ -276,7 +165,7 @@ impl ApiClient {
                     )
                 }
             })?;
-        self.script_response(response)
+        self.strict_json_response(response)
     }
     /// Send an authenticated JSON mutation and decode the official JSON response.
     pub(crate) fn mutate(
@@ -294,13 +183,11 @@ impl ApiClient {
         body: &Value,
         timeout: Duration,
     ) -> CliResult<Value> {
-        let mut request = self
-            .client
-            .request(method, format!("{}{path}", self.base))
-            .timeout(timeout.min(self.timeout));
-        if let Some(username) = &self.username {
-            request = request.basic_auth(username, self.password.as_deref());
-        }
+        let mut request = self.authorized(
+            self.client
+                .request(method, format!("{}{path}", self.base))
+                .timeout(timeout.min(self.timeout)),
+        );
         if !body.is_null() {
             request = request.json(body);
         }
@@ -319,7 +206,7 @@ impl ApiClient {
             // Discard the server body: its untrusted details must not leak to CLI output.
             return Err(("HTTP_507", "device returned HTTP 507".into()));
         }
-        self.script_response(response)
+        self.strict_json_response(response)
     }
     pub(crate) fn conditional_put(
         &self,
@@ -350,7 +237,7 @@ impl ApiClient {
                 "remote source differs from the supplied reference; no overwrite performed".into(),
             ));
         }
-        self.script_response(response)
+        self.strict_json_response(response)
     }
     fn authorized(
         &self,
@@ -362,7 +249,23 @@ impl ApiClient {
             request
         }
     }
-    fn script_response(&self, response: reqwest::blocking::Response) -> CliResult<Value> {
+    fn send_ordinary(
+        &self,
+        request: reqwest::blocking::RequestBuilder,
+    ) -> CliResult<reqwest::blocking::Response> {
+        // Mutation and source writes deliberately keep their result-unknown send diagnostics local.
+        request.send().map_err(|error| {
+            if error.is_timeout() {
+                ("TIMEOUT", "request timed out".into())
+            } else {
+                ("TRANSPORT", "could not reach the HTTP target".into())
+            }
+        })
+    }
+    fn check_status(
+        &self,
+        response: reqwest::blocking::Response,
+    ) -> CliResult<reqwest::blocking::Response> {
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             return Err((
                 "AUTHENTICATION",
@@ -375,8 +278,21 @@ impl ApiClient {
                 format!("device returned HTTP {}", response.status().as_u16()),
             ));
         }
-        response
+        Ok(response)
+    }
+    fn strict_json_response(&self, response: reqwest::blocking::Response) -> CliResult<Value> {
+        self.check_status(response)?
             .json()
+            .map_err(|_| ("INVALID_RESPONSE", "device returned invalid JSON".into()))
+    }
+    fn decode_resource_response(&self, response: reqwest::blocking::Response) -> CliResult<Value> {
+        let bytes = response
+            .bytes()
+            .map_err(|_| ("TRANSPORT", "failed reading device response".into()))?;
+        if bytes.is_empty() {
+            return Ok(json!({"ok":true}));
+        }
+        serde_json::from_slice(&bytes)
             .map_err(|_| ("INVALID_RESPONSE", "device returned invalid JSON".into()))
     }
 }
