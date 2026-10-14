@@ -1,8 +1,10 @@
 //! Save the AWTRIX framebuffer as an RGB PNG without returning pixel data.
 use clap::Subcommand;
 use serde_json::{json, Value};
-use std::{io::Write, path::PathBuf, time::Duration};
-use tempfile::NamedTempFile;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 const MAX_PIXELS: u64 = 4_194_304;
 // Ten bytes per possible packed decimal pixel (digits plus separator), plus bounded object overhead.
@@ -213,35 +215,22 @@ pub(crate) fn capture_png(
     run_with_timeout(&command, api, timeout)
 }
 
-/// Persist a fully encoded PNG through tempfile's cross-platform atomic replacement operation.
-pub(crate) fn persist_sibling(path: &PathBuf, bytes: &[u8]) -> crate::CliResult<()> {
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let mut temporary = NamedTempFile::new_in(parent).map_err(|_| {
-        (
-            "FILE_WRITE",
-            format!(
+fn persist_sibling(path: &Path, bytes: &[u8]) -> crate::CliResult<()> {
+    crate::persistence::replace(path, bytes).map_err(|error| {
+        use crate::persistence::Error;
+        let message = match error {
+            Error::Create => format!(
                 "could not create temporary output beside {}",
                 path.display()
             ),
-        )
-    })?;
-    temporary
-        .write_all(bytes)
-        .map_err(|_| ("FILE_WRITE", "could not write temporary PNG".into()))?;
-    temporary
-        .as_file()
-        .sync_all()
-        .map_err(|_| ("FILE_WRITE", "could not flush temporary PNG".into()))?;
-    temporary.persist(path).map_err(|_| {
-        (
-            "FILE_WRITE",
-            format!("could not atomically persist PNG at {}", path.display()),
-        )
-    })?;
-    Ok(())
+            #[cfg(unix)]
+            Error::Permissions => "could not secure temporary PNG".into(),
+            Error::Write => "could not write temporary PNG".into(),
+            Error::Sync => "could not flush temporary PNG".into(),
+            Error::Replace => format!("could not atomically persist PNG at {}", path.display()),
+        };
+        ("FILE_WRITE", message)
+    })
 }
 
 pub fn describe() -> Value {

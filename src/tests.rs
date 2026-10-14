@@ -278,7 +278,21 @@ fn write_difference_png(
         .write_image_data(&difference)
         .map_err(|_| ("FILE_WRITE", "cannot encode visual diff PNG pixels".into()))?;
     drop(writer);
-    crate::screen::persist_sibling(&path.to_path_buf(), &encoded)
+    crate::persistence::replace(path, &encoded).map_err(|error| {
+        use crate::persistence::Error;
+        let message = match error {
+            Error::Create => format!(
+                "could not create temporary output beside {}",
+                path.display()
+            ),
+            #[cfg(unix)]
+            Error::Permissions => "could not secure temporary PNG".into(),
+            Error::Write => "could not write temporary PNG".into(),
+            Error::Sync => "could not flush temporary PNG".into(),
+            Error::Replace => format!("could not atomically persist PNG at {}", path.display()),
+        };
+        ("FILE_WRITE", message)
+    })
 }
 
 pub(crate) fn run(command: &Command, cli: &crate::Cli) -> crate::CliResult<Value> {
