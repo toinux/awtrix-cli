@@ -5165,6 +5165,211 @@ fn resource_and_multipart_decoders_accept_only_zero_bytes_or_valid_json_values()
     let _ = std::fs::remove_file(upload);
 }
 
+fn assert_route_status_contract(
+    command: &[String],
+    status: u16,
+    expected_code: &str,
+    expected_message: &str,
+    expected_exit: i32,
+    conditional: bool,
+) {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        if conditional {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), "/api/v1/capabilities");
+            request
+                .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+                .unwrap();
+        }
+        let request = server.recv().unwrap();
+        if conditional {
+            assert_eq!(request.url(), "/api/v1/apps/script-update/demo");
+        }
+        request
+            .respond(
+                Response::from_string("HOSTILE_STATUS_BODY secret-status-detail")
+                    .with_status_code(status),
+            )
+            .unwrap();
+        assert!(
+            server
+                .recv_timeout(Duration::from_millis(75))
+                .unwrap()
+                .is_none(),
+            "unexpected retry/fallback after {status}"
+        );
+    });
+    let mut args = vec!["--target".to_owned(), url, "--json".to_owned()];
+    args.extend(command.iter().cloned());
+    let refs: Vec<_> = args.iter().map(String::as_str).collect();
+    let output = run(&refs);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(expected_exit));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], expected_code);
+    assert_eq!(result["error"]["message"], expected_message);
+    for hostile in ["HOSTILE_STATUS_BODY", "secret-status-detail"] {
+        assert!(!String::from_utf8_lossy(&output.stdout).contains(hostile));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(hostile));
+    }
+}
+
+#[test]
+fn status_409_is_special_only_for_conditional_script_writes() {
+    let upload = std::env::temp_dir().join(format!("awtrix-status-{}.gif", std::process::id()));
+    std::fs::write(&upload, b"GIF89a").unwrap();
+    let upload = upload.to_string_lossy().into_owned();
+    let capture = std::env::temp_dir().join(format!("awtrix-status-{}.png", std::process::id()));
+    let capture = capture.to_string_lossy().into_owned();
+    let families = vec![
+        (vec!["device", "state"], false),
+        (vec!["script", "get", "demo"], false),
+        (
+            vec!["screen", "capture", "--output", capture.as_str()],
+            false,
+        ),
+        (vec!["resources", "files", "delete", "/x"], false),
+        (vec!["resources", "files", "upload", upload.as_str()], false),
+        (
+            vec![
+                "script",
+                "deploy",
+                "demo",
+                "--source",
+                "return true",
+                "--force",
+            ],
+            false,
+        ),
+        (vec!["apps", "delete", "demo"], false),
+        (
+            vec![
+                "script",
+                "deploy",
+                "demo",
+                "--source",
+                "return true",
+                "--create",
+            ],
+            true,
+        ),
+    ];
+    for (args, conditional) in families {
+        let command: Vec<_> = args.into_iter().map(str::to_owned).collect();
+        if conditional {
+            assert_route_status_contract(
+                &command,
+                409,
+                "CONFLICT",
+                "remote source differs from the supplied reference; no overwrite performed",
+                1,
+                true,
+            );
+        } else {
+            assert_route_status_contract(
+                &command,
+                409,
+                "HTTP",
+                "device returned HTTP 409",
+                5,
+                false,
+            );
+        }
+    }
+    let _ = std::fs::remove_file(upload);
+    let _ = std::fs::remove_file(capture);
+}
+
+#[test]
+fn status_507_is_special_only_for_json_mutations() {
+    let upload = std::env::temp_dir().join(format!("awtrix-status-507-{}.gif", std::process::id()));
+    std::fs::write(&upload, b"GIF89a").unwrap();
+    let upload = upload.to_string_lossy().into_owned();
+    let capture =
+        std::env::temp_dir().join(format!("awtrix-status-507-{}.png", std::process::id()));
+    let capture = capture.to_string_lossy().into_owned();
+    let families = vec![
+        (
+            vec!["device", "state"],
+            false,
+            "HTTP",
+            "device returned HTTP 507",
+            5,
+        ),
+        (
+            vec!["script", "get", "demo"],
+            false,
+            "HTTP",
+            "device returned HTTP 507",
+            5,
+        ),
+        (
+            vec!["screen", "capture", "--output", capture.as_str()],
+            false,
+            "HTTP",
+            "device returned HTTP 507",
+            5,
+        ),
+        (
+            vec!["resources", "files", "delete", "/x"],
+            false,
+            "HTTP",
+            "device returned HTTP 507",
+            5,
+        ),
+        (
+            vec!["resources", "files", "upload", upload.as_str()],
+            false,
+            "HTTP",
+            "device returned HTTP 507",
+            5,
+        ),
+        (
+            vec![
+                "script",
+                "deploy",
+                "demo",
+                "--source",
+                "return true",
+                "--force",
+            ],
+            false,
+            "HTTP",
+            "device returned HTTP 507",
+            5,
+        ),
+        (
+            vec!["apps", "delete", "demo"],
+            false,
+            "HTTP_507",
+            "device returned HTTP 507",
+            1,
+        ),
+        (
+            vec![
+                "script",
+                "deploy",
+                "demo",
+                "--source",
+                "return true",
+                "--create",
+            ],
+            true,
+            "HTTP",
+            "device returned HTTP 507",
+            5,
+        ),
+    ];
+    for (args, conditional, code, message, exit) in families {
+        let command: Vec<_> = args.into_iter().map(str::to_owned).collect();
+        assert_route_status_contract(&command, 507, code, message, exit, conditional);
+    }
+    let _ = std::fs::remove_file(upload);
+    let _ = std::fs::remove_file(capture);
+}
+
 #[test]
 fn all_device_send_families_keep_timeout_and_transport_error_messages_without_retries() {
     let families = [
@@ -5234,20 +5439,6 @@ fn all_device_send_families_keep_timeout_and_transport_error_messages_without_re
                             .is_none(),
                         "unexpected retry for {family}"
                     );
-                });
-                (url, Some(worker))
-            } else if family == "conditional" {
-                let server = Server::http("127.0.0.1:0").unwrap();
-                let url = format!("http://{}", server.server_addr());
-                let worker = thread::spawn(move || {
-                    server
-                        .recv()
-                        .unwrap()
-                        .respond(
-                            Response::from_string(r#"{"scriptUpdates":true}"#)
-                                .with_header(Header::from_bytes("Connection", "close").unwrap()),
-                        )
-                        .unwrap();
                 });
                 (url, Some(worker))
             } else {
