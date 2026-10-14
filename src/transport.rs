@@ -385,21 +385,29 @@ impl ApiClient {
 mod tests {
     use super::*;
     use clap::Parser;
-    use std::thread;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
     use tiny_http::{Response, Server};
 
-    fn client(target: &str) -> ApiClient {
+    fn client_with_timeout(target: &str, timeout_ms: &str) -> ApiClient {
         let cli = Cli::try_parse_from([
             "awtrix-cli",
             "--target",
             target,
             "--timeout",
-            "1000",
+            timeout_ms,
             "device",
             "state",
         ])
         .unwrap();
         ApiClient::new(&cli, Some(target), None, None).unwrap()
+    }
+
+    fn client(target: &str) -> ApiClient {
+        client_with_timeout(target, "1000")
     }
 
     #[test]
@@ -423,5 +431,64 @@ mod tests {
                 assert_eq!(message, "framebuffer response exceeds the safe size limit");
             }
         }
+    }
+
+    #[test]
+    fn framebuffer_streamed_excess_without_content_length_is_rejected() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let target = format!("http://{}", listener.local_addr().unwrap());
+        let api = client(&target);
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n1234")
+                .unwrap();
+        });
+        let result = api.raw_bytes_get_with_timeout("/frame", 3, Duration::from_secs(1));
+        worker.join().unwrap();
+        assert_eq!(result.unwrap_err().0, "RESPONSE_TOO_LARGE");
+    }
+
+    #[test]
+    fn request_timeout_override_preserves_zero_and_is_clamped_to_client_minimum() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let target = format!("http://{}", server.server_addr());
+        let api = client_with_timeout(&target, "1000");
+        let worker = thread::spawn(move || {
+            assert!(server
+                .recv_timeout(Duration::from_millis(100))
+                .unwrap()
+                .is_none());
+        });
+        assert_eq!(
+            api.get_with_timeout("/timeout", Duration::ZERO)
+                .unwrap_err()
+                .0,
+            "TIMEOUT"
+        );
+        worker.join().unwrap();
+
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let target = format!("http://{}", server.server_addr());
+        let api = client_with_timeout(&target, "10");
+        let worker = thread::spawn(move || {
+            let request = server
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .expect("minimum-timeout request");
+            thread::sleep(Duration::from_millis(50));
+            let _ = request.respond(Response::from_string("{}"));
+        });
+        let result = api.get_with_timeout("/timeout", Duration::from_secs(1));
+        worker.join().unwrap();
+        assert_eq!(result.unwrap_err().0, "TIMEOUT");
+    }
+
+    #[test]
+    fn configured_timeout_has_one_millisecond_minimum() {
+        let api = client_with_timeout("http://127.0.0.1:1", "0");
+        assert_eq!(api.timeout, Duration::from_millis(1));
     }
 }

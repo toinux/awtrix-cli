@@ -4950,7 +4950,16 @@ fn username_alone_authenticates_and_password_alone_does_not_create_basic_auth() 
 
 #[test]
 fn raw_source_preserves_empty_and_rejects_invalid_utf8() {
-    for (body, succeeds, expected) in [(Vec::new(), true, ""), (vec![0xff], false, "")] {
+    for (body, succeeds, expected) in [
+        (Vec::new(), true, Vec::new()),
+        (b" \t\n".to_vec(), true, b" \t\n".to_vec()),
+        (
+            "λ\r\n".as_bytes().to_vec(),
+            true,
+            "λ\r\n".as_bytes().to_vec(),
+        ),
+        (vec![0xff], false, Vec::new()),
+    ] {
         let server = Server::http("127.0.0.1:0").unwrap();
         let url = format!("http://{}", server.server_addr());
         let worker = thread::spawn(move || {
@@ -4963,11 +4972,427 @@ fn raw_source_preserves_empty_and_rejects_invalid_utf8() {
         let output = run(&["--target", &url, "script", "get", "demo"]);
         worker.join().unwrap();
         assert_eq!(output.status.success(), succeeds);
-        assert_eq!(output.stdout, expected.as_bytes());
+        assert_eq!(output.stdout, expected);
         if !succeeds {
             assert!(String::from_utf8_lossy(&output.stderr).contains("script source is not UTF-8"));
         }
     }
+}
+
+#[test]
+fn authentication_rejections_cover_all_device_http_families_without_leaking_secrets_or_bodies() {
+    let upload = std::env::temp_dir().join(format!("awtrix-auth-{}.gif", std::process::id()));
+    std::fs::write(&upload, b"GIF89a").unwrap();
+    let upload = upload.to_string_lossy().into_owned();
+    let capture = std::env::temp_dir().join(format!("awtrix-auth-{}.png", std::process::id()));
+    let capture = capture.to_string_lossy().into_owned();
+    let cases: Vec<Vec<String>> = vec![
+        ["device", "state"].map(str::to_owned).to_vec(),
+        ["script", "get", "demo"].map(str::to_owned).to_vec(),
+        ["screen", "capture", "--output", &capture]
+            .map(str::to_owned)
+            .to_vec(),
+        ["resources", "files", "delete", "/x"]
+            .map(str::to_owned)
+            .to_vec(),
+        ["resources", "files", "upload", &upload]
+            .map(str::to_owned)
+            .to_vec(),
+        [
+            "script",
+            "deploy",
+            "demo",
+            "--source",
+            "return true",
+            "--force",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+        ["apps", "delete", "demo"].map(str::to_owned).to_vec(),
+        [
+            "script",
+            "deploy",
+            "demo",
+            "--source",
+            "return true",
+            "--create",
+        ]
+        .map(str::to_owned)
+        .to_vec(),
+    ];
+    for (index, command) in cases.into_iter().enumerate() {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            let request = server
+                .recv_timeout(Duration::from_secs(3))
+                .unwrap()
+                .expect("HTTP family request");
+            assert!(request
+                .headers()
+                .iter()
+                .any(|h| h.field.equiv("Authorization")));
+            if index == 7 {
+                request
+                    .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+                    .unwrap();
+                let request = server
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap()
+                    .expect("conditional write request");
+                assert!(request
+                    .headers()
+                    .iter()
+                    .any(|h| h.field.equiv("Authorization")));
+                request
+                    .respond(
+                        Response::from_string("HOSTILE_REMOTE_BODY secret-password")
+                            .with_status_code(401),
+                    )
+                    .unwrap();
+            } else {
+                request
+                    .respond(
+                        Response::from_string("HOSTILE_REMOTE_BODY secret-password")
+                            .with_status_code(401),
+                    )
+                    .unwrap();
+            }
+        });
+        let mut args = vec![
+            "--target".to_owned(),
+            url,
+            "--username".into(),
+            "secret-user".into(),
+            "--password".into(),
+            "secret-password".into(),
+            "--json".into(),
+        ];
+        args.extend(command);
+        let refs: Vec<_> = args.iter().map(String::as_str).collect();
+        let output = run(&refs);
+        worker.join().unwrap();
+        assert_eq!(output.status.code(), Some(3));
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["error"]["code"], "AUTHENTICATION");
+        for secret in ["secret-user", "secret-password", "HOSTILE_REMOTE_BODY"] {
+            assert!(!String::from_utf8_lossy(&output.stdout).contains(secret));
+            assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+        }
+    }
+    let _ = std::fs::remove_file(upload);
+    let _ = std::fs::remove_file(capture);
+}
+
+#[test]
+fn missing_script_source_has_its_specific_404_diagnostic_without_remote_body_leakage() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string("hostile missing-script detail").with_status_code(404))
+            .unwrap();
+    });
+    let output = run(&["--target", &url, "--json", "script", "get", "demo"]);
+    worker.join().unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "HTTP");
+    assert_eq!(result["error"]["message"], "script not found");
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("hostile missing-script detail"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("hostile missing-script detail"));
+}
+
+#[test]
+fn resource_and_multipart_decoders_accept_only_zero_bytes_or_valid_json_values() {
+    let upload = std::env::temp_dir().join(format!("awtrix-empty-{}.gif", std::process::id()));
+    std::fs::write(&upload, b"GIF89a").unwrap();
+    let upload = upload.to_string_lossy().into_owned();
+    for multipart in [false, true] {
+        for (body, succeeds, expected) in [
+            ("", true, serde_json::json!({"ok":true})),
+            (" \n", false, serde_json::Value::Null),
+            ("not-json", false, serde_json::Value::Null),
+            ("7", true, serde_json::json!(7)),
+            ("null", true, serde_json::Value::Null),
+        ] {
+            let server = Server::http("127.0.0.1:0").unwrap();
+            let url = format!("http://{}", server.server_addr());
+            let worker = thread::spawn(move || {
+                server
+                    .recv()
+                    .unwrap()
+                    .respond(Response::from_string(body))
+                    .unwrap();
+            });
+            let args = if multipart {
+                vec![
+                    "--target",
+                    &url,
+                    "--json",
+                    "resources",
+                    "files",
+                    "upload",
+                    &upload,
+                ]
+            } else {
+                vec![
+                    "--target",
+                    &url,
+                    "--json",
+                    "resources",
+                    "files",
+                    "delete",
+                    "/x",
+                ]
+            };
+            let output = run(&args);
+            worker.join().unwrap();
+            assert_eq!(
+                output.status.success(),
+                succeeds,
+                "multipart={multipart}, body={body:?}"
+            );
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            if succeeds {
+                assert_eq!(result, expected);
+            } else {
+                assert_eq!(result["error"]["code"], "INVALID_RESPONSE");
+            }
+        }
+    }
+    let _ = std::fs::remove_file(upload);
+}
+
+#[test]
+fn all_device_send_families_keep_timeout_and_transport_error_messages_without_retries() {
+    let families = [
+        (
+            "ordinary",
+            vec!["device", "state"],
+            "request timed out",
+            "could not reach the HTTP target",
+        ),
+        (
+            "raw",
+            vec![
+                "script",
+                "deploy",
+                "demo",
+                "--source",
+                "return true",
+                "--force",
+            ],
+            "request timed out",
+            "write result is unknown after transport failure",
+        ),
+        (
+            "mutation",
+            vec!["apps", "delete", "demo"],
+            "request timed out",
+            "mutation result is unknown after transport failure",
+        ),
+        (
+            "conditional",
+            vec![
+                "script",
+                "deploy",
+                "demo",
+                "--source",
+                "return true",
+                "--create",
+            ],
+            "write result is unknown after timeout",
+            "write result is unknown after transport failure",
+        ),
+    ];
+    for (family, command, timeout_message, transport_message) in families {
+        for timeout in [true, false] {
+            if family == "conditional" && !timeout {
+                continue;
+            }
+            let (url, worker) = if timeout {
+                let server = Server::http("127.0.0.1:0").unwrap();
+                let url = format!("http://{}", server.server_addr());
+                let conditional = family == "conditional";
+                let worker = thread::spawn(move || {
+                    if conditional {
+                        server
+                            .recv()
+                            .unwrap()
+                            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+                            .unwrap();
+                    }
+                    let request = server.recv().unwrap();
+                    thread::sleep(Duration::from_millis(150));
+                    let _ = request.respond(Response::from_string("{}"));
+                    assert!(
+                        server
+                            .recv_timeout(Duration::from_millis(50))
+                            .unwrap()
+                            .is_none(),
+                        "unexpected retry for {family}"
+                    );
+                });
+                (url, Some(worker))
+            } else if family == "conditional" {
+                let server = Server::http("127.0.0.1:0").unwrap();
+                let url = format!("http://{}", server.server_addr());
+                let worker = thread::spawn(move || {
+                    server
+                        .recv()
+                        .unwrap()
+                        .respond(
+                            Response::from_string(r#"{"scriptUpdates":true}"#)
+                                .with_header(Header::from_bytes("Connection", "close").unwrap()),
+                        )
+                        .unwrap();
+                });
+                (url, Some(worker))
+            } else {
+                ("http://127.0.0.1:1".to_owned(), None)
+            };
+            let mut args = vec![
+                "--target".to_owned(),
+                url,
+                "--timeout".into(),
+                "25".into(),
+                "--json".into(),
+            ];
+            args.extend(command.iter().map(|arg| (*arg).to_owned()));
+            let refs: Vec<_> = args.iter().map(String::as_str).collect();
+            let output = run(&refs);
+            if let Some(worker) = worker {
+                worker.join().unwrap();
+            }
+            assert_eq!(
+                output.status.code(),
+                Some(if timeout { 4 } else { 1 }),
+                "family={family}, timeout={timeout}"
+            );
+            let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(
+                result["error"]["code"],
+                if timeout { "TIMEOUT" } else { "TRANSPORT" }
+            );
+            assert_eq!(
+                result["error"]["message"],
+                if timeout {
+                    timeout_message
+                } else {
+                    transport_message
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn truncated_responses_keep_decoder_specific_error_classification() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let upload = std::env::temp_dir().join(format!("awtrix-truncated-{}.gif", std::process::id()));
+    std::fs::write(&upload, b"GIF89a").unwrap();
+    let upload = upload.to_string_lossy().into_owned();
+    let capture = std::env::temp_dir().join(format!("awtrix-truncated-{}.png", std::process::id()));
+    let capture = capture.to_string_lossy().into_owned();
+    let cases = [
+        (
+            vec!["device", "state"],
+            "INVALID_RESPONSE",
+            "device returned invalid JSON",
+        ),
+        (
+            vec!["script", "get", "demo"],
+            "INVALID_RESPONSE",
+            "could not read script source",
+        ),
+        (
+            vec!["resources", "files", "delete", "/x"],
+            "TRANSPORT",
+            "failed reading device response",
+        ),
+        (
+            vec!["resources", "files", "upload", &upload],
+            "TRANSPORT",
+            "failed reading device response",
+        ),
+        (
+            vec!["screen", "capture", "--output", &capture],
+            "TRANSPORT",
+            "failed while reading framebuffer response",
+        ),
+    ];
+    for (command, expected_code, expected_message) in cases {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 30\r\nConnection: close\r\n\r\n{}")
+                .unwrap();
+        });
+        let target = format!("http://{address}");
+        let mut args = vec!["--target", target.as_str(), "--json"];
+        args.extend(command);
+        let output = run(&args);
+        worker.join().unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["error"]["code"], expected_code);
+        assert_eq!(result["error"]["message"], expected_message);
+    }
+    let _ = std::fs::remove_file(upload);
+    let _ = std::fs::remove_file(capture);
+}
+
+#[test]
+fn conditional_write_connection_refusal_after_capability_check_is_reported_as_unknown() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let worker = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0; 4096];
+        let count = stream.read(&mut request).unwrap();
+        assert!(String::from_utf8_lossy(&request[..count]).starts_with("GET /api/v1/capabilities "));
+        let body = b"{\"scriptUpdates\":true}";
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(body).unwrap();
+        drop(stream);
+        drop(listener);
+    });
+    let target = format!("http://{address}");
+    let output = run(&[
+        "--target",
+        &target,
+        "--timeout",
+        "500",
+        "--json",
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "return true",
+        "--create",
+    ]);
+    worker.join().unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "TRANSPORT");
+    assert_eq!(
+        result["error"]["message"],
+        "write result is unknown after transport failure"
+    );
 }
 
 #[test]
