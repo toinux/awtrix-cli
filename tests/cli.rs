@@ -145,6 +145,270 @@ fn script_data_patch_is_discoverable_offline() {
     assert!(description["limitations"].to_string().contains("rollback"));
 }
 
+#[test]
+fn script_shared_preserves_publications_and_supports_projection() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let payload = r#"{"publications":[{"owner":"alpha","key":"count","type":"integer","value":7,"ageMs":12},{"owner":"beta","key":"ready","type":"boolean","value":true,"ageMs":0},{"owner":"alpha","key":"label","type":"string","value":"ok","ageMs":999}] }"#;
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Get);
+        assert_eq!(request.url(), "/api/v1/scripts/shared");
+        request.respond(Response::from_string(payload)).unwrap();
+    });
+    let output = run(&[
+        "--json",
+        "--fields",
+        "publications",
+        "--target",
+        &url,
+        "script",
+        "shared",
+    ]);
+    worker.join().unwrap();
+    assert!(output.status.success());
+    let got: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        got["publications"],
+        serde_json::json!([
+            {"owner":"alpha","key":"count","type":"integer","value":7,"ageMs":12},
+            {"owner":"beta","key":"ready","type":"boolean","value":true,"ageMs":0},
+            {"owner":"alpha","key":"label","type":"string","value":"ok","ageMs":999}
+        ])
+    );
+}
+
+#[test]
+fn script_shared_accepts_empty_and_standard_output() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/scripts/shared");
+        request
+            .respond(Response::from_string(r#"{"publications":[]}"#))
+            .unwrap();
+    });
+    let output = run(&["--target", &url, "script", "shared"]);
+    worker.join().unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("publications"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("[]"));
+}
+
+#[test]
+fn script_shared_discovery_is_offline_and_rejects_unknown_projection() {
+    let help = run(&["script", "shared", "--help"]);
+    assert!(String::from_utf8_lossy(&help.stdout).contains("shared"));
+    let list = run(&["--json", "describe", "--list"]);
+    assert!(String::from_utf8_lossy(&list.stdout).contains("script shared"));
+    let description = run(&["--json", "describe", "script", "shared", "--offline"]);
+    assert!(description.status.success());
+    let description: serde_json::Value = serde_json::from_slice(&description.stdout).unwrap();
+    assert_eq!(description["route"], "GET /api/v1/scripts/shared");
+    assert!(description.to_string().contains("temporary"));
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        request
+            .respond(Response::from_string(r#"{"publications":[]}"#))
+            .unwrap();
+    });
+    let bad = run(&[
+        "--json", "--fields", "unknown", "--target", &url, "script", "shared",
+    ]);
+    worker.join().unwrap();
+    assert!(!bad.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&bad.stdout).unwrap();
+    assert_eq!(error["error"]["code"], "UNKNOWN_FIELD");
+}
+
+#[test]
+fn script_shared_http_auth_timeout_and_transport_errors_are_redacted() {
+    for (status, body) in [(422, "secret response"), (401, "password leaked")] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            let request = server.recv().unwrap();
+            request
+                .respond(Response::from_string(body).with_status_code(status))
+                .unwrap();
+        });
+        let output = run(&["--json", "--target", &url, "script", "shared"]);
+        worker.join().unwrap();
+        assert!(!output.status.success());
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(!text.contains(body));
+        assert!(!String::from_utf8_lossy(&output.stderr).contains(body));
+    }
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        let _ = request.respond(Response::from_string(r#"{"publications":[]}"#));
+    });
+    let timeout = run(&[
+        "--json",
+        "--timeout",
+        "10",
+        "--target",
+        &url,
+        "script",
+        "shared",
+    ]);
+    worker.join().unwrap();
+    assert!(!timeout.status.success());
+
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    drop(server);
+    let transport = run(&["--json", "--target", &url, "script", "shared"]);
+    assert!(!transport.status.success());
+    assert!(!String::from_utf8_lossy(&transport.stdout).contains("password"));
+}
+
+#[test]
+fn script_store_patch_data_and_shared_are_a_read_only_observation_sequence() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut patch = server.recv().unwrap();
+        assert_eq!(patch.method(), &tiny_http::Method::Patch);
+        assert_eq!(patch.url(), "/api/v1/apps/main/data");
+        let mut body = String::new();
+        patch.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"count":9,"remove":null})
+        );
+        patch
+            .respond(Response::from_string(r#"{"saved":true}"#))
+            .unwrap();
+        let data = server.recv().unwrap();
+        assert_eq!(data.method(), &tiny_http::Method::Get);
+        assert_eq!(data.url(), "/api/v1/apps/main/data");
+        data.respond(Response::from_string(r#"{"count":9}"#))
+            .unwrap();
+        let shared = server.recv().unwrap();
+        assert_eq!(shared.method(), &tiny_http::Method::Get);
+        assert_eq!(shared.url(), "/api/v1/scripts/shared");
+        shared.respond(Response::from_string(r#"{"publications":[{"owner":"main","key":"x","type":"integer","value":3,"ageMs":1}]}"#)).unwrap();
+        assert!(
+            server
+                .recv_timeout(Duration::from_millis(50))
+                .unwrap()
+                .is_none(),
+            "scenario must not deploy or perform extra requests"
+        );
+    });
+    let patch = run(&[
+        "--json",
+        "--target",
+        &url,
+        "script",
+        "data-patch",
+        "main",
+        "--values",
+        r#"{"count":9,"remove":null}"#,
+    ]);
+    let data = run(&["--json", "--target", &url, "script", "data", "main"]);
+    let shared = run(&["--json", "--target", &url, "script", "shared"]);
+    worker.join().unwrap();
+    assert!(patch.status.success() && data.status.success() && shared.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&patch.stdout).unwrap(),
+        serde_json::json!({"name":"main","accepted":true,"device_result":{"saved":true},"restart":"saving data restarts the script; initialization may immediately change injected values","runtime_success_guaranteed":false})
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&data.stdout).unwrap(),
+        serde_json::json!({"count":9})
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&shared.stdout).unwrap(),
+        serde_json::json!({"publications":[{"owner":"main","key":"x","type":"integer","value":3,"ageMs":1}]})
+    );
+}
+
+#[test]
+fn script_data_patch_transport_failures_keep_common_redaction_and_unknown_outcome() {
+    for (status, response) in [
+        (422, r#"{"error":"@config is forbidden","token":"secret"}"#),
+        (401, "credential rejected secret"),
+    ] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            let mut request = server.recv().unwrap();
+            assert_eq!(request.method(), &tiny_http::Method::Patch);
+            assert_eq!(request.url(), "/api/v1/apps/main/data");
+            let mut body = String::new();
+            request.as_reader().read_to_string(&mut body).unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+                serde_json::json!({"@config":1})
+            );
+            request
+                .respond(Response::from_string(response).with_status_code(status))
+                .unwrap();
+            assert!(
+                server
+                    .recv_timeout(Duration::from_millis(50))
+                    .unwrap()
+                    .is_none(),
+                "PATCH must not retry"
+            );
+        });
+        let output = run(&[
+            "--json",
+            "--target",
+            &url,
+            "script",
+            "data-patch",
+            "main",
+            "--values",
+            r#"{"@config":1}"#,
+        ]);
+        worker.join().unwrap();
+        assert!(!output.status.success());
+        let diagnostic = String::from_utf8_lossy(&output.stdout);
+        assert!(!diagnostic.contains("secret") && !diagnostic.contains("forbidden"));
+    }
+
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        thread::sleep(Duration::from_millis(100));
+        let _ = request.respond(Response::from_string("late"));
+        assert!(
+            server
+                .recv_timeout(Duration::from_millis(30))
+                .unwrap()
+                .is_none(),
+            "PATCH must not retry"
+        );
+    });
+    let timeout = run(&[
+        "--json",
+        "--timeout",
+        "10",
+        "--target",
+        &url,
+        "script",
+        "data-patch",
+        "main",
+        "--values",
+        "{}",
+    ])
+    .to_owned();
+    worker.join().unwrap();
+    assert!(!timeout.status.success());
+    let error: serde_json::Value = serde_json::from_slice(&timeout.stdout).unwrap();
+    assert_eq!(error["error"]["code"], "TIMEOUT");
+}
+
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(args)

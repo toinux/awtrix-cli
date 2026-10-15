@@ -87,6 +87,11 @@ pub enum Command {
     },
     /// Read data persisted by store.set().
     Data { name: String },
+    /// Read the current temporary publications shared by scripts.
+    #[command(
+        long_about = "Read a point-in-time snapshot of temporary script publications. This never reads another script's private store. Publications may disappear when the device restarts or their owner is removed/re-registered; ageMs is returned as reported, without filtering or interpretation."
+    )]
+    Shared,
 }
 
 fn valid_name(name: &str) -> bool {
@@ -256,6 +261,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             validate(name)?;
             api.get(&format!("/api/v1/apps/{name}/data"))
         }
+        Command::Shared => api.get("/api/v1/scripts/shared"),
         Command::DataPatch { name, values } => {
             validate(name)?;
             let body: Value = serde_json::from_str(values)

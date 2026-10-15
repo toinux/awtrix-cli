@@ -11,6 +11,7 @@
 /api/v1/apps/pushed/{name}
 /api/v1/apps/script-update/{name}
 /api/v1/apps/script/{name}
+/api/v1/scripts/shared
 /api/v1/capabilities
 /api/v1/device
 /api/v1/device/reboot
