@@ -11,7 +11,7 @@ restate the device documentation, which stays authoritative.
 | Last reviewed AWTRIX NG commit | `fb09bc5c8f7e` (2026-10-10, version 1.2.2) |
 | AWTRIX NG docs version | **1.2.2** (released 2026-10-06) |
 | Contracts last reviewed | **2026-10-15** |
-| Documented routes | 62 — 23 covered, 39 not covered |
+| Documented routes | 62 — 24 covered, 38 not covered |
 | Documented pages | 110 Markdown pages |
 
 The documentation source of truth is the [Blueforcer/awtrix-ng](https://github.com/Blueforcer/awtrix-ng)
@@ -53,7 +53,6 @@ route no longer appears in `src/`.
 | --- | --- | --- |
 | Audio: melodies, songs, MP3, radio, play/stop | `/api/v1/audio*` (10 routes) | all; `stations` S3+TC002; `clip` TC002 |
 | Script-owned sounds | `/api/v1/apps/script/{name}/sounds[/{sound}]` | all |
-| Cross-script state | `/api/v1/scripts/shared` | all |
 | Manual rotation | `/api/v1/apps/next`, `/api/v1/apps/previous` | all |
 | Built-in app settings | `/api/v1/apps/builtin/{name}/config` | all |
 | Corner indicators | `/api/v1/indicators/{id}` | all |
@@ -111,7 +110,7 @@ target. Targets: **E** = ESP32, **S** = ESP32-S3, **T** = TC002.
 | `/api/v1/apps/{name}/enabled` | put | put | put | yes |
 | `/api/v1/apps/pushed/{name}` | put | put | put | yes |
 | `/api/v1/apps/{name}/config` | get,patch | get,patch | get,patch | yes |
-| `/api/v1/apps/{name}/data` | get,patch | get,patch | get,patch | get only |
+| `/api/v1/apps/{name}/data` | get,patch | get,patch | get,patch | get,patch |
 | `/api/v1/apps/builtin/{name}/config` | get,patch | get,patch | get,patch | no |
 
 ### Notifications and indicators
@@ -131,7 +130,7 @@ target. Targets: **E** = ESP32, **S** = ESP32-S3, **T** = TC002.
 | `/api/v1/apps/script-update/{name}` | put | put | put | yes |
 | `/api/v1/apps/script/{name}/sounds` | delete,get,post | delete,get,post | delete,get,post | no |
 | `/api/v1/apps/script/{name}/sounds/{sound}` | delete | delete | delete | no |
-| `/api/v1/scripts/shared` | get | get | get | no |
+| `/api/v1/scripts/shared` | get | get | get | yes |
 | `/api/v1/files` | delete,get,post | delete,get,post | delete,get,post | yes |
 | `/api/v1/icons/origins` | delete,get,put | delete,get,put | delete,get,put | no |
 | `/api/v1/icons/rename` | post | post | post | no |
