@@ -24,6 +24,12 @@ Use the five canonical labels: `needs-triage`, `needs-info`, `ready-for-agent`, 
 
 Single-context layout: `GLOSSARY.md` at root, `docs/adr/` for decisions. See `docs/agents/domain.md`.
 
+### Feature coverage
+
+`docs/feature-coverage.md` records what the AWTRIX NG device API offers and what
+this CLI covers. Re-check it with the `awtrix-coverage` project skill before
+claiming a feature is uncovered or after an AWTRIX NG release.
+
 ### CLI discoverability
 
 When changing CLI behavior, help, or schemas, treat executable discovery as the source of truth: execution `--help` provides syntax; `describe --list` catalogs topics; `describe <topic> --offline` provides local semantics, schemas, outputs, and examples. Keep help, descriptions, and emitted results truthful and aligned, and maintain meaningful discovery tests for the changed contract. See `docs/cli-contract.md` for CLI contracts.
