@@ -40,7 +40,7 @@ recorded process as not running when Linux process identity cannot be checked.
 ## Tagged releases
 
 Pushing an annotated stable tag whose name is exactly `v<package version>`
-(currently `v0.4.0`; prerelease/build-metadata versions are rejected) starts
+(currently `v0.5.0`; prerelease/build-metadata versions are rejected) starts
 the three native verification jobs. Each job builds once with
 `--locked`, exercises the release executable, and uploads that verified binary;
 the release job reuses those artifacts rather than rebuilding. A tag that does

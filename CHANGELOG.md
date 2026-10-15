@@ -12,8 +12,17 @@ versions. There was no tagged or published `0.3.0` release.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-15
+
 ### Added
 
+- `script data-patch NAME --values JSON` for partial script-store updates without
+  redeploying source. `null` deletes a key; saving restarts the script, and Berry
+  restart failures preserve the firmware response without rolling back saved data.
+- Read-only `script shared` snapshots of temporary cross-script publications,
+  preserving publication values and supporting `--fields publications`.
+- Agent skill guidance for manual script-store preparation and shared-publication
+  inspection, including restart, partial-failure, and lifetime limitations.
 - AWTRIX NG feature-coverage documentation and a Git-based documentation drift
   checker to help keep CLI coverage aligned with upstream documentation.
 - This changelog, covering the project from its inception, and a mandatory
@@ -211,7 +220,8 @@ Release or downloadable release assets were published for this version.
 - User documentation, example projects, domain terminology, and agent workflows
   for specification implementation and review.
 
-[Unreleased]: https://github.com/toinux/awtrix-cli/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/toinux/awtrix-cli/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/toinux/awtrix-cli/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/toinux/awtrix-cli/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/toinux/awtrix-cli/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/toinux/awtrix-cli/compare/v0.3.1...v0.3.2

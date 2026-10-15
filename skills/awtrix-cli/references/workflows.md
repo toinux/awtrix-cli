@@ -54,6 +54,31 @@ exit status. Specify finite observation windows. Read declared settings with
 `script config-get NAME` before a patch. `script config-put NAME --values JSON`
 patches them and restarts init/setup; discover syntax/schema only if still unknown.
 
+## Manual store preparation and shared publications
+
+With CLI 0.5.0 or newer and firmware supporting these endpoints, use a store
+patch for authorized manual test/debug preparation without redeploying source:
+
+```sh
+awtrix-cli --target http://awtrix.local --json script data-patch main \
+  --values '{"count":9,"remove":null}'
+awtrix-cli --target http://awtrix.local --json script data main
+awtrix-cli --target http://awtrix.local --json --fields publications script shared
+```
+
+The patch accepts a JSON object, including `{}`: omitted keys are retained and
+`null` deletes a key. Firmware rejects declared `@config` keys; use `config-put`
+for those. Saving restarts the script and its initialization may immediately
+change injected values. `BERRY_ERROR` means data was saved but restart failed;
+retain `error.device_result`, with no rollback or automatic retry. A lost response
+leaves the write outcome unknown; inspect before deciding whether to retry.
+
+`script shared` is a read-only snapshot, not another script's private store.
+Publications are temporary and may disappear on device restart or owner
+removal/re-registration. Preserve their values and reported `ageMs`; an empty
+list is valid. These manual commands do not add preparation hooks or shared
+assertions to `test project`, and neither proves runtime health.
+
 ## Project scaffolding and deployment
 
 Check briefly for a relevant existing `awtrix.toml` before initializing. Reuse it

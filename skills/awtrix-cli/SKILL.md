@@ -32,6 +32,8 @@ Match the user's intent to the smallest suitable capability:
 | One-off notification | `notify` |
 | Minify a local Berry source file | `minify` (local, top-level command) |
 | Inspect/change an existing script; quick standalone experiment | `script` |
+| Read or manually patch a script's persisted store | `script data`, `script data-patch` |
+| Inspect temporary cross-script publications | `script shared` |
 | Develop/maintain source files; coordinate resources or configuration | Consider `project` |
 | Validate/deploy an `awtrix.toml` project | `project` |
 | Automated assertions | `test` |
