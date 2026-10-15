@@ -293,6 +293,19 @@ fn main() -> ExitCode {
             eprintln!("awtrix: {diagnostic_code}: verification did not establish a healthy running script");
             ExitCode::from(1)
         }
+        Ok(value) if value.get("__berry_error").and_then(Value::as_bool) == Some(true) => {
+            println!(
+                "{}",
+                json!({"error":{"code":"BERRY_ERROR","message":value["message"],"device_result":value["device_result"],"name":value["name"],"runtime_success_guaranteed":false}})
+            );
+            eprintln!(
+                "awtrix: BERRY_ERROR: {}",
+                value["message"]
+                    .as_str()
+                    .unwrap_or("script restart failed after data was saved")
+            );
+            ExitCode::from(1)
+        }
         Ok(value) if value.get("__raw_stdout").and_then(Value::as_bool) == Some(true) => {
             if cli.json {
                 let mut value = value;
@@ -548,6 +561,7 @@ const DESCRIPTION_TOPICS: &[&str] = &[
     "script config-get",
     "script config-put",
     "script data",
+    "script data-patch",
     "minify",
     "logs",
     "logs read",
@@ -694,6 +708,7 @@ fn describe(cli: &Cli, topic: &str, offline: bool) -> CliResult<Value> {
         "script verify" => {
             json!({"command":"script verify","parameters":{"name":"script name [A-Za-z0-9_-]{1,32}","--duration-secs":"bounded observation window, 1..3600 (default 10)","--interval-ms":"log polling interval, 1..60000 (default 500)","--after":"initial log cursor (default 0)","--capture":"optional PNG output path"},"inputs":["AWTRIX NG system, app inventory, cursor logs and optional framebuffer"],"outputs":{"source_saved":"not_requested for existing-script verification","start_verified":"boolean","observed_window":{"complete":"true only if the full requested duration elapsed without early termination","elapsed_ms":"integer","early_termination_reason":"null or scripting_disabled, script_absent, script_disabled, error_state_unavailable, berry_error, script_not_running, collection_error"},"not_available":"null, reason string, or diagnostic object with code/message/phase","runtime_error":"null or reported Berry error","runtime_state":"last observed app state or null","logs":{"after":"integer","next":"integer","lines":"string array","history_limit":34,"exhaustive":false},"capture":"optional screen artifact summary","runtime_success_guaranteed":false},"examples":["awtrix-cli --json script verify demo --duration-secs 30 --interval-ms 500","awtrix-cli script verify demo --capture observed.png"],"prerequisites":["existing enabled AWTRIX NG script","bounded device log history"],"limitations":["No error observed is not proof of general correctness","log history is bounded to 34 lines"]})
         }
+        "script data-patch" => json!({"command":"script data-patch","route":"PATCH /api/v1/apps/{name}/data","parameters":{"NAME":"[A-Za-z0-9_-]{1,32}","--values":"required JSON object; {} is valid"},"inputs":["one PATCH JSON object; nested objects/arrays and null values are passed unchanged"],"outputs":{"name":"string","accepted":"boolean","device_result":"firmware response JSON","restart":"script restarts and initialization may alter injected values","runtime_success_guaranteed":false},"schema":{"values":"JSON object; omitted keys are unchanged; null deletes a key; firmware rejects @config keys"},"examples":["awtrix-cli --json script data-patch demo --values '{\"count\":8,\"remove\":null}'"],"prerequisites":["AWTRIX NG PATCH /api/v1/apps/{name}/data endpoint"],"limitations":["partial patch, not replacement/reset","script restart reruns initialization; runtime success is not guaranteed","HTTP 200 Berry error means data was saved but restart failed; no rollback or retry","a lost response leaves write outcome unknown"]}),
         "script state" | "script enable" | "script disable" | "script delete"
         | "script config-get" | "script config-put" | "script data" => {
             let action = topic.strip_prefix("script ").unwrap_or("state");
@@ -704,7 +719,9 @@ fn describe(cli: &Cli, topic: &str, offline: bool) -> CliResult<Value> {
                 "delete" => ("DELETE /api/v1/apps/{name}", "name, deleted, device_result", "awtrix-cli script delete demo"),
                 "config-get" => ("GET /api/v1/apps/{name}/config", "declared settings fields and warnings", "awtrix-cli script config-get demo"),
                 "config-put" => ("PATCH /api/v1/apps/{name}/config", "accepted, device_result; saves restart init()/setup() and do not promise future runtime success", "awtrix-cli script config-put demo --values '{\"rate\":2}'"),
-                _ => ("GET /api/v1/apps/{name}/data", "persisted store values", "awtrix-cli script data demo"),
+                "data-patch" => ("PATCH /api/v1/apps/{name}/data", "name, accepted, device_result, restart, runtime_success_guaranteed=false; HTTP 200 Berry error returns BERRY_ERROR with the saved device_result", "awtrix-cli --json script data-patch demo --values '{\"count\":8,\"remove\":null}'"),
+                "data" => ("GET /api/v1/apps/{name}/data", "persisted store values", "awtrix-cli script data demo"),
+                _ => ("PATCH /api/v1/apps/{name}/data", "partial store patch; null deletes keys; restarts script; no runtime guarantee; @config keys are rejected by firmware", "awtrix-cli --json script data-patch demo --values '{\"count\":8,\"remove\":null}'"),
             };
             command_description(&format!("script {action}"), route, output, example)
         }

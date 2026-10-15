@@ -111,7 +111,7 @@ target. Targets: **E** = ESP32, **S** = ESP32-S3, **T** = TC002.
 | `/api/v1/apps/{name}/enabled` | put | put | put | yes |
 | `/api/v1/apps/pushed/{name}` | put | put | put | yes |
 | `/api/v1/apps/{name}/config` | get,patch | get,patch | get,patch | yes |
-| `/api/v1/apps/{name}/data` | get,patch | get,patch | get,patch | get only |
+| `/api/v1/apps/{name}/data` | get,patch | get,patch | get,patch | get,patch |
 | `/api/v1/apps/builtin/{name}/config` | get,patch | get,patch | get,patch | no |
 
 ### Notifications and indicators

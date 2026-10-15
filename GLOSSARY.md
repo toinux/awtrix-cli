@@ -28,6 +28,14 @@ _Avoid_: Alert, toast
 Un programme Berry conserve sur l'appareil, executant sa propre logique et pouvant produire un affichage.
 _Avoid_: Berry script, app script
 
+**Store de script** :
+L'ensemble des donnees persistantes propres a un script, distinct de ses publications partagees.
+_Avoid_: Etat partage, store global
+
+**Publication partagee** :
+Une valeur temporaire publiee par un script et lisible par les autres, identifiee par son auteur et sa cle. Elle ne donne pas acces au store prive de son auteur.
+_Avoid_: Store partage, store d'un autre script
+
 **Minification** :
 Transformation d'un script visant a reduire sa taille tout en conservant son comportement et ses metadonnees AWTRIX.
 _Avoid_: Compression, minify (pour designer le resultat)

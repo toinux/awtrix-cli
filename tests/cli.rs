@@ -5,6 +5,146 @@ use std::{
 };
 use tiny_http::{Header, Response, Server};
 
+#[test]
+fn script_data_patch_sends_partial_object_and_reports_saved_berry_error() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Patch);
+        assert_eq!(request.url(), "/api/v1/apps/main/data");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"count":8,"remove":null,"nested":[1,{"ok":true}]})
+        );
+        request
+            .respond(Response::from_string(
+                r#"{"error":{"message":"init failed"},"saved":true}"#,
+            ))
+            .unwrap();
+    });
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "script",
+        "data-patch",
+        "main",
+        "--values",
+        r#"{"count":8,"remove":null,"nested":[1,{"ok":true}]}"#,
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["error"]["code"], "BERRY_ERROR");
+    assert_eq!(result["error"]["device_result"]["saved"], true);
+    assert!(result["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("saved"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("init failed"));
+}
+
+#[test]
+fn script_data_patch_validates_before_network_and_empty_object_is_valid() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    for (name, values) in [
+        ("bad/name", "{}"),
+        ("main", "{"),
+        ("main", "[]"),
+        ("main", "null"),
+        ("main", "2"),
+    ] {
+        let output = run(&[
+            "--json",
+            "--target",
+            &url,
+            "script",
+            "data-patch",
+            name,
+            "--values",
+            values,
+        ]);
+        assert_eq!(output.status.code(), Some(2));
+    }
+    let request = server.recv_timeout(Duration::from_millis(50)).unwrap();
+    assert!(request.is_none());
+    let worker = thread::spawn(move || {
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/main/data");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(body, "{}");
+        request
+            .respond(Response::from_string(r#"{"ok":true}"#))
+            .unwrap();
+    });
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "script",
+        "data-patch",
+        "main",
+        "--values",
+        "{}",
+    ])
+    .to_owned();
+    worker.join().unwrap();
+    assert!(output.status.success());
+}
+
+#[test]
+fn script_data_patch_success_preserves_device_result_and_fields_projection() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.method(), &tiny_http::Method::Patch);
+        assert_eq!(request.url(), "/api/v1/apps/main/data");
+        request
+            .respond(Response::from_string(r#"{"persisted":true}"#))
+            .unwrap();
+    });
+    let output = run(&[
+        "--json",
+        "--fields",
+        "device_result",
+        "--target",
+        &url,
+        "script",
+        "data-patch",
+        "main",
+        "--values",
+        r#"{"new":1,"nested":{"x":[2]},"deleted":null}"#,
+    ]);
+    worker.join().unwrap();
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({"device_result":{"persisted":true}})
+    );
+}
+
+#[test]
+fn script_data_patch_is_discoverable_offline() {
+    let help = run(&["script", "data-patch", "--help"]);
+    assert!(String::from_utf8_lossy(&help.stdout).contains("--values"));
+    let list = run(&["--json", "describe", "--list"]);
+    assert!(String::from_utf8_lossy(&list.stdout).contains("script data-patch"));
+    let description = run(&["--json", "describe", "script data-patch", "--offline"]);
+    assert!(description.status.success());
+    let description: serde_json::Value = serde_json::from_slice(&description.stdout).unwrap();
+    assert_eq!(description["command"], "script data-patch");
+    assert_eq!(description["route"], "PATCH /api/v1/apps/{name}/data");
+    assert!(description["schema"].to_string().contains("null"));
+    assert!(description["limitations"].to_string().contains("rollback"));
+}
+
 fn run(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_awtrix-cli"))
         .args(args)

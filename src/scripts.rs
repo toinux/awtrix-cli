@@ -76,6 +76,15 @@ pub enum Command {
         #[arg(long, help = "JSON object of setting keys and values")]
         values: String,
     },
+    /// Partially patch persisted script data (null deletes keys; restarts the script).
+    #[command(
+        long_about = "Partially PATCH the script store without redeploying source. Omitted keys remain unchanged and null deletes a key; firmware rejects @config keys (422). Saving restarts the script and reruns initialization, which may change injected values. HTTP 200 with a Berry error means data was saved but restart failed; no rollback or retry occurs. Runtime success is not guaranteed."
+    )]
+    DataPatch {
+        name: String,
+        #[arg(long, help = "JSON object of store keys and values")]
+        values: String,
+    },
     /// Read data persisted by store.set().
     Data { name: String },
 }
@@ -246,6 +255,27 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
         Command::Data { name } => {
             validate(name)?;
             api.get(&format!("/api/v1/apps/{name}/data"))
+        }
+        Command::DataPatch { name, values } => {
+            validate(name)?;
+            let body: Value = serde_json::from_str(values)
+                .map_err(|_| ("ARGUMENT", "data values must be a JSON object".into()))?;
+            if !body.is_object() {
+                return Err(("ARGUMENT", "data values must be a JSON object".into()));
+            }
+            let result = api.mutate(
+                reqwest::Method::PATCH,
+                &format!("/api/v1/apps/{name}/data"),
+                &body,
+            )?;
+            if result.get("error").is_some_and(|error| !error.is_null()) {
+                return Ok(
+                    json!({"__berry_error":true,"name":name,"device_result":result,"message":"data was saved but script restart failed; no rollback was performed","runtime_success_guaranteed":false}),
+                );
+            }
+            Ok(
+                json!({"name":name,"accepted":true,"device_result":result,"restart":"saving data restarts the script; initialization may immediately change injected values","runtime_success_guaranteed":false}),
+            )
         }
     }
 }

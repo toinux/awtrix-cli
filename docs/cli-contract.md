@@ -16,6 +16,10 @@ Verified OpenAPI sources (retrieved 2026-10-07):
 
 ## Berry script source (ticket 07)
 
+## Script data patch (ticket 60)
+
+`script data-patch NAME --values JSON` validates NAME as `[A-Za-z0-9_-]{1,32}` and requires a JSON object (including `{}`); invalid input fails before HTTP. It sends exactly one PATCH to `/api/v1/apps/{name}/data` with the object unchanged. This is a partial store update: omitted keys remain untouched and `null` deletes a key. It does not redeploy source. Firmware rejects `@config` keys (422); use `config-put` for declared configuration. A successful PATCH restarts the script and reruns initialization, which may immediately change injected data. No runtime health is guaranteed. HTTP 200 with non-null `error` returns exit 1 `BERRY_ERROR`, preserving `device_result` and explicitly reporting that data was saved despite restart failure; there is no rollback or retry. A lost response has an unknown write outcome. This command neither resets the store nor confirms/forces writes.
+
 `script get NAME` sends `GET /api/v1/apps/script/{name}` and writes the `text/plain` source exactly to stdout in human mode, or as `{"source":"..."}` under `--json`, without an imposed JSON-body limit. `NAME` matches `[A-Za-z0-9_-]{1,32}`. `script deploy NAME (--source TEXT | --file PATH)` reads a non-empty UTF-8 source.
 
 By default deploy requires `GET /api/v1/capabilities` to advertise `scriptUpdates: true`, and requires the caller's original `--expected-source TEXT` or explicit `--create`. The CLI does not refresh that reference immediately before writing. It uses atomic `PUT /api/v1/apps/script-update/{name}` with JSON `{ "expected_source": <string|null>, "source": <string> }`; null means create-only. HTTP 409 is `CONFLICT` (exit 1) and leaves remote source unchanged. Missing capability aborts before write (`PROTECTION_UNAVAILABLE`, exit 6); it never emulates atomicity with GET-then-PUT. `--force` explicitly selects raw `PUT /api/v1/apps/script/{name}` and reports the weaker guarantee; it is not a fallback.
