@@ -14,7 +14,7 @@ For specs, ticket dependencies, implementation PRs or interrupted runs, follow `
 
 ### Releases
 
-When asked to cut a release, follow `docs/agents/release.md`. A release requires an explicit human confirmation of the proposed version and notes before creating or pushing the version commit and annotated tag.
+When asked to cut a release, follow `docs/agents/release.md`, including the mandatory English `CHANGELOG.md` update for every release. A release requires an explicit human confirmation of the proposed version and notes before creating or pushing the version commit and annotated tag.
 
 ### Triage labels
 

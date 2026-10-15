@@ -140,6 +140,8 @@ Descriptions are JSON objects (pretty by default, compact with `--json`). `--fie
 
 ## Technical notes
 
+See [CHANGELOG.md](CHANGELOG.md) for release history and unreleased changes.
+
 ### Install or build the executable yourself
 
 The skill normally handles CLI installation for the agent. If you prefer to install or build it yourself, published binaries are available from [GitHub Releases](https://github.com/toinux/awtrix-cli/releases) for Linux x86_64 (GNU/glibc), macOS Apple Silicon, and Windows x86_64. The CLI also supports building from source with Rust:

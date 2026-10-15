@@ -10,8 +10,11 @@ the tag.
 1. Verify the working tree is clean, fetch `origin`, and confirm the checkout is
    on `main` and up to date with `origin/main`. Do not release from a feature
    branch or silently discard unrelated work.
-2. Inspect commits since the latest `v*` tag and summarize the user-visible
-   changes in a few concise sentences. There is no changelog file to update.
+2. Inspect commits since the latest `v*` tag and reconcile all notable changes
+   with `CHANGELOG.md`'s `Unreleased` section. Keep entries in English, grouped
+   under the applicable Keep a Changelog categories (`Added`, `Changed`,
+   `Deprecated`, `Removed`, `Fixed`, `Security`), and explicitly describe breaking
+   changes and migration steps. Summarize these entries in concise release notes.
 3. Choose the next stable Semantic Versioning number: patch for compatible fixes,
    minor for backward-compatible features, and major for breaking changes. Do
    not create prerelease or build-metadata versions.
@@ -22,11 +25,14 @@ the tag.
 
 1. Update the package version in `Cargo.toml`. Update the `awtrix-cli` package
    entry in `Cargo.lock` without changing unrelated dependency versions. Update
-   `docs/distribution.md`'s current-version reference if needed.
+   `docs/distribution.md`'s current-version reference if needed. For every release,
+   move the approved `Unreleased` entries into a new `## [<version>] - YYYY-MM-DD`
+   section in `CHANGELOG.md`, using the UTC publication date. Keep an empty
+   `Unreleased` section at the top and update the version comparison links.
 2. Run `cargo check` to refresh the lockfile, then `cargo check --locked` and
    relevant local checks. Inspect the diff to ensure only intended version and
    documentation changes are included.
-3. Create a commit on `main` for the version bump. Create an **annotated** tag
+3. Create a commit on `main` for the version bump and changelog. Create an **annotated** tag
    named `v<version>` on that commit; its message must contain the concise
    release notes proposed to the user.
 4. Push the commit to `origin/main`, then push the tag. Never force-push, move,
