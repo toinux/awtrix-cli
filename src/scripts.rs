@@ -241,7 +241,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                 let saved = operational_result(result, false, None)?;
                 if let Some(root) = capture_root {
                     let start_evidence = verify_start_evidence(api, name);
-                    capture_one_after(
+                    capture_markers_after(
                         saved,
                         api,
                         name,
@@ -276,7 +276,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                             .or_else(|| verify_start(api, name));
                         let saved = operational_result(result, true, verification)?;
                         if let Some(root) = capture_root {
-                            capture_one_after(
+                            capture_markers_after(
                                 saved,
                                 api,
                                 name,
@@ -411,7 +411,7 @@ fn chain_verification(
     Ok(saved)
 }
 
-fn capture_one_after(
+fn capture_markers_after(
     mut saved: Value,
     api: &crate::ApiClient,
     name: &str,
@@ -503,8 +503,19 @@ fn capture_one_after(
             report["error"] = json!({"code":"INVALID_RESPONSE","message":"log lines are missing or invalid","phase":"log_collection"});
             break;
         };
+        if lines.iter().any(|line| !line.is_string()) {
+            report["stop_reason"] = json!("error");
+            report["error"] = json!({"code":"INVALID_RESPONSE","message":"log lines must all be strings","phase":"log_collection"});
+            break;
+        }
+        if next < cursor || (next == cursor && !lines.is_empty()) {
+            report["stop_reason"] = json!("error");
+            report["error"] = json!({"code":"INVALID_RESPONSE","message":"log cursor did not advance for a non-empty batch","phase":"log_collection"});
+            break;
+        }
         cursor = next.max(cursor);
         let mut found = Vec::new();
+        let batch_received_at = started.elapsed();
         {
             for line in lines.iter().filter_map(Value::as_str) {
                 if received.len() == 34 {
@@ -513,7 +524,7 @@ fn capture_one_after(
                 received.push_back(line.to_owned());
                 match parse_capture_marker(line, name) {
                     Some(label) => {
-                        found.push((label, started.elapsed()));
+                        found.push((label, batch_received_at));
                     }
                     None if line.contains(&format!("[script:{name}]"))
                         && line.contains("[CAPTURE]") =>

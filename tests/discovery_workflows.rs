@@ -334,6 +334,11 @@ fn multiple_capture_help_and_offline_discovery_match_capture_cli_contract() {
             .as_str()
             .unwrap()
             .contains("--capture-dir ./captures")));
+    assert!(description["examples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|example| example.as_str().unwrap().contains("--capture-count 3")));
     assert_eq!(
         description["parameters"]["--capture-count"],
         "positive PNG count (default 1), requires --capture-dir"
