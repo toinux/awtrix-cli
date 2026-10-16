@@ -309,17 +309,18 @@ fn discovered_minimal_manifest_validates_without_a_target() {
 }
 
 #[test]
-fn single_capture_help_and_offline_discovery_match_one_capture_cli_contract() {
+fn multiple_capture_help_and_offline_discovery_match_capture_cli_contract() {
     let help = run(&["script", "deploy", "--help"]);
     let help = String::from_utf8_lossy(&help.stdout);
     assert!(help.contains("--capture-dir"));
+    assert!(help.contains("--capture-count"));
     assert!(help.contains("--capture-timeout-ms"));
     assert!(help.contains("default: 10000"));
     let description = run(&["--json", "describe", "script", "--offline"]);
     let description: Value = serde_json::from_slice(&description.stdout).unwrap();
     assert_eq!(
         description["parameters"]["--capture-dir"],
-        "opt-in one capture triggered by a new exact target-script marker; cannot combine with --verify-secs"
+        "opt-in named captures triggered by new exact target-script markers; cannot combine with --verify-secs"
     );
     assert_eq!(
         description["parameters"]["--capture-timeout-ms"],
@@ -333,7 +334,10 @@ fn single_capture_help_and_offline_discovery_match_one_capture_cli_contract() {
             .as_str()
             .unwrap()
             .contains("--capture-dir ./captures")));
-    assert!(description["parameters"].get("--capture-count").is_none());
+    assert_eq!(
+        description["parameters"]["--capture-count"],
+        "positive PNG count (default 1), requires --capture-dir"
+    );
 }
 
 #[test]

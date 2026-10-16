@@ -142,7 +142,7 @@ time, not an app's identity; state and capture are separate observations and
 rotation can occur between them.
 
 When deploying a script whose new rendering needs visual inspection, consider
-`script deploy --capture-dir DIR` for one new marker-triggered PNG; see the
+`script deploy --capture-dir DIR` for one or more new marker-triggered PNGs; see the
 bounded workflow and timing limitations in [Berry workflows](references/workflows.md#standalone-scripts-and-protected-updates).
 
 Choose the capture format for its consumer. PNG is the default: save it to a

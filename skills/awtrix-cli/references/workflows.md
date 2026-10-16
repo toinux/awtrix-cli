@@ -41,7 +41,7 @@ awtrix-cli --target http://awtrix.local --json script deploy main \
 The script should draw normally, allow its first render to settle, then emit
 one `log('[CAPTURE] ready')` from its post-paint callback. Return normally from
 the callback and keep state nonblocking while the device capture is acquired.
-Review the attempt's `capture_collection` report and PNG; the CLI does not
+Use `--capture-count N` to request multiple states (default 1); repeated labels get numbered distinct files, and the ordered report lists exact paths. A count names no missing marker. A batch is processed sequentially and cannot reconstruct past frames; markers do not guarantee synchronization. 500 ms of script-side stabilization is only an empirical starting point, not a CLI delay or guarantee. Review the attempt's `capture_collection` report and PNGs; the CLI does not
 promise exact log/frame synchronization, visual identity or runtime correctness.
 On ESP32 1.2.2 immediate captures were initially black; waiting 500 ms before
 the marker succeeded 2/2 in the targeted experiment, not as a general guarantee.

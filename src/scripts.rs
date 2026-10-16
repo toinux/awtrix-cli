@@ -41,7 +41,7 @@ pub enum Command {
     },
     /// Deploy Berry source using create-only or exact-source conditional protection; --force opts out.
     #[command(
-        long_about = "Deploy Berry source using the selected existing protection. --capture-dir opts into one PNG after a new log line exactly matching '[script:<name>] [CAPTURE] <label>', optionally preceded by an HH:MM:SS timestamp. Labels are 1..64 ASCII letters, digits, '_' or '-'. The cursor is taken before deployment; after explicit start confirmation the script is selected once and observed for --capture-timeout-ms (default 10000, 1..3600000). Capture mode cannot be combined with --verify-secs. Capture timeout/failure returns a nonzero status with source-save and capture_collection evidence; it does not undo deployment. --force remains unverified outside this mode; inside capture mode it receives a separate explicit post-deploy start check. No exact frame synchronization or runtime-correctness guarantee is made."
+        long_about = "Deploy Berry source using the selected existing protection. --capture-dir opts into --capture-count (default 1) PNGs after new log lines exactly matching '[script:<name>] [CAPTURE] <label>', optionally preceded by an HH:MM:SS timestamp. Labels are 1..64 ASCII letters, digits, '_' or '-'. The cursor is taken before deployment; after explicit start confirmation the script is selected once and observed under a shared --capture-timeout-ms budget (default 10000, 1..3600000). Capture mode cannot be combined with --verify-secs. Timeout/failure returns nonzero with source-save and partial capture_collection evidence; it does not undo deployment. --force remains unverified outside this mode; inside capture mode it receives a separate explicit post-deploy start check. A batch cannot reconstruct past frames and no exact frame synchronization or runtime-correctness guarantee is made."
     )]
     Deploy {
         name: String,
@@ -61,9 +61,12 @@ pub enum Command {
         /// After saving, run verification for this many seconds (1..3600).
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..=3600))]
         verify_secs: Option<u64>,
-        /// Capture the first named marker into an isolated directory.
+        /// Capture named markers into an isolated directory.
         #[arg(long, conflicts_with = "verify_secs")]
         capture_dir: Option<PathBuf>,
+        /// Number of PNGs to save (positive; requires --capture-dir).
+        #[arg(long, requires = "capture_dir", value_parser = clap::value_parser!(u64).range(1..))]
+        capture_count: Option<u64>,
         /// Maximum marker-observation window in milliseconds.
         #[arg(long, requires = "capture_dir", value_parser = clap::value_parser!(u64).range(1..=3600000), default_value_t = 10000)]
         capture_timeout_ms: u64,
@@ -177,6 +180,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             force,
             verify_secs,
             capture_dir,
+            capture_count,
             capture_timeout_ms,
             minify,
         } => {
@@ -242,7 +246,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                         api,
                         name,
                         root,
-                        *capture_timeout_ms,
+                        (*capture_timeout_ms, capture_count.unwrap_or(1)),
                         baseline.unwrap_or(0),
                         start_evidence,
                     )
@@ -277,7 +281,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                                 api,
                                 name,
                                 root,
-                                *capture_timeout_ms,
+                                (*capture_timeout_ms, capture_count.unwrap_or(1)),
                                 baseline.unwrap_or(0),
                                 start_evidence.unwrap_or_else(|| json!({"confirmed":false})),
                             )
@@ -412,14 +416,14 @@ fn capture_one_after(
     api: &crate::ApiClient,
     name: &str,
     root: PathBuf,
-    timeout_ms: u64,
+    (timeout_ms, expected): (u64, u64),
     mut cursor: u64,
     start_evidence: Value,
 ) -> crate::CliResult<Value> {
     let started = Instant::now();
     let timeout = Duration::from_millis(timeout_ms);
     let start_verified = start_evidence["confirmed"] == true;
-    let mut report = json!({"attempt":root.file_name().and_then(|x|x.to_str()),"directory":root,"start_verified":start_verified,"start_evidence":start_evidence,"expected":1,"obtained":0,"captures":[],"stop_reason":"observation_timeout","error":null,"runtime_error":null,"runtime_success_guaranteed":false});
+    let mut report = json!({"attempt":root.file_name().and_then(|x|x.to_str()),"directory":root,"start_verified":start_verified,"start_evidence":start_evidence,"expected":expected,"obtained":0,"captures":[],"stop_reason":"observation_timeout","error":null,"runtime_error":null,"runtime_success_guaranteed":false});
     if !start_verified {
         report["stop_reason"] = json!("error");
         let code = if report["start_evidence"]["scripting_enabled"] == false {
@@ -489,13 +493,19 @@ fn capture_one_after(
                 break;
             }
         };
-        cursor = logs
-            .get("next")
-            .and_then(Value::as_u64)
-            .unwrap_or(cursor)
-            .max(cursor);
-        let mut found = None;
-        if let Some(lines) = logs.get("lines").and_then(Value::as_array) {
+        let Some(next) = logs.get("next").and_then(Value::as_u64) else {
+            report["stop_reason"] = json!("error");
+            report["error"] = json!({"code":"INVALID_RESPONSE","message":"log cursor is missing or invalid","phase":"log_collection"});
+            break;
+        };
+        let Some(lines) = logs.get("lines").and_then(Value::as_array) else {
+            report["stop_reason"] = json!("error");
+            report["error"] = json!({"code":"INVALID_RESPONSE","message":"log lines are missing or invalid","phase":"log_collection"});
+            break;
+        };
+        cursor = next.max(cursor);
+        let mut found = Vec::new();
+        {
             for line in lines.iter().filter_map(Value::as_str) {
                 if received.len() == 34 {
                     received.pop_front();
@@ -503,10 +513,13 @@ fn capture_one_after(
                 received.push_back(line.to_owned());
                 match parse_capture_marker(line, name) {
                     Some(label) => {
-                        found = Some((label, started.elapsed()));
-                        break;
+                        found.push((label, started.elapsed()));
                     }
-                    None if line.contains("[CAPTURE]") => warnings = warnings.saturating_add(1),
+                    None if line.contains(&format!("[script:{name}]"))
+                        && line.contains("[CAPTURE]") =>
+                    {
+                        warnings = warnings.saturating_add(1)
+                    }
                     None => {}
                 }
             }
@@ -556,11 +569,12 @@ fn capture_one_after(
                 break;
             }
         }
-        if let Some((label, marker_at)) = found {
-            if Instant::now() >= deadline {
+        for (label, marker_at) in found {
+            if Instant::now() >= deadline || report["obtained"].as_u64() == Some(expected) {
                 break;
             }
-            let path = root.join(format!("{label}-1.png"));
+            let number = report["obtained"].as_u64().unwrap_or(0) + 1;
+            let path = root.join(format!("{label}-{number}.png"));
             let capture_started = started.elapsed();
             let result = crate::screen::run_with_timeout(
                 &crate::screen::Command::Capture {
@@ -572,10 +586,12 @@ fn capture_one_after(
             );
             match result {
                 Ok(image) => {
-                    report["obtained"] = json!(1);
-                    report["captures"] = json!([{"name":label,"number":1,"path":path,"marker_received_ms":marker_at.as_millis(),"capture_started_ms":capture_started.as_millis(),"capture_finished_ms":started.elapsed().as_millis(),"capture":image}]);
-                    report["stop_reason"] = json!("capture_limit");
-                    break;
+                    report["obtained"] = json!(number);
+                    report["captures"].as_array_mut().unwrap().push(json!({"name":label,"number":number,"path":path,"marker_received_ms":marker_at.as_millis(),"capture_started_ms":capture_started.as_millis(),"capture_finished_ms":started.elapsed().as_millis(),"capture":image}));
+                    if number == expected {
+                        report["stop_reason"] = json!("capture_limit");
+                        break;
+                    }
                 }
                 Err((c, m)) => {
                     report["stop_reason"] =
@@ -590,13 +606,16 @@ fn capture_one_after(
                 }
             }
         }
+        if report["obtained"].as_u64() == Some(expected) || report["stop_reason"] == "error" {
+            break;
+        }
         std::thread::sleep(
             Duration::from_millis(250).min(deadline.saturating_duration_since(Instant::now())),
         );
     }
     report["elapsed_ms"] = json!(started.elapsed().as_millis());
     report["warning_count"] = json!(warnings.min(34));
-    if report["obtained"] != 1 {
+    if report["obtained"].as_u64() != Some(expected) {
         if report["stop_reason"] == "observation_timeout"
             && !report.get("error").is_some_and(|error| !error.is_null())
         {

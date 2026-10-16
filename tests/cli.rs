@@ -7059,7 +7059,7 @@ fn deploy_capture_ignores_other_script_marker_then_saves_named_png_after_selecti
         assert_eq!(request.url(), "/api/v1/logs?after=5");
         request
             .respond(Response::from_string(
-                r#"{"next":6,"lines":["01:02:05 [script:demo] [CAPTURE] final-frame"]}"#,
+                r#"{"next":7,"lines":["01:02:05 [script:demo] [CAPTURE] final-frame","01:02:06 [script:demo] [CAPTURE] final-frame"]}"#,
             ))
             .unwrap();
         let request = server.recv().unwrap();
@@ -7067,6 +7067,13 @@ fn deploy_capture_ignores_other_script_marker_then_saves_named_png_after_selecti
         request
             .respond(Response::from_string(
                 r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/display/screen");
+        request
+            .respond(Response::from_string(
+                r#"{"width":1,"height":1,"pixels":[66051]}"#,
             ))
             .unwrap();
         let request = server.recv().unwrap();
@@ -7089,6 +7096,8 @@ fn deploy_capture_ignores_other_script_marker_then_saves_named_png_after_selecti
         "--create",
         "--capture-dir",
         output_dir.to_str().unwrap(),
+        "--capture-count",
+        "2",
         "--capture-timeout-ms",
         "2000",
     ]);
@@ -7101,8 +7110,10 @@ fn deploy_capture_ignores_other_script_marker_then_saves_named_png_after_selecti
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let report = &value["capture_collection"];
     assert!(report.is_object(), "{}", value);
-    assert_eq!(report["obtained"], 1, "{}", value);
+    assert_eq!(report["obtained"], 2, "{}", value);
     assert_eq!(report["captures"][0]["name"], "final-frame");
+    assert_eq!(report["captures"][1]["name"], "final-frame");
+    assert_eq!(report["captures"][1]["number"], 2);
     assert_eq!(report["captures"][0]["capture"]["width"], 1);
     assert_eq!(report["stop_reason"], "capture_limit");
     let png_path = std::path::PathBuf::from(report["captures"][0]["path"].as_str().unwrap());
