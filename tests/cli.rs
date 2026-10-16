@@ -7301,6 +7301,13 @@ fn deploy_capture_timeout_after_two_of_three_preserves_both_images() {
     assert_eq!(report["expected"], 3);
     assert_eq!(report["obtained"], 2);
     assert_eq!(report["stop_reason"], "observation_timeout");
+    assert_eq!(report["error"]["code"], "TIMEOUT");
+    assert_eq!(report["error"]["phase"], "capture");
+    assert!(!report["error"]["message"].as_str().unwrap().is_empty());
+    assert!(!report["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("no valid capture marker"));
     for capture in report["captures"].as_array().unwrap() {
         let path = std::path::PathBuf::from(capture["path"].as_str().unwrap());
         assert!(path.is_file());
@@ -7310,6 +7317,69 @@ fn deploy_capture_timeout_after_two_of_three_preserves_both_images() {
         reader.next_frame(&mut pixels).unwrap();
         assert_eq!(&pixels[..3], &[1, 2, 3]);
     }
+}
+
+#[test]
+fn deploy_capture_no_more_markers_timeout_describes_partial_count_truthfully() {
+    let root = tempfile::tempdir().unwrap();
+    let output_dir = root.path().join("captures");
+    std::fs::create_dir(&output_dir).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        serve_capture_deploy_prefix(&server);
+        for (path, body) in [
+            (
+                "/api/v1/logs?after=0",
+                r#"{"next":2,"lines":["[script:demo] [CAPTURE] one","[script:demo] [CAPTURE] two"]}"#,
+            ),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ),
+            (
+                "/api/v1/display/screen",
+                r#"{"width":1,"height":1,"pixels":[66051]}"#,
+            ),
+            (
+                "/api/v1/display/screen",
+                r#"{"width":1,"height":1,"pixels":[66051]}"#,
+            ),
+        ] {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), path);
+            request.respond(Response::from_string(body)).unwrap();
+        }
+    });
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "return Demo()",
+        "--create",
+        "--capture-dir",
+        output_dir.to_str().unwrap(),
+        "--capture-count",
+        "3",
+        "--capture-timeout-ms",
+        "200",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let report = &value["capture_collection"];
+    assert_eq!(report["obtained"], 2);
+    assert_eq!(report["stop_reason"], "observation_timeout");
+    assert_eq!(report["error"]["code"], "TIMEOUT");
+    assert_eq!(report["error"]["phase"], "capture_observation");
+    let message = report["error"]["message"].as_str().unwrap();
+    assert!(message.contains("2 of 3"), "{message}");
+    assert!(!message.contains("no valid capture marker"), "{message}");
+    assert_eq!(report["captures"].as_array().unwrap().len(), 2);
 }
 
 #[test]
@@ -7380,6 +7450,8 @@ fn deploy_capture_disk_failure_after_first_png_preserves_it_and_reports_primary_
     assert_eq!(report["obtained"], 1);
     assert_eq!(report["stop_reason"], "error");
     assert_eq!(report["error"]["phase"], "capture");
+    assert_eq!(report["error"]["code"], "FILE_WRITE");
+    assert!(!report["error"]["message"].as_str().unwrap().is_empty());
     let first = std::path::PathBuf::from(report["captures"][0]["path"].as_str().unwrap());
     assert!(first.is_file());
     assert!(report["diagnostic_logs"].as_array().unwrap().len() <= 34);
@@ -7551,6 +7623,70 @@ fn deploy_capture_state_failure_after_first_png_keeps_runtime_error_and_image() 
     assert_eq!(report["obtained"], 1);
     assert_eq!(report["error"]["phase"], "state_observation");
     assert_eq!(report["runtime_error"]["message"], "boom");
+    assert!(std::path::Path::new(report["captures"][0]["path"].as_str().unwrap()).is_file());
+}
+
+#[test]
+fn deploy_capture_request_timeout_before_shared_deadline_is_an_immediate_error() {
+    let root = tempfile::tempdir().unwrap();
+    let output_dir = root.path().join("captures");
+    std::fs::create_dir(&output_dir).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        serve_capture_deploy_prefix(&server);
+        for (path, body) in [
+            (
+                "/api/v1/logs?after=0",
+                r#"{"next":2,"lines":["[script:demo] [CAPTURE] first","[script:demo] [CAPTURE] second"]}"#,
+            ),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ),
+            (
+                "/api/v1/display/screen",
+                r#"{"width":1,"height":1,"pixels":[66051]}"#,
+            ),
+        ] {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), path);
+            request.respond(Response::from_string(body)).unwrap();
+        }
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/display/screen");
+        thread::sleep(Duration::from_millis(250));
+        let _ = request.respond(Response::from_string(
+            r#"{"width":1,"height":1,"pixels":[66051]}"#,
+        ));
+    });
+    let output = run(&[
+        "--timeout",
+        "100",
+        "--json",
+        "--target",
+        &url,
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "return Demo()",
+        "--create",
+        "--capture-dir",
+        output_dir.to_str().unwrap(),
+        "--capture-count",
+        "2",
+        "--capture-timeout-ms",
+        "2000",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let report = &value["capture_collection"];
+    assert_eq!(report["obtained"], 1);
+    assert_eq!(report["stop_reason"], "error");
+    assert_eq!(report["error"]["code"], "TIMEOUT");
+    assert_eq!(report["error"]["phase"], "capture");
     assert!(std::path::Path::new(report["captures"][0]["path"].as_str().unwrap()).is_file());
 }
 

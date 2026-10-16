@@ -630,7 +630,8 @@ fn capture_markers_after(
         if report["stop_reason"] == "observation_timeout"
             && !report.get("error").is_some_and(|error| !error.is_null())
         {
-            report["error"] = json!({"code":"TIMEOUT","message":"no valid capture marker was observed before the capture deadline","phase":"capture_observation"});
+            let obtained = report["obtained"].as_u64().unwrap_or(0);
+            report["error"] = json!({"code":"TIMEOUT","message":format!("capture observation deadline elapsed after {obtained} of {expected} requested PNGs were saved"),"phase":"capture_observation"});
         }
         report["diagnostic_logs"] = json!(received);
         saved["__capture_failure"] = json!(true);
