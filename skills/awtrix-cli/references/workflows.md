@@ -31,7 +31,7 @@ reference is stale; inspect and resolve the concurrent edit. `--force` is an
 explicit unprotected overwrite, not a retry or compatibility fallback.
 
 When visual evidence is needed from a newly deployed script, use the opt-in
-single-capture flow:
+marker-triggered capture flow (one PNG by default; use `--capture-count N` for N states):
 
 ```sh
 awtrix-cli --target http://awtrix.local --json script deploy main \
@@ -41,7 +41,7 @@ awtrix-cli --target http://awtrix.local --json script deploy main \
 The script should draw normally, allow its first render to settle, then emit
 one `log('[CAPTURE] ready')` from its post-paint callback. Return normally from
 the callback and keep state nonblocking while the device capture is acquired.
-Review the attempt's `capture_collection` report and PNG; the CLI does not
+Repeated labels produce `<label>-1.png`, `<label>-2.png`, and so on in the unique attempt directory; the ordered `capture_collection.captures` list gives exact paths. A count names no missing marker—the CLI knows only how many PNGs were requested. A batch is processed sequentially and cannot reconstruct past frames; markers do not guarantee synchronization. Partial timeout/error reports retain usable PNG paths. 500 ms of script-side stabilization is only an empirical starting point, not a CLI delay or guarantee. Review the attempt report and PNGs; the CLI does not
 promise exact log/frame synchronization, visual identity or runtime correctness.
 On ESP32 1.2.2 immediate captures were initially black; waiting 500 ms before
 the marker succeeded 2/2 in the targeted experiment, not as a general guarantee.
