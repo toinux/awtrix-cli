@@ -40,6 +40,9 @@ pub enum Command {
         no_backup: bool,
     },
     /// Deploy Berry source using create-only or exact-source conditional protection; --force opts out.
+    #[command(
+        long_about = "Deploy Berry source using the selected existing protection. --capture-dir opts into one PNG after a new log line exactly matching '[script:<name>] [CAPTURE] <label>', optionally preceded by an HH:MM:SS timestamp. Labels are 1..64 ASCII letters, digits, '_' or '-'. The cursor is taken before deployment; after explicit start confirmation the script is selected once and observed for --capture-timeout-ms (default 10000, 1..3600000). Capture mode cannot be combined with --verify-secs. Capture timeout/failure returns a nonzero status with source-save and capture_collection evidence; it does not undo deployment. --force remains unverified outside this mode; inside capture mode it receives a separate explicit post-deploy start check. No exact frame synchronization or runtime-correctness guarantee is made."
+    )]
     Deploy {
         name: String,
         #[arg(long, conflicts_with = "file")]
@@ -58,6 +61,12 @@ pub enum Command {
         /// After saving, run verification for this many seconds (1..3600).
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..=3600))]
         verify_secs: Option<u64>,
+        /// Capture the first named marker into an isolated directory.
+        #[arg(long, conflicts_with = "verify_secs")]
+        capture_dir: Option<PathBuf>,
+        /// Maximum marker-observation window in milliseconds.
+        #[arg(long, requires = "capture_dir", value_parser = clap::value_parser!(u64).range(1..=3600000), default_value_t = 10000)]
+        capture_timeout_ms: u64,
         /// Minify the deployment payload; the source file and expected-source reference stay original.
         #[arg(long)]
         minify: bool,
@@ -167,6 +176,8 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             create,
             force,
             verify_secs,
+            capture_dir,
+            capture_timeout_ms,
             minify,
         } => {
             validate(name)?;
@@ -189,10 +200,55 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             } else {
                 source.clone()
             };
+            let capture_root = if let Some(dir) = capture_dir {
+                if !dir.is_dir() {
+                    return Err((
+                        "ARGUMENT",
+                        "--capture-dir must name an existing directory".into(),
+                    ));
+                }
+                Some(
+                    tempfile::Builder::new()
+                        .prefix("attempt-")
+                        .tempdir_in(dir)
+                        .map_err(|e| {
+                            ("FILE_WRITE", format!("cannot reserve capture attempt: {e}"))
+                        })?
+                        .keep(),
+                )
+            } else {
+                None
+            };
+            let baseline = if capture_root.is_some() {
+                Some(
+                    api.get("/api/v1/logs?after=0")?
+                        .get("next")
+                        .and_then(Value::as_u64)
+                        .ok_or((
+                            "INVALID_RESPONSE",
+                            "log cursor missing before deployment".into(),
+                        ))?,
+                )
+            } else {
+                None
+            };
             if *force {
                 let result = api.raw_put(&format!("/api/v1/apps/script/{name}"), &payload)?;
                 let saved = operational_result(result, false, None)?;
-                chain_verification(saved, api, name, *verify_secs)
+                if let Some(root) = capture_root {
+                    let start_evidence = verify_start_evidence(api, name);
+                    capture_one_after(
+                        saved,
+                        api,
+                        name,
+                        root,
+                        *capture_timeout_ms,
+                        baseline.unwrap_or(0),
+                        start_evidence,
+                    )
+                } else {
+                    chain_verification(saved, api, name, *verify_secs)
+                }
             } else {
                 let capabilities = api.get("/api/v1/capabilities")?;
                 if capabilities.get("scriptUpdates").and_then(Value::as_bool) != Some(true) {
@@ -207,9 +263,27 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                     Err(("CONFLICT", message)) => Err(("CONFLICT", message)),
                     Err(e) => Err(e),
                     Ok(result) => {
-                        let verification = verify_start(api, name);
+                        let start_evidence = capture_root
+                            .as_ref()
+                            .map(|_| verify_start_evidence(api, name));
+                        let verification = start_evidence
+                            .as_ref()
+                            .map(|e| e["confirmed"].as_bool() == Some(true))
+                            .or_else(|| verify_start(api, name));
                         let saved = operational_result(result, true, verification)?;
-                        chain_verification(saved, api, name, *verify_secs)
+                        if let Some(root) = capture_root {
+                            capture_one_after(
+                                saved,
+                                api,
+                                name,
+                                root,
+                                *capture_timeout_ms,
+                                baseline.unwrap_or(0),
+                                start_evidence.unwrap_or_else(|| json!({"confirmed":false})),
+                            )
+                        } else {
+                            chain_verification(saved, api, name, *verify_secs)
+                        }
                     }
                 }
             }
@@ -331,6 +405,235 @@ fn chain_verification(
         }
     }
     Ok(saved)
+}
+
+fn capture_one_after(
+    mut saved: Value,
+    api: &crate::ApiClient,
+    name: &str,
+    root: PathBuf,
+    timeout_ms: u64,
+    mut cursor: u64,
+    start_evidence: Value,
+) -> crate::CliResult<Value> {
+    let started = Instant::now();
+    let timeout = Duration::from_millis(timeout_ms);
+    let start_verified = start_evidence["confirmed"] == true;
+    let mut report = json!({"attempt":root.file_name().and_then(|x|x.to_str()),"directory":root,"start_verified":start_verified,"start_evidence":start_evidence,"expected":1,"obtained":0,"captures":[],"stop_reason":"observation_timeout","error":null,"runtime_error":null,"runtime_success_guaranteed":false});
+    if !start_verified {
+        report["stop_reason"] = json!("error");
+        let code = if report["start_evidence"]["scripting_enabled"] == false {
+            "SCRIPTING_DISABLED"
+        } else if report["start_evidence"]
+            .get("runtime_error")
+            .is_some_and(|error| !error.is_null())
+        {
+            "BERRY_ERROR"
+        } else if report["start_evidence"]["app_present"] == false {
+            "SCRIPT_ABSENT"
+        } else if report["start_evidence"]["enabled"] != true {
+            "SCRIPT_NOT_RUNNING"
+        } else if report["start_evidence"]["error_explicit_null"] != true {
+            "ERROR_STATE_UNAVAILABLE"
+        } else {
+            "START_UNCONFIRMED"
+        };
+        report["error"] = json!({"code":code,"message":"script start was not confirmed; capture was not attempted","phase":"start_confirmation"});
+        saved["capture_collection"] = report;
+        saved["__capture_failure"] = json!(true);
+        return Ok(saved);
+    }
+    let deadline = started + timeout;
+    let selected = api.mutate_with_timeout(
+        reqwest::Method::PUT,
+        "/api/v1/apps/active",
+        &json!({"name":name,"fast":true}),
+        timeout,
+    );
+    match selected {
+        Err((code, message)) => {
+            report["stop_reason"] = json!(if code == "TIMEOUT" && Instant::now() >= deadline {
+                "observation_timeout"
+            } else {
+                "error"
+            });
+            report["error"] = json!({"code":code,"message":message,"phase":"selection"});
+            saved["capture_collection"] = report;
+            saved["__capture_failure"] = json!(true);
+            return Ok(saved);
+        }
+        Ok(result) if result.get("error").is_some_and(|error| !error.is_null()) => {
+            report["stop_reason"] = json!("error");
+            report["error"] = json!({"code":"SELECTION_FAILED","message":"device rejected script selection","phase":"selection"});
+            report["device_result"] = result;
+            saved["capture_collection"] = report;
+            saved["__capture_failure"] = json!(true);
+            return Ok(saved);
+        }
+        Ok(_) => {}
+    }
+    let mut warnings: usize = 0;
+    let mut received = std::collections::VecDeque::new();
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let logs = match api.get_with_timeout(&format!("/api/v1/logs?after={cursor}"), remaining) {
+            Ok(x) => x,
+            Err((c, m)) => {
+                if c == "TIMEOUT" && Instant::now() >= deadline {
+                    report["stop_reason"] = json!("observation_timeout");
+                    report["error"] = json!({"code":c,"message":m,"phase":"log_collection"});
+                    break;
+                }
+                report["stop_reason"] = json!("error");
+                report["error"] = json!({"code":c,"message":m,"phase":"log_collection"});
+                break;
+            }
+        };
+        cursor = logs
+            .get("next")
+            .and_then(Value::as_u64)
+            .unwrap_or(cursor)
+            .max(cursor);
+        let mut found = None;
+        if let Some(lines) = logs.get("lines").and_then(Value::as_array) {
+            for line in lines.iter().filter_map(Value::as_str) {
+                if received.len() == 34 {
+                    received.pop_front();
+                }
+                received.push_back(line.to_owned());
+                match parse_capture_marker(line, name) {
+                    Some(label) => {
+                        found = Some((label, started.elapsed()));
+                        break;
+                    }
+                    None if line.contains("[CAPTURE]") => warnings = warnings.saturating_add(1),
+                    None => {}
+                }
+            }
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        match api.get_with_timeout(
+            "/api/v1/apps",
+            deadline.saturating_duration_since(Instant::now()),
+        ) {
+            Ok(apps) => {
+                let app = apps.as_array().and_then(|items| {
+                    items.iter().find(|app| {
+                        app.get("name").and_then(Value::as_str) == Some(name)
+                            && app.get("origin").and_then(Value::as_str) == Some("script")
+                    })
+                });
+                if let Some(error) = app
+                    .and_then(|app| app.get("error"))
+                    .filter(|error| !error.is_null())
+                {
+                    report["stop_reason"] = json!("error");
+                    report["runtime_error"] = error.clone();
+                    report["error"] = json!({"code":"BERRY_ERROR","message":"script reported a runtime error during capture observation","phase":"state_observation"});
+                    break;
+                }
+                if !app.is_some_and(|app| {
+                    app.get("enabled").and_then(Value::as_bool) == Some(true)
+                        && app.get("error").is_some_and(Value::is_null)
+                }) {
+                    report["stop_reason"] = json!("error");
+                    report["error"] = json!({"code":"SCRIPT_NOT_RUNNING","message":"script is no longer explicitly enabled and error-free","phase":"state_observation"});
+                    break;
+                }
+            }
+            Err((code, message)) => {
+                if code == "TIMEOUT" && Instant::now() >= deadline {
+                    report["stop_reason"] = json!("observation_timeout");
+                    report["error"] =
+                        json!({"code":code,"message":message,"phase":"state_observation"});
+                    break;
+                }
+                report["stop_reason"] = json!("error");
+                report["error"] =
+                    json!({"code":code,"message":message,"phase":"state_observation"});
+                break;
+            }
+        }
+        if let Some((label, marker_at)) = found {
+            if Instant::now() >= deadline {
+                break;
+            }
+            let path = root.join(format!("{label}-1.png"));
+            let capture_started = started.elapsed();
+            let result = crate::screen::run_with_timeout(
+                &crate::screen::Command::Capture {
+                    format: crate::screen::Format::Png,
+                    output: Some(path.clone()),
+                },
+                api,
+                deadline.saturating_duration_since(Instant::now()),
+            );
+            match result {
+                Ok(image) => {
+                    report["obtained"] = json!(1);
+                    report["captures"] = json!([{"name":label,"number":1,"path":path,"marker_received_ms":marker_at.as_millis(),"capture_started_ms":capture_started.as_millis(),"capture_finished_ms":started.elapsed().as_millis(),"capture":image}]);
+                    report["stop_reason"] = json!("capture_limit");
+                    break;
+                }
+                Err((c, m)) => {
+                    report["stop_reason"] =
+                        json!(if c == "TIMEOUT" && Instant::now() >= deadline {
+                            "observation_timeout"
+                        } else {
+                            "error"
+                        });
+                    report["error"] = json!({"code":c,"message":m,"phase":"capture"});
+                    saved["__capture_failure"] = json!(true);
+                    break;
+                }
+            }
+        }
+        std::thread::sleep(
+            Duration::from_millis(250).min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
+    report["elapsed_ms"] = json!(started.elapsed().as_millis());
+    report["warning_count"] = json!(warnings.min(34));
+    if report["obtained"] != 1 {
+        if report["stop_reason"] == "observation_timeout"
+            && !report.get("error").is_some_and(|error| !error.is_null())
+        {
+            report["error"] = json!({"code":"TIMEOUT","message":"no valid capture marker was observed before the capture deadline","phase":"capture_observation"});
+        }
+        report["diagnostic_logs"] = json!(received);
+        saved["__capture_failure"] = json!(true);
+    }
+    saved["capture_collection"] = report;
+    Ok(saved)
+}
+
+fn parse_capture_marker(line: &str, target: &str) -> Option<String> {
+    let rest = if line.as_bytes().get(2) == Some(&b':') {
+        let (time, rest) = line.split_once(' ')?;
+        let mut parts = time.split(':');
+        let h = parts.next()?.parse::<u8>().ok()?;
+        let m = parts.next()?.parse::<u8>().ok()?;
+        let s = parts.next()?.parse::<u8>().ok()?;
+        if parts.next().is_some() || h > 23 || m > 59 || s > 59 || time.len() != 8 {
+            return None;
+        }
+        rest
+    } else {
+        line
+    };
+    let prefix = format!("[script:{target}] [CAPTURE] ");
+    let marker = rest.strip_prefix(&prefix)?;
+    if marker.is_empty()
+        || marker.len() > 64
+        || !marker
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return None;
+    }
+    Some(marker.to_owned())
 }
 
 fn verify(
@@ -585,20 +888,49 @@ pub(crate) fn deploy_project(
     operational_result(response, true, verify_start(api, name))
 }
 fn verify_start(api: &crate::ApiClient, name: &str) -> Option<bool> {
-    let system = api.get("/api/v1/system").ok()?;
-    if system.get("scriptingEnabled").and_then(Value::as_bool) != Some(true) {
-        return Some(false);
+    let evidence = verify_start_evidence(api, name);
+    if evidence.get("error").is_some() {
+        None
+    } else {
+        evidence["confirmed"].as_bool()
     }
-    let apps = api.get("/api/v1/apps").ok()?;
-    let app = apps
-        .as_array()?
-        .iter()
-        .find(|app| app.get("name").and_then(Value::as_str) == Some(name))?;
-    Some(
-        app.get("origin").and_then(Value::as_str) == Some("script")
-            && app.get("enabled").and_then(Value::as_bool) == Some(true)
-            && app.get("error").is_some_and(Value::is_null),
-    )
+}
+
+fn verify_start_evidence(api: &crate::ApiClient, name: &str) -> Value {
+    let system = match api.get("/api/v1/system") {
+        Ok(value) => value,
+        Err((code, message)) => {
+            return json!({"confirmed":false,"phase":"system","error":{"code":code,"message":message}})
+        }
+    };
+    let scripting_enabled = system.get("scriptingEnabled").and_then(Value::as_bool);
+    if scripting_enabled != Some(true) {
+        return json!({"confirmed":false,"scripting_enabled":scripting_enabled,"phase":"system"});
+    }
+    let apps = match api.get("/api/v1/apps") {
+        Ok(value) => value,
+        Err((code, message)) => {
+            return json!({"confirmed":false,"scripting_enabled":scripting_enabled,"phase":"apps","error":{"code":code,"message":message}})
+        }
+    };
+    let app = apps.as_array().and_then(|items| {
+        items
+            .iter()
+            .find(|app| app.get("name").and_then(Value::as_str) == Some(name))
+    });
+    let origin = app
+        .and_then(|app| app.get("origin"))
+        .and_then(Value::as_str);
+    let enabled = app
+        .and_then(|app| app.get("enabled"))
+        .and_then(Value::as_bool);
+    let error_explicit_null = app
+        .and_then(|app| app.get("error"))
+        .is_some_and(Value::is_null);
+    let runtime_error = app
+        .and_then(|app| app.get("error"))
+        .filter(|error| !error.is_null());
+    json!({"confirmed":scripting_enabled == Some(true) && origin == Some("script") && enabled == Some(true) && error_explicit_null,"scripting_enabled":scripting_enabled,"app_present":app.is_some(),"origin":origin,"enabled":enabled,"error_explicit_null":error_explicit_null,"runtime_error":runtime_error})
 }
 
 fn operational_result(
@@ -620,4 +952,32 @@ fn operational_result(
     Ok(
         json!({"source_saved":true,"start_verified":start_verified,"execution_state":if start_verified {"verified"} else {"unknown"},"guarantee":if atomic {"atomic conditional update; restore on compile/setup failure only; no runtime guarantee"} else {"unconditional raw PUT; compile/start behavior is not verified"},"device_result":result}),
     )
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::parse_capture_marker;
+
+    #[test]
+    fn capture_marker_requires_exact_timestamp_script_and_token_prefix() {
+        assert_eq!(
+            parse_capture_marker("01:02:03 [script:demo] [CAPTURE] frame_1", "demo"),
+            Some("frame_1".into())
+        );
+        assert_eq!(
+            parse_capture_marker("[script:demo] [CAPTURE] frame-2", "demo"),
+            Some("frame-2".into())
+        );
+        for line in [
+            "01:02:03 [script:demographic] [CAPTURE] frame",
+            "01:02:03 [script:other] [CAPTURE] frame",
+            "garbage [CAPTURE] frame",
+            "25:02:03 [script:demo] [CAPTURE] frame",
+            "01:02:03 [script:demo] note [CAPTURE] frame",
+            "01:02:03 [script:demo] [CAPTURE] ../escape",
+            "01:02:03 [script:demo] [CAPTURE] frame extra",
+        ] {
+            assert_eq!(parse_capture_marker(line, "demo"), None, "{line}");
+        }
+    }
 }
