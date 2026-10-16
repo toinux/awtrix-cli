@@ -6994,6 +6994,693 @@ fn script_deploy_uses_atomic_expected_source_route_and_does_not_pre_read() {
 }
 
 #[test]
+fn deploy_capture_ignores_other_script_marker_then_saves_named_png_after_selection() {
+    let root = tempfile::tempdir().unwrap();
+    let output_dir = root.path().join("captures");
+    std::fs::create_dir(&output_dir).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/logs?after=0");
+        request
+            .respond(Response::from_string(
+                r#"{"next":4,"lines":["01:02:03 [script:demo] [CAPTURE] stale"]}"#,
+            ))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/capabilities");
+        request
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/script-update/demo");
+        let mut payload = String::new();
+        request.as_reader().read_to_string(&mut payload).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&payload).unwrap(),
+            serde_json::json!({"expected_source":null,"source":"return Demo()"})
+        );
+        request
+            .respond(Response::from_string(r#"{"ok":true,"error":null}"#))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/system");
+        request
+            .respond(Response::from_string(r#"{"scriptingEnabled":true}"#))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps");
+        request
+            .respond(Response::from_string(
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null,"inLoop":false}]"#,
+            ))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/active");
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"name":"demo","fast":true})
+        );
+        request.respond(Response::from_string("{}")).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/logs?after=4");
+        request.respond(Response::from_string(r#"{"next":5,"lines":["01:02:04 [script:demographic] [CAPTURE] wrong","01:02:04 [script:other] [CAPTURE] other","free text [CAPTURE] stray"]}"#)).unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps");
+        request
+            .respond(Response::from_string(
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/logs?after=5");
+        request
+            .respond(Response::from_string(
+                r#"{"next":6,"lines":["01:02:05 [script:demo] [CAPTURE] final-frame"]}"#,
+            ))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps");
+        request
+            .respond(Response::from_string(
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/display/screen");
+        request
+            .respond(Response::from_string(
+                r#"{"width":1,"height":1,"pixels":[66051]}"#,
+            ))
+            .unwrap();
+    });
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "return Demo()",
+        "--create",
+        "--capture-dir",
+        output_dir.to_str().unwrap(),
+        "--capture-timeout-ms",
+        "2000",
+    ]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let report = &value["capture_collection"];
+    assert!(report.is_object(), "{}", value);
+    assert_eq!(report["obtained"], 1, "{}", value);
+    assert_eq!(report["captures"][0]["name"], "final-frame");
+    assert_eq!(report["captures"][0]["capture"]["width"], 1);
+    assert_eq!(report["stop_reason"], "capture_limit");
+    let png_path = std::path::PathBuf::from(report["captures"][0]["path"].as_str().unwrap());
+    let decoder = png::Decoder::new(std::fs::File::open(png_path).unwrap());
+    let mut reader = decoder.read_info().unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size()];
+    reader.next_frame(&mut pixels).unwrap();
+    assert_eq!(&pixels[..3], &[1, 2, 3]);
+}
+
+#[test]
+fn deploy_capture_timeout_is_nonzero_and_preserves_saved_source_report() {
+    let root = tempfile::tempdir().unwrap();
+    let output_dir = root.path().join("captures");
+    std::fs::create_dir(&output_dir).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for (expected, body) in [
+            ("/api/v1/logs?after=0", r#"{"next":3,"lines":[]}"#),
+            ("/api/v1/capabilities", r#"{"scriptUpdates":true}"#),
+            (
+                "/api/v1/apps/script-update/demo",
+                r#"{"ok":true,"error":null}"#,
+            ),
+            ("/api/v1/system", r#"{"scriptingEnabled":true}"#),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ),
+            ("/api/v1/apps/active", "{}"),
+        ] {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), expected);
+            request.respond(Response::from_string(body)).unwrap();
+        }
+        let lines = (0..40)
+            .map(|n| format!("ordinary-log-{n:02}"))
+            .collect::<Vec<_>>();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/logs?after=3");
+        request
+            .respond(Response::from_string(
+                serde_json::json!({"next":43,"lines":lines}).to_string(),
+            ))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps");
+        request
+            .respond(Response::from_string(
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ))
+            .unwrap();
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/logs?after=43");
+        request
+            .respond(Response::from_string(r#"{"next":43,"lines":[]}"#))
+            .unwrap();
+    });
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "return Demo()",
+        "--create",
+        "--capture-dir",
+        output_dir.to_str().unwrap(),
+        "--capture-timeout-ms",
+        "300",
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["source_saved"], true);
+    assert_eq!(value["capture_collection"]["obtained"], 0);
+    assert_eq!(
+        value["capture_collection"]["stop_reason"],
+        "observation_timeout"
+    );
+    assert_eq!(value["capture_collection"]["error"]["code"], "TIMEOUT");
+    assert_eq!(
+        value["capture_collection"]["diagnostic_logs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        34
+    );
+    assert_eq!(
+        value["capture_collection"]["diagnostic_logs"][0],
+        "ordinary-log-06"
+    );
+    let attempt = value["capture_collection"]["attempt"].as_str().unwrap();
+    assert_eq!(
+        std::fs::read_dir(output_dir.join(attempt)).unwrap().count(),
+        0
+    );
+    assert_eq!(std::fs::read_dir(output_dir).unwrap().count(), 1);
+}
+
+#[test]
+fn forced_capture_confirms_runtime_after_raw_deploy_without_changing_unknown_deploy_status() {
+    let root = tempfile::tempdir().unwrap();
+    let output_dir = root.path().join("captures");
+    std::fs::create_dir(&output_dir).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for (expected, body) in [
+            ("/api/v1/logs?after=0", r#"{"next":12,"lines":[]}"#),
+            ("/api/v1/apps/script/demo", r#"{"ok":true,"error":null}"#),
+            ("/api/v1/system", r#"{"scriptingEnabled":true}"#),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null,"inLoop":false}]"#,
+            ),
+            ("/api/v1/apps/active", "{}"),
+            (
+                "/api/v1/logs?after=12",
+                r#"{"next":13,"lines":["12:00:00 [script:demo] [CAPTURE] forced"]}"#,
+            ),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ),
+            (
+                "/api/v1/display/screen",
+                r#"{"width":1,"height":1,"pixels":[66051]}"#,
+            ),
+        ] {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), expected);
+            request.respond(Response::from_string(body)).unwrap();
+        }
+    });
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "return Demo()",
+        "--force",
+        "--capture-dir",
+        output_dir.to_str().unwrap(),
+        "--capture-timeout-ms",
+        "2000",
+    ]);
+    worker.join().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["source_saved"], true);
+    assert_eq!(value["start_verified"], false);
+    assert_eq!(value["capture_collection"]["start_verified"], true);
+    assert_eq!(value["capture_collection"]["obtained"], 1);
+}
+
+#[test]
+fn capture_options_validate_before_any_device_request() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    for args in [
+        vec![
+            "--target",
+            &url,
+            "script",
+            "deploy",
+            "demo",
+            "--source",
+            "x",
+            "--capture-timeout-ms",
+            "1",
+        ],
+        vec![
+            "--target",
+            &url,
+            "script",
+            "deploy",
+            "demo",
+            "--source",
+            "x",
+            "--capture-dir",
+            "/nonexistent",
+            "--expected-source",
+            "old",
+        ],
+    ] {
+        assert_eq!(run(&args).status.code(), Some(2));
+    }
+    let result = run(&[
+        "--target",
+        &url,
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "x",
+        "--capture-dir",
+        "/tmp",
+        "--verify-secs",
+        "1",
+    ]);
+    assert_eq!(result.status.code(), Some(2));
+    let destination = tempfile::tempdir().unwrap();
+    for value in ["0", "3600001"] {
+        let result = run(&[
+            "--target",
+            &url,
+            "script",
+            "deploy",
+            "demo",
+            "--source",
+            "x",
+            "--capture-dir",
+            destination.path().to_str().unwrap(),
+            "--capture-timeout-ms",
+            value,
+        ]);
+        assert_eq!(result.status.code(), Some(2));
+    }
+    assert!(server
+        .recv_timeout(Duration::from_millis(50))
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn deploy_capture_refuses_unconfirmed_start_even_if_in_loop_is_true() {
+    let root = tempfile::tempdir().unwrap();
+    let output_dir = root.path().join("captures");
+    std::fs::create_dir(&output_dir).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for (expected, body) in [
+            ("/api/v1/logs?after=0", r#"{"next":1,"lines":[]}"#),
+            ("/api/v1/capabilities", r#"{"scriptUpdates":true}"#),
+            (
+                "/api/v1/apps/script-update/demo",
+                r#"{"ok":true,"error":null}"#,
+            ),
+            ("/api/v1/system", r#"{"scriptingEnabled":true}"#),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"inLoop":true}]"#,
+            ),
+        ] {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), expected);
+            request.respond(Response::from_string(body)).unwrap();
+        }
+        assert!(server
+            .recv_timeout(Duration::from_millis(50))
+            .unwrap()
+            .is_none());
+    });
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "x",
+        "--create",
+        "--capture-dir",
+        output_dir.to_str().unwrap(),
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["source_saved"], true);
+    assert_eq!(value["capture_collection"]["start_verified"], false);
+    assert_eq!(value["capture_collection"]["stop_reason"], "error");
+    assert_eq!(
+        value["capture_collection"]["error"]["phase"],
+        "start_confirmation"
+    );
+}
+
+#[test]
+fn runtime_error_after_marker_is_reported_without_capturing_and_keeps_logs_bounded() {
+    let root = tempfile::tempdir().unwrap();
+    let output_dir = root.path().join("captures");
+    std::fs::create_dir(&output_dir).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for (expected, body) in [
+            ("/api/v1/logs?after=0", r#"{"next":9,"lines":[]}"#),
+            ("/api/v1/capabilities", r#"{"scriptUpdates":true}"#),
+            (
+                "/api/v1/apps/script-update/demo",
+                r#"{"ok":true,"error":null}"#,
+            ),
+            ("/api/v1/system", r#"{"scriptingEnabled":true}"#),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+            ),
+            ("/api/v1/apps/active", "{}"),
+            (
+                "/api/v1/logs?after=9",
+                r#"{"next":10,"lines":["01:02:03 [script:demo] [CAPTURE] frame"]}"#,
+            ),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":{"message":"runtime failed"}}]"#,
+            ),
+        ] {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), expected);
+            request.respond(Response::from_string(body)).unwrap();
+        }
+        assert!(server
+            .recv_timeout(Duration::from_millis(50))
+            .unwrap()
+            .is_none());
+    });
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "x",
+        "--create",
+        "--capture-dir",
+        output_dir.to_str().unwrap(),
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["source_saved"], true);
+    assert_eq!(value["capture_collection"]["error"]["code"], "BERRY_ERROR");
+    assert_eq!(
+        value["capture_collection"]["error"]["phase"],
+        "state_observation"
+    );
+    assert_eq!(
+        value["capture_collection"]["runtime_error"]["message"],
+        "runtime failed"
+    );
+    assert_eq!(
+        value["capture_collection"]["diagnostic_logs"][0],
+        "01:02:03 [script:demo] [CAPTURE] frame"
+    );
+    let attempt = value["capture_collection"]["attempt"].as_str().unwrap();
+    assert_eq!(
+        std::fs::read_dir(output_dir.join(attempt)).unwrap().count(),
+        0
+    );
+}
+
+#[test]
+fn deploy_capture_reports_selection_failure_without_polling_or_retrying() {
+    let root = tempfile::tempdir().unwrap();
+    let output_dir = root.path().join("captures");
+    std::fs::create_dir(&output_dir).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for (expected, body, status) in [
+            ("/api/v1/logs?after=0", r#"{"next":2,"lines":[]}"#, 200),
+            ("/api/v1/capabilities", r#"{"scriptUpdates":true}"#, 200),
+            (
+                "/api/v1/apps/script-update/demo",
+                r#"{"ok":true,"error":null}"#,
+                200,
+            ),
+            ("/api/v1/system", r#"{"scriptingEnabled":true}"#, 200),
+            (
+                "/api/v1/apps",
+                r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+                200,
+            ),
+            ("/api/v1/apps/active", "{}", 503),
+        ] {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), expected);
+            request
+                .respond(Response::from_string(body).with_status_code(status))
+                .unwrap();
+        }
+        assert!(server
+            .recv_timeout(Duration::from_millis(50))
+            .unwrap()
+            .is_none());
+    });
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "x",
+        "--create",
+        "--capture-dir",
+        output_dir.to_str().unwrap(),
+    ]);
+    worker.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["source_saved"], true);
+    assert_eq!(value["capture_collection"]["error"]["phase"], "selection");
+    assert_eq!(value["capture_collection"]["error"]["code"], "HTTP");
+    let attempt = value["capture_collection"]["attempt"].as_str().unwrap();
+    assert_eq!(
+        std::fs::read_dir(output_dir.join(attempt)).unwrap().count(),
+        0
+    );
+}
+
+#[test]
+fn uncertain_capture_deploy_is_not_replayed_or_followed_by_selection() {
+    let root = tempfile::tempdir().unwrap();
+    let output_dir = root.path().join("captures");
+    std::fs::create_dir(&output_dir).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        for (expected, body) in [
+            ("/api/v1/logs?after=0", r#"{"next":0,"lines":[]}"#),
+            ("/api/v1/capabilities", r#"{"scriptUpdates":true}"#),
+        ] {
+            let request = server.recv().unwrap();
+            assert_eq!(request.url(), expected);
+            request.respond(Response::from_string(body)).unwrap();
+        }
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/apps/script-update/demo");
+        drop(request); // Simulate a lost mutation response after the request reached the server.
+        assert!(server
+            .recv_timeout(Duration::from_millis(50))
+            .unwrap()
+            .is_none());
+    });
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "x",
+        "--create",
+        "--capture-dir",
+        output_dir.to_str().unwrap(),
+        "--capture-timeout-ms",
+        "100",
+    ]);
+    worker.join().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read_dir(output_dir).unwrap().count(), 1);
+}
+
+#[test]
+fn failed_predeploy_cursor_check_prevents_all_deployment_requests() {
+    let root = tempfile::tempdir().unwrap();
+    let output_dir = root.path().join("captures");
+    std::fs::create_dir(&output_dir).unwrap();
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let worker = thread::spawn(move || {
+        let request = server.recv().unwrap();
+        assert_eq!(request.url(), "/api/v1/logs?after=0");
+        request
+            .respond(Response::from_string("{}").with_status_code(503))
+            .unwrap();
+        assert!(server
+            .recv_timeout(Duration::from_millis(50))
+            .unwrap()
+            .is_none());
+    });
+    let output = run(&[
+        "--json",
+        "--target",
+        &url,
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "x",
+        "--create",
+        "--capture-dir",
+        output_dir.to_str().unwrap(),
+    ]);
+    worker.join().unwrap();
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read_dir(output_dir).unwrap().count(), 1);
+}
+
+#[test]
+fn concurrent_capture_attempts_reserve_distinct_child_directories() {
+    let root = tempfile::tempdir().unwrap();
+    let output_dir = root.path().join("captures");
+    std::fs::create_dir(&output_dir).unwrap();
+    let mut workers = Vec::new();
+    let mut invocations = Vec::new();
+    for _ in 0..2 {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            for (expected, body) in [
+                ("/api/v1/logs?after=0", r#"{"next":0,"lines":[]}"#),
+                ("/api/v1/capabilities", r#"{"scriptUpdates":true}"#),
+                (
+                    "/api/v1/apps/script-update/demo",
+                    r#"{"ok":true,"error":null}"#,
+                ),
+                ("/api/v1/system", r#"{"scriptingEnabled":true}"#),
+                (
+                    "/api/v1/apps",
+                    r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#,
+                ),
+                ("/api/v1/apps/active", "{}"),
+            ] {
+                let request = server.recv().unwrap();
+                assert_eq!(request.url(), expected);
+                request.respond(Response::from_string(body)).unwrap();
+            }
+        });
+        workers.push(worker);
+        let destination = output_dir.to_string_lossy().into_owned();
+        invocations.push(thread::spawn(move || {
+            let args = [
+                "--json",
+                "--target",
+                &url,
+                "script",
+                "deploy",
+                "demo",
+                "--source",
+                "x",
+                "--create",
+                "--capture-dir",
+                &destination,
+                "--capture-timeout-ms",
+                "1",
+            ];
+            run(&args)
+        }));
+    }
+    for worker in workers {
+        worker.join().unwrap();
+    }
+    let mut directories = Vec::new();
+    for invocation in invocations {
+        let output = invocation.join().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        directories.push(
+            report["capture_collection"]["directory"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    assert_ne!(directories[0], directories[1]);
+    assert_eq!(std::fs::read_dir(output_dir).unwrap().count(), 2);
+}
+
+#[test]
 fn script_deploy_minifies_payload_but_keeps_original_conditional_reference_and_file() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("main.ax");

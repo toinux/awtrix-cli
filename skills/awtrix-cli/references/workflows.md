@@ -30,6 +30,25 @@ Protected deploy requires live `scriptUpdates: true`. `CONFLICT` means the
 reference is stale; inspect and resolve the concurrent edit. `--force` is an
 explicit unprotected overwrite, not a retry or compatibility fallback.
 
+When visual evidence is needed from a newly deployed script, use the opt-in
+single-capture flow:
+
+```sh
+awtrix-cli --target http://awtrix.local --json script deploy main \
+  --file ./main.ax --create --capture-dir ./captures
+```
+
+The script should draw normally, allow its first render to settle, then emit
+one `log('[CAPTURE] ready')` from its post-paint callback. Return normally from
+the callback and keep state nonblocking while the device capture is acquired.
+Review the attempt's `capture_collection` report and PNG; the CLI does not
+promise exact log/frame synchronization, visual identity or runtime correctness.
+On ESP32 1.2.2 immediate captures were initially black; waiting 500 ms before
+the marker succeeded 2/2 in the targeted experiment, not as a general guarantee.
+Logs, canvas and framebuffer are unsynchronized; rotation, notifications and
+latency remain. No direct framebuffer binding was found in examined Berry APIs.
+Reserve logs for short markers, not image data. There is no implicit CLI delay.
+
 Choose evidence for the unresolved question: `script state` gives the script
 inventory and runtime state; `script data NAME` reads persisted data; `script
 verify NAME` collects bounded runtime/log evidence and optional capture; `logs
