@@ -85,7 +85,9 @@ targeted validation or output metadata; do not read back or print a fresh comple
 file solely to show it. Editing-tool diffs are not an extra handoff. Read source
 when needed to diagnose or validate a specific issue. If the user needs text-only
 delivery or explicitly requests the complete source, provide one complete block.
-This file-first workflow also applies without a connected device. Keep diagnostics
+When the local file is accessible, hand off its path and CLI-based next steps rather
+than suggesting web-UI copy/paste. This file-first workflow also applies without a
+connected device. Keep diagnostics
 bounded and task-relevant, preserving errors, uncertainty, and truncation. A saved
 or accepted source is not proof of runtime health. This avoids intentional source
 repetition, not the initial context cost of loading a scripting skill.

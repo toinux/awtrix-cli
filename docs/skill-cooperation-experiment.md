@@ -21,20 +21,27 @@ a rename of official content or a general guarantee across agents.
   checked metadata without a fresh readback, then on correction read source to edit,
   patched it, and used targeted grep/count and byte metadata. No post-edit full source
   display. The user-facing answer gave a path but also offered web-UI paste steps
-  despite the accessible file; this is residual handoff drift. The concurrency-safe
+  despite the accessible file; this fails the file-first handoff criterion. The concurrency-safe
   update plan named exact original source, `--expected-source`, and `scriptUpdates`,
   with no force; it was not executed. A text-only scenario returned one complete
   source block and proposed `script deploy texte --file ./texte.ax --create
   --verify-secs 10`; no command ran. No compile/runtime/render check was claimed.
 - **Renamed / Berry then CLI:** created and corrected a local `.ax` from `Test` to
   `Salut`; targeted occurrence counts and file metadata, no full readback or final
-  source block. Shell schema errors occurred before a corrected read-tool call. A
-  later explicit full-source request produced one justified full read and one block.
-  No device request or deployment occurred.
+  source block. The displayed text changed, while the class name and metadata still
+  said `Test`; this may be valid for the requested display-only correction, but does
+  not establish that a complete intended rename was made. Shell schema errors
+  occurred before a corrected read-tool call. A later explicit full-source request
+  produced one justified full read and one block. No device request or deployment
+  occurred.
 - **Earlier synthetic trials:** retain as negative evidence, not current-harness
   results. They exposed full readbacks after correction and `cat` plus unsolicited
   final source in reverse-order scenarios; those failures motivated the tightened
-  wording. Current sampled real trials did not reproduce those particular failures.
+  wording. Current sampled real trials did not reproduce those readback failures,
+  but canonical web-UI fallback drift and the ambiguous renamed correction remain
+  unresolved. The orchestrator should rerun canonical and renamed cases against the
+  updated candidate, explicitly checking file handoff and the full requested
+  correction. Do not treat AC6 as demonstrated until those focused trials pass.
 - **Absent/partial inventory:** the earlier synthetic trial offered the official
   entry point once and honestly declined code work. In the completed real trial,
   the CLI skill was normally loaded with no Berry skill exposed. For a code request,
@@ -52,8 +59,8 @@ is 60,421 bytes / 1,180 lines).
 
 **Recommendation on #67:** keep it open and unchanged; ask the human whether to
 resume it only for the demonstrated residual initial API/context cost. Sampled real
-trials support lightweight instructions for device-vs-code routing, protected CLI
-planning, and file-first handoff, while showing one residual unsolicited paste-step
-drift. They do not demonstrate a need for a generator, search infrastructure, or
+trials support lightweight instructions for device-vs-code routing and protected CLI
+planning. File-first behavior is mixed, and the focused reruns are still needed;
+sampled trials do not demonstrate a need for a generator, search infrastructure, or
 other #67 machinery. The human decision remains distinct; this is not a guarantee
 of behavior beyond these trials.
