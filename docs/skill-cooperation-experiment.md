@@ -24,8 +24,8 @@ a rename of official content or a general guarantee across agents.
   despite the accessible file; this is residual handoff drift. The concurrency-safe
   update plan named exact original source, `--expected-source`, and `scriptUpdates`,
   with no force; it was not executed. A text-only scenario returned one complete
-  source block and proposed `script create --file --create --verify-secs 10`; no
-  command ran. No compile/runtime/render check was claimed.
+  source block and proposed `script deploy texte --file ./texte.ax --create
+  --verify-secs 10`; no command ran. No compile/runtime/render check was claimed.
 - **Renamed / Berry then CLI:** created and corrected a local `.ax` from `Test` to
   `Salut`; targeted occurrence counts and file metadata, no full readback or final
   source block. Shell schema errors occurred before a corrected read-tool call. A
