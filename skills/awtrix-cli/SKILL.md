@@ -52,6 +52,42 @@ existing `awtrix.toml` in the intended workspace/parent context; reuse a relevan
 project rather than creating a nested duplicate. The generated scaffold is the
 starting point, not an unrelated device script fetched to learn Berry structure.
 
+### Berry coding cooperation
+
+For a request to create or change Berry code for an AWTRIX NG app/script, use an
+available scripting skill whose declared purpose covers writing, maintaining, or
+debugging that code. This includes correcting code and applies whether that skill
+is already loaded or is identified later; use its normal harness loading mechanism
+when needed. Judge by its declared intent, not its name, path, or author. Use only
+the skills exposed by the harness; do not search the filesystem or load candidates
+just to compare them. Device-only work (including logs, diagnosis, reboot, capture,
+and deployment of an existing file) does not trigger scripting-skill discovery.
+
+The scripting skill supplies Berry language, embedded API, lifecycle, and hardware
+knowledge. This skill remains authoritative for operations supported by
+`awtrix-cli`, including its protections and verification. Its REST examples do not
+override the CLI workflow. Use REST only for a needed operation not covered by the
+CLI, after a targeted coverage check. These are workflow responsibilities, not a
+change to harness instruction priority.
+
+If code work needs Berry guidance and no suitable skill is identified among those
+available, briefly offer the official entry point:
+<https://blueforcer.github.io/awtrix-ng/esp32/guides/ai-prompt/>. Do not install,
+download, or generate a skill. If the exposed inventory may be partial, say none
+was identified among available skills rather than asserting none exists. Continue
+with CLI-supported work and state any Berry-knowledge limitation; do not repeat the
+offer after the user has decided.
+
+When the user can access local files, create or modify the complete `.ax` source
+file and report its path, useful changes, and checks actually performed. Do not
+intentionally print the full source again after editing, correcting, or deploying;
+read only portions needed to diagnose, while a justified full read remains valid.
+Return one complete source block only when explicitly requested or when the user
+cannot access the file. Keep diagnostics bounded and task-relevant, preserving
+errors, uncertainty, and truncation. A saved or accepted source is not proof of
+runtime health. This cooperation avoids intentional source repetition, not the
+initial context cost of loading a scripting skill.
+
 ## 2. Use known commands; discover only missing information
 
 Before any discovery or inspection, identify the concrete unresolved question
