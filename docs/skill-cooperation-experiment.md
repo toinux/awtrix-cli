@@ -36,15 +36,19 @@ a rename of official content or a general guarantee across agents.
   final source in reverse-order scenarios; those failures motivated the tightened
   wording. Current sampled real trials did not reproduce those particular failures.
 - **Absent/partial inventory:** the earlier synthetic trial offered the official
-  entry point once, did not install automatically, and honestly declined code work
-  for lack of Berry knowledge. A newer real absent/partial-inventory trial is still
-  running; no result is claimed here.
+  entry point once and honestly declined code work. In the completed real trial,
+  the CLI skill was normally loaded with no Berry skill exposed. For a code request,
+  it stated that it could not write reliable Berry, linked the official entry point
+  once, and created no file, project, or device request. In the partial-inventory
+  case after the user refused installation, it kept CLI operations available without
+  repeating the offer or claiming disk-wide absence. No scan, install, or download
+  occurred, and it made no Berry validation claim. [Bounded trial evidence](https://github.com/toinux/awtrix-cli/issues/68#issuecomment-6329135073).
 
-The traces are not committed. Temporary scripting-skill symlinks were removed;
-original external skill checksums were unchanged. No device/runtime/render checks
-were performed. Trace token counters exist, but there is no controlled baseline, so
-no savings are claimed. Initial API-context cost remains (the reference is 60,421
-bytes / 1,180 lines).
+The traces are not committed. All temporary scripting-skill symlinks were removed;
+the original external skill and API checksums were unchanged. No device/runtime/render
+checks were performed. Trace token counters exist, but there is no controlled
+baseline, so no savings are claimed. Initial API-context cost remains (the reference
+is 60,421 bytes / 1,180 lines).
 
 **Recommendation on #67:** keep it open and unchanged; ask the human whether to
 resume it only for the demonstrated residual initial API/context cost. Sampled real
