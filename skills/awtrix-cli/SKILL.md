@@ -141,6 +141,10 @@ a screenshot, or a visual discrepancy. A capture establishes pixels at capture
 time, not an app's identity; state and capture are separate observations and
 rotation can occur between them.
 
+When deploying a script whose new rendering needs visual inspection, consider
+`script deploy --capture-dir DIR` for one or more new marker-triggered PNGs; see the
+bounded workflow and timing limitations in [Berry workflows](references/workflows.md#standalone-scripts-and-protected-updates).
+
 Choose the capture format for its consumer. PNG is the default: save it to a
 task-owned `.png` path when the agent will inspect the image. When the user asks
 the agent to show or return a screenshot, treat that as a request to render it
