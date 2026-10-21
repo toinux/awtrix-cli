@@ -7,7 +7,7 @@ guarantee of model behavior. It does not remove the initial context cost of
 loading the official scripting skill; no token savings are claimed.
 
 **Behavioral trials:** OpenCode v2.1.2, configured `openai/gpt-6-luna`, used the
-normal skill-loading tool with the candidate instructions at `0dfbb51`. The user
+normal skill-loading tool with the candidate instructions at `7028154`. The user
 provided the official scripting skill and authorized temporary symlink registration;
 the skill content was not modified. The registered identifiers were
 `awtrix-berry-app` and then `amber`, with identical description/content; the alias
@@ -17,31 +17,32 @@ a rename of official content or a general guarantee across agents.
 - **Device-only:** loaded the CLI skill only. Proposed finite 10-second logs and
   diagnosis commands; no Berry discovery/recommendation and no device calls.
 - **Canonical / CLI then Berry:** read the full Berry API reference (60,421 bytes,
-  1,180 lines; initial tool response was continued). Created `bonjour.ax` (214 bytes),
-  checked metadata without a fresh readback, then on correction read source to edit,
-  patched it, and used targeted grep/count and byte metadata. No post-edit full source
-  display. The user-facing answer gave a path but also offered web-UI paste steps
-  despite the accessible file; this fails the file-first handoff criterion. The concurrency-safe
-  update plan named exact original source, `--expected-source`, and `scriptUpdates`,
-  with no force; it was not executed. A text-only scenario returned one complete
-  source block and proposed `script deploy texte --file ./texte.ax --create
-  --verify-secs 10`; no command ran. No compile/runtime/render check was claimed.
-- **Renamed / Berry then CLI:** created and corrected a local `.ax` from `Test` to
-  `Salut`; targeted occurrence counts and file metadata, no full readback or final
-  source block. The displayed text changed, while the class name and metadata still
-  said `Test`; this may be valid for the requested display-only correction, but does
-  not establish that a complete intended rename was made. Shell schema errors
-  occurred before a corrected read-tool call. A later explicit full-source request
-  produced one justified full read and one block. No device request or deployment
-  occurred.
+  1,180 lines; initial tool response was continued). Created and corrected
+  `bonjour.ax`, updating the visible name and description and the internal class and
+  return as well as the displayed text. Used targeted grep after writing; no full
+  source readback or block was returned. The final answer nevertheless suggested
+  web-UI paste steps rather than CLI handoff despite the accessible file. This
+  handoff drift **persisted** under the stronger wording and this load order. The
+  concurrency-safe update plan in an earlier turn named exact original source,
+  `--expected-source`, and `scriptUpdates`, with no force; it was not executed. No
+  compile/runtime/render check was claimed.
+- **Renamed / Berry then CLI:** an initial implementation-agent ancestry check
+  interrupted the scratch-only evaluation; after clarification that this was not a
+  source dispatch, the trial continued with the already-loaded skills. Created and
+  corrected `test.ax` to `Salut`, updating its visible name/description and internal
+  class/return; used targeted metadata and occurrence checks, without full source
+  redisplay. The final response gave a CLI `script deploy Salut --file ... --create`
+  plan, not a web-UI paste instruction. No command or deployment ran. The earlier
+  display-only `Test` class concern is not evidence of a bug: that task requested
+  changing only displayed text. The explicit full-source and text-only trials were
+  from the prior workflow run, not repeated in v2.
 - **Earlier synthetic trials:** retain as negative evidence, not current-harness
   results. They exposed full readbacks after correction and `cat` plus unsolicited
   final source in reverse-order scenarios; those failures motivated the tightened
-  wording. Current sampled real trials did not reproduce those readback failures,
-  but canonical web-UI fallback drift and the ambiguous renamed correction remain
-  unresolved. The orchestrator should rerun canonical and renamed cases against the
-  updated candidate, explicitly checking file handoff and the full requested
-  correction. Do not treat AC6 as demonstrated until those focused trials pass.
+  wording. Neither focused v2 trial produced a post-write full-source redisplay.
+  However, canonical CLI handoff drift persists while the renamed/reverse-order trial
+  used the requested CLI plan. This mixed outcome does not establish uniform behavior
+  or warrant an all-criteria acceptance claim.
 - **Absent/partial inventory:** the earlier synthetic trial offered the official
   entry point once and honestly declined code work. In the completed real trial,
   the CLI skill was normally loaded with no Berry skill exposed. For a code request,
@@ -58,9 +59,9 @@ baseline, so no savings are claimed. Initial API-context cost remains (the refer
 is 60,421 bytes / 1,180 lines).
 
 **Recommendation on #67:** keep it open and unchanged; ask the human whether to
-resume it only for the demonstrated residual initial API/context cost. Sampled real
-trials support lightweight instructions for device-vs-code routing and protected CLI
-planning. File-first behavior is mixed, and the focused reruns are still needed;
-sampled trials do not demonstrate a need for a generator, search infrastructure, or
-other #67 machinery. The human decision remains distinct; this is not a guarantee
-of behavior beyond these trials.
+resume it only for the demonstrated residual full API/context loading cost and the
+conflicting no-device handoff instructions/load-order drift: canonical still
+suggested web-UI paste guidance, while the renamed/reverse-order case proposed CLI
+deployment. The trials do not demonstrate a need for new search or generator
+infrastructure. The human decision remains distinct; this is not a guarantee of
+behavior beyond these trials.
