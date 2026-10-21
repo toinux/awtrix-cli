@@ -67,8 +67,9 @@ The scripting skill supplies Berry language, embedded API, lifecycle, and hardwa
 knowledge. This skill remains authoritative for operations supported by
 `awtrix-cli`, including its protections and verification. Its REST examples do not
 override the CLI workflow. Use REST only for a needed operation not covered by the
-CLI, after a targeted coverage check. These are workflow responsibilities, not a
-change to harness instruction priority.
+CLI, after checking that operation's coverage and required capabilities. Apply this
+workflow whether the scripting skill is encountered before or after this one; this
+does not change harness instruction priority.
 
 If code work needs Berry guidance and no suitable skill is identified among those
 available, briefly offer the official entry point:
@@ -78,15 +79,16 @@ was identified among available skills rather than asserting none exists. Continu
 with CLI-supported work and state any Berry-knowledge limitation; do not repeat the
 offer after the user has decided.
 
-When the user can access local files, create or modify the complete `.ax` source
-file and report its path, useful changes, and checks actually performed. Do not
-intentionally print the full source again after editing, correcting, or deploying;
-read only portions needed to diagnose, while a justified full read remains valid.
-Return one complete source block only when explicitly requested or when the user
-cannot access the file. Keep diagnostics bounded and task-relevant, preserving
-errors, uncertainty, and truncation. A saved or accepted source is not proof of
-runtime health. This cooperation avoids intentional source repetition, not the
-initial context cost of loading a scripting skill.
+For code creation or correction, write the complete `.ax` file where the user can
+access it and hand off its path, useful changes, and actual checks. Verify with
+targeted validation or output metadata; do not read back or print a fresh complete
+file solely to show it. Editing-tool diffs are not an extra handoff. Read source
+when needed to diagnose or validate a specific issue. If the user needs text-only
+delivery or explicitly requests the complete source, provide one complete block.
+This file-first workflow also applies without a connected device. Keep diagnostics
+bounded and task-relevant, preserving errors, uncertainty, and truncation. A saved
+or accepted source is not proof of runtime health. This avoids intentional source
+repetition, not the initial context cost of loading a scripting skill.
 
 ## 2. Use known commands; discover only missing information
 
