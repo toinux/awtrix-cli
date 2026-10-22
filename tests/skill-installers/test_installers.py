@@ -26,6 +26,17 @@ def skill_description():
 
 
 class SkillInstallationGuidanceTests(unittest.TestCase):
+    def test_skill_reference_links_resolve(self):
+        import re
+
+        skill_files = ROOT / "skills/awtrix-cli"
+        for source in skill_files.rglob("*.md"):
+            markdown = source.read_text(encoding="utf-8")
+            for target in re.findall(r"\[[^]]+\]\(([^)#]+)(?:#[^)]*)?\)", markdown):
+                if "://" not in target:
+                    with self.subTest(source=source, target=target):
+                        self.assertTrue((source.parent / target).exists(), f"broken skill reference: {target}")
+
     def test_skill_description_selects_awtrix_cli_information_and_setup_requests(self):
         description = skill_description()
 
