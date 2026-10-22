@@ -185,13 +185,12 @@ When deploying a script whose new rendering needs visual inspection, consider
 `script deploy --capture-dir DIR` for one or more new marker-triggered PNGs; see the
 bounded workflow and timing limitations in [Berry workflows](references/workflows.md#standalone-scripts-and-protected-updates).
 
-Choose the capture format for its consumer. PNG is the default: save it to a
-task-owned `.png` path when the agent will inspect the image. When the user asks
-the agent to show or return a screenshot, treat that as a request to render it
-in the conversation (the user is interacting through a harness): use
-`screen capture --format emoji` by default, unless the user explicitly requests
-another format. Emoji is an approximate text preview, not a pixel-exact image.
-Use ANSI only when requested or when a true-color terminal rendering is wanted.
+Choose the capture format by intent:
+- AI visual verification: save a PNG to a task-owned path and inspect it.
+- Show the display to the user: use emoji for the conversation.
+- Explicit ANSI or text-file output request: use ANSI.
+Explicit format requests override these defaults. Emoji is an approximate
+preview, not pixel-exact evidence.
 
 `apps select` acknowledges selection without guaranteeing visibility or
 dismissing notifications. `apps order-get` reports inventory slot projections,
