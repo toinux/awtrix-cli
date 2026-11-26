@@ -12,6 +12,25 @@ versions. There was no tagged or published `0.3.0` release.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-26
+
+### Added
+
+- One or more marker-triggered PNG captures during script deployment, with
+  partial results on failure.
+- `--expected-source-file` for exact protected updates, preserving trailing
+  newlines.
+
+### Changed
+
+- Clarified Berry skill handoff and screen capture format guidance.
+
+### Fixed
+
+- A state timeout after confirmed script start now reports
+  `OBSERVATION_INCOMPLETE` and recommends rerunning `script verify`. JSON and
+  exit status are unchanged; stderr parsers should recognize the new code.
+
 ## [0.5.0] - 2026-10-15
 
 ### Added
@@ -220,7 +239,8 @@ Release or downloadable release assets were published for this version.
 - User documentation, example projects, domain terminology, and agent workflows
   for specification implementation and review.
 
-[Unreleased]: https://github.com/toinux/awtrix-cli/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/toinux/awtrix-cli/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/toinux/awtrix-cli/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/toinux/awtrix-cli/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/toinux/awtrix-cli/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/toinux/awtrix-cli/compare/v0.3.2...v0.3.3
