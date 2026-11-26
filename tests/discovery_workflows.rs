@@ -133,6 +133,18 @@ fn verify_requires_explicit_null_error_for_start_proof() {
 }
 
 #[test]
+fn deploy_discovery_describes_incomplete_observation() {
+    let output = run(&["--json", "describe", "script", "deploy", "--offline"]);
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let description = result["verification_failure"].as_str().unwrap();
+    assert!(description.contains("OBSERVATION_INCOMPLETE"));
+    assert!(description.contains("TIMEOUT"));
+    assert!(description.contains("script verify"));
+    let help = run(&["script", "deploy", "--help"]);
+    assert!(String::from_utf8_lossy(&help.stdout).contains("run script verify again"));
+}
+
+#[test]
 fn capture_failure_identifies_capture_phase() {
     let mock = Mock::new(
         json!({"name":"main","origin":"script","enabled":true,"error":null}),
@@ -309,15 +321,28 @@ fn discovered_minimal_manifest_validates_without_a_target() {
 }
 
 #[test]
-fn multiple_capture_help_and_offline_discovery_match_capture_cli_contract() {
+fn deploy_help_and_offline_discovery_cover_file_references_and_captures() {
     let help = run(&["script", "deploy", "--help"]);
     let help = String::from_utf8_lossy(&help.stdout);
+    assert!(help.contains("--expected-source-file"));
     assert!(help.contains("--capture-dir"));
     assert!(help.contains("--capture-count"));
     assert!(help.contains("--capture-timeout-ms"));
     assert!(help.contains("default: 10000"));
     let description = run(&["--json", "describe", "script", "--offline"]);
     let description: Value = serde_json::from_slice(&description.stdout).unwrap();
+    assert_eq!(
+        description["parameters"]["--expected-source-file"],
+        "read exact original remote source text from a UTF-8 file"
+    );
+    assert!(description["examples"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|example| example
+            .as_str()
+            .unwrap()
+            .contains("--expected-source-file before.ax --minify")));
     assert_eq!(
         description["parameters"]["--capture-dir"],
         "opt-in named captures triggered by new exact target-script markers; cannot combine with --verify-secs"

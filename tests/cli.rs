@@ -6696,6 +6696,84 @@ fn script_deploy_verify_success_keeps_atomic_deploy_and_adds_observation() {
 }
 
 #[test]
+fn script_deploy_verify_distinguishes_state_timeout_from_start_failure() {
+    for timeout in [true, false] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            let running = r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#;
+            let next = || {
+                server
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap()
+                    .unwrap()
+            };
+            for (route, body) in [
+                ("/api/v1/capabilities", r#"{"scriptUpdates":true}"#),
+                (
+                    "/api/v1/apps/script-update/demo",
+                    r#"{"ok":true,"error":null}"#,
+                ),
+                ("/api/v1/system", r#"{"scriptingEnabled":true}"#),
+                ("/api/v1/apps", if timeout { running } else { "[]" }),
+                ("/api/v1/system", r#"{"scriptingEnabled":true}"#),
+                ("/api/v1/apps", if timeout { running } else { "[]" }),
+            ] {
+                let request = next();
+                assert_eq!(request.url(), route);
+                request.respond(Response::from_string(body)).unwrap();
+            }
+            if timeout {
+                let request = next();
+                assert_eq!(request.url(), "/api/v1/logs?after=0");
+                request
+                    .respond(Response::from_string(r#"{"next":0,"lines":[]}"#))
+                    .unwrap();
+                let request = next();
+                assert_eq!(request.url(), "/api/v1/apps");
+                thread::sleep(Duration::from_millis(1200));
+                let _ = request.respond(Response::from_string(running));
+            }
+        });
+        let output = run(&[
+            "--target",
+            &url,
+            "--json",
+            "script",
+            "deploy",
+            "demo",
+            "--source",
+            "new",
+            "--create",
+            "--verify-secs",
+            "1",
+        ]);
+        worker.join().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(result["source_saved"], true);
+        assert_eq!(result["start_verified"], timeout);
+        assert_eq!(result["verification"]["start_verified"], timeout);
+        if timeout {
+            assert_eq!(result["device_result"]["ok"], true);
+            assert_eq!(result["verification"]["not_available"]["code"], "TIMEOUT");
+            assert_eq!(
+                result["verification"]["not_available"]["phase"],
+                "state_observation"
+            );
+            assert_eq!(result["verification"]["observed_window"]["complete"], false);
+            assert!(stderr.contains("OBSERVATION_INCOMPLETE"), "{stderr}");
+            assert!(stderr.contains("run script verify again"), "{stderr}");
+            assert!(!stderr.contains("SCRIPT_NOT_RUNNING"), "{stderr}");
+        } else {
+            assert_eq!(result["verification"]["not_available"], "script_absent");
+            assert!(stderr.contains("SCRIPT_NOT_RUNNING"), "{stderr}");
+        }
+    }
+}
+
+#[test]
 fn script_verify_captures_png_inside_reserved_deadline_window() {
     let path = std::env::temp_dir().join(format!("awtrix-verify-{}.png", std::process::id()));
     let _ = std::fs::remove_file(&path);
@@ -8480,6 +8558,144 @@ fn script_create_sends_null_reference_and_verifies_state_only_after_inspection()
 }
 
 #[test]
+fn script_snapshot_file_preserves_trailing_newline_for_minified_protected_update() {
+    let server = Server::http("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", server.server_addr());
+    let dir = tempfile::tempdir().unwrap();
+    let snapshot = dir.path().join("before.ax");
+    let source_file = dir.path().join("updated.ax");
+    let remote = "return true\n";
+    std::fs::write(&source_file, "return false\n").unwrap();
+    let worker = thread::spawn(move || {
+        // Create the minified script.
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        let create: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(create["expected_source"], serde_json::Value::Null);
+        assert_eq!(create["source"], remote);
+        request
+            .respond(Response::from_string(r#"{"ok":true,"error":null}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":false}"#))
+            .unwrap();
+
+        // `script get` returns the exact stored bytes, including the trailing LF.
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(create["source"].as_str().unwrap()))
+            .unwrap();
+
+        // Protected update sends those exact bytes as expected_source.
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptUpdates":true}"#))
+            .unwrap();
+        let mut request = server.recv().unwrap();
+        let mut body = String::new();
+        request.as_reader().read_to_string(&mut body).unwrap();
+        let update: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(update["expected_source"], create["source"]);
+        assert_eq!(update["source"], "return false\n");
+        request
+            .respond(Response::from_string(r#"{"ok":true,"error":null}"#))
+            .unwrap();
+        server
+            .recv()
+            .unwrap()
+            .respond(Response::from_string(r#"{"scriptingEnabled":false}"#))
+            .unwrap();
+    });
+
+    let create = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "deploy",
+        "demo",
+        "--source",
+        "# comment\nreturn true\n",
+        "--create",
+        "--minify",
+    ]);
+    assert!(
+        create.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create.stderr)
+    );
+    let get = run(&["--target", &url, "script", "get", "demo"]);
+    assert!(
+        get.status.success(),
+        "{}",
+        String::from_utf8_lossy(&get.stderr)
+    );
+    assert_eq!(get.stdout, remote.as_bytes());
+    std::fs::write(&snapshot, &get.stdout).unwrap();
+    let update = run(&[
+        "--target",
+        &url,
+        "--json",
+        "script",
+        "deploy",
+        "demo",
+        "--file",
+        source_file.to_str().unwrap(),
+        "--expected-source-file",
+        snapshot.to_str().unwrap(),
+        "--minify",
+    ]);
+    worker.join().unwrap();
+    assert!(
+        update.status.success(),
+        "{}",
+        String::from_utf8_lossy(&update.stderr)
+    );
+}
+
+#[test]
+fn expected_source_file_errors_before_device_access_when_missing_or_invalid_utf8() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing.ax");
+    let invalid = dir.path().join("invalid.ax");
+    std::fs::write(&invalid, [0xff, 0xfe]).unwrap();
+    for path in [&missing, &invalid] {
+        let output = run(&[
+            "--target",
+            "http://127.0.0.1:1",
+            "--json",
+            "script",
+            "deploy",
+            "demo",
+            "--source",
+            "new",
+            "--expected-source-file",
+            path.to_str().unwrap(),
+            "--capture-dir",
+            dir.path().to_str().unwrap(),
+        ]);
+        assert_eq!(output.status.code(), Some(2));
+        let error: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(error["error"]["code"], "ARGUMENT");
+        assert!(error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("--expected-source-file"));
+    }
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+}
+
+#[test]
 fn forced_script_deploy_stays_raw_and_reports_weak_guarantee_for_large_source() {
     let server = Server::http("127.0.0.1:0").unwrap();
     let url = format!("http://{}", server.server_addr());
@@ -8605,7 +8821,7 @@ fn script_deploy_reads_utf8_source_file_verbatim() {
 
 #[test]
 fn force_cannot_be_combined_with_create_or_expected_source() {
-    for conditional in ["--create", "--expected-source"] {
+    for conditional in ["--create", "--expected-source", "--expected-source-file"] {
         let mut args = vec![
             "--target",
             "http://127.0.0.1:1",
@@ -8620,6 +8836,8 @@ fn force_cannot_be_combined_with_create_or_expected_source() {
         args.push(conditional);
         if conditional == "--expected-source" {
             args.push("original source");
+        } else if conditional == "--expected-source-file" {
+            args.push("original.ax");
         }
         let output = run(&args);
         assert_eq!(output.status.code(), Some(2));

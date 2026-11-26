@@ -267,17 +267,29 @@ fn main() -> ExitCode {
                     .get("not_available")
                     .is_some_and(|reason| !reason.is_null())
             {
-                let diagnostic_code = if report
+                let (diagnostic_code, message) = if report
                     .get("runtime_error")
                     .is_some_and(|error| !error.is_null())
                 {
-                    "BERRY_ERROR"
+                    (
+                        "BERRY_ERROR",
+                        "verification did not establish a healthy running script",
+                    )
+                } else if value["source_saved"] == true
+                    && report["start_verified"] == true
+                    && report["not_available"]["code"] == "TIMEOUT"
+                    && report["not_available"]["phase"] == "state_observation"
+                {
+                    ("OBSERVATION_INCOMPLETE", "source saved and script started; runtime observation incomplete (state timeout); run script verify again")
                 } else {
-                    "SCRIPT_NOT_RUNNING"
+                    (
+                        "SCRIPT_NOT_RUNNING",
+                        "verification did not establish a healthy running script",
+                    )
                 };
                 let rendered = render(value, &cli.fields, cli.json).unwrap_or_else(|_| "{}".into());
                 println!("{rendered}");
-                eprintln!("awtrix: {diagnostic_code}: verification did not establish a healthy running script");
+                eprintln!("awtrix: {diagnostic_code}: {message}");
                 return ExitCode::from(1);
             }
             let diagnostic_code = if value
@@ -720,7 +732,7 @@ fn describe(cli: &Cli, topic: &str, offline: bool) -> CliResult<Value> {
             "awtrix-cli --target http://awtrix.local device diagnose",
         ),
         "script" | "scripts" | "script get" | "script deploy" | "script re-minify" => {
-            json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file (.ax for scripts; .be for modules)","--expected-source":"exact original remote source for atomic update","--create":"create only when absent","--force":"explicit unconditional raw PUT; no concurrency guarantee","--minify":"opt-in minification of deployed payload; source file/reference remain unchanged","--no-backup":"script re-minify only: explicitly skip local <name>.bak.ax backup","--verify-secs":"optional bounded observation after successful deploy, 1..3600","--capture-dir":"opt-in named captures triggered by new exact target-script markers; cannot combine with --verify-secs","--capture-count":"positive PNG count (default 1), requires --capture-dir","--capture-timeout-ms":"capture observation bound 1..3600000 milliseconds (default 10000), requires --capture-dir"},"inputs":["raw Berry source"],"outputs":["get: raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; optional verification or capture_collection {attempt,directory,start_verified,start_evidence,expected,obtained,captures,stop_reason,error}; otherwise execution_state unknown","re-minify: exact-source backup path and conditional update outcome; runtime state unknown"],"examples":["awtrix-cli script get demo","awtrix-cli --json script get demo","awtrix-cli script re-minify demo","awtrix-cli script re-minify demo --no-backup","awtrix-cli script deploy demo --file main.ax --expected-source OLD --minify","awtrix-cli script deploy demo --file main.ax --create","awtrix-cli script deploy demo --file main.ax --force","awtrix-cli script deploy demo --file main.ax --expected-source OLD --capture-dir ./captures","awtrix-cli script deploy demo --file main.ax --expected-source OLD --capture-dir ./captures --capture-count 3"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; explicit start check requires system/app state; capture also requires active-app, log and framebuffer routes"],"limitations":["A shared observation deadline bounds selection, logs and captures; partial PNGs remain in the report","Marker must be [script:<name>] [CAPTURE] <label>, optionally preceded by HH:MM:SS; label is 1..64 ASCII letters, digits, underscore or hyphen","Timeout and collection errors return nonzero while preserving deployment evidence and partial capture paths; log batches cannot reconstruct missing states","Selection changes the active app once; no rotation/notification restoration is attempted","Logs and framebuffer are not synchronized; marker attribution, lost-log detection and visual correctness are not guaranteed"],"offline_reference_variant":"ESP32"})
+            json!({"command":"script","parameters":{"name":"[A-Za-z0-9_-]{1,32}","--source":"raw Berry source","--file":"UTF-8 Berry source file (.ax for scripts; .be for modules)","--expected-source":"exact original remote source text for atomic update", "--expected-source-file":"read exact original remote source text from a UTF-8 file","--create":"create only when absent","--force":"explicit unconditional raw PUT; no concurrency guarantee","--minify":"opt-in minification of deployed payload; source file/reference remain unchanged","--no-backup":"script re-minify only: explicitly skip local <name>.bak.ax backup","--verify-secs":"optional bounded observation after successful deploy, 1..3600","--capture-dir":"opt-in named captures triggered by new exact target-script markers; cannot combine with --verify-secs","--capture-count":"positive PNG count (default 1), requires --capture-dir","--capture-timeout-ms":"capture observation bound 1..3600000 milliseconds (default 10000), requires --capture-dir"},"inputs":["raw Berry source"],"outputs":["get: exact raw source stdout or JSON source field","deploy: source_saved plus independently verified start status; optional verification or capture_collection {attempt,directory,start_verified,start_evidence,expected,obtained,captures,stop_reason,error}; otherwise execution_state unknown","re-minify: exact-source backup path and conditional update outcome; runtime state unknown"],"examples":["awtrix-cli script get demo > before.ax","awtrix-cli --json script get demo","awtrix-cli script re-minify demo","awtrix-cli script re-minify demo --no-backup","awtrix-cli script deploy demo --file main.ax --expected-source-file before.ax --minify","awtrix-cli script deploy demo --file main.ax --create","awtrix-cli script deploy demo --file main.ax --force","awtrix-cli script deploy demo --file main.ax --expected-source-file before.ax --capture-dir ./captures","awtrix-cli script deploy demo --file main.ax --expected-source-file before.ax --capture-dir ./captures --capture-count 3"],"prerequisites":["AWTRIX NG script route; atomic update when scriptUpdates capability is present; explicit start check requires system/app state; capture also requires active-app, log and framebuffer routes"],"limitations":["--expected-source and --expected-source-file are mutually exclusive; --create cannot be combined with either","The expected-source file is read as UTF-8 without trimming; redirect script get stdout to preserve trailing newlines","A shared observation deadline bounds selection, logs and captures; partial PNGs remain in the report","Marker must be [script:<name>] [CAPTURE] <label>, optionally preceded by HH:MM:SS; label is 1..64 ASCII letters, digits, underscore or hyphen","Timeout and collection errors return nonzero while preserving deployment evidence and partial capture paths; log batches cannot reconstruct missing states","Selection changes the active app once; no rotation/notification restoration is attempted","Logs and framebuffer are not synchronized; marker attribution, lost-log detection and visual correctness are not guaranteed"],"offline_reference_variant":"ESP32"})
         }
         "script verify" => {
             json!({"command":"script verify","parameters":{"name":"script name [A-Za-z0-9_-]{1,32}","--duration-secs":"bounded observation window, 1..3600 (default 10)","--interval-ms":"log polling interval, 1..60000 (default 500)","--after":"initial log cursor (default 0)","--capture":"optional PNG output path"},"inputs":["AWTRIX NG system, app inventory, cursor logs and optional framebuffer"],"outputs":{"source_saved":"not_requested for existing-script verification","start_verified":"boolean","observed_window":{"complete":"true only if the full requested duration elapsed without early termination","elapsed_ms":"integer","early_termination_reason":"null or scripting_disabled, script_absent, script_disabled, error_state_unavailable, berry_error, script_not_running, collection_error"},"not_available":"null, reason string, or diagnostic object with code/message/phase","runtime_error":"null or reported Berry error","runtime_state":"last observed app state or null","logs":{"after":"integer","next":"integer","lines":"string array","history_limit":34,"exhaustive":false},"capture":"optional screen artifact summary","runtime_success_guaranteed":false},"examples":["awtrix-cli --json script verify demo --duration-secs 30 --interval-ms 500","awtrix-cli script verify demo --capture observed.png"],"prerequisites":["existing enabled AWTRIX NG script","bounded device log history"],"limitations":["No error observed is not proof of general correctness","log history is bounded to 34 lines"]})
@@ -795,6 +807,9 @@ fn describe(cli: &Cli, topic: &str, offline: bool) -> CliResult<Value> {
             "bytes: UTF-8 byte count of the written minified output"
         ]);
         result["output_fields"] = json!(["output", "bytes"]);
+    }
+    if matches!(topic, "script" | "scripts" | "script deploy") {
+        result["verification_failure"] = json!("After source save and confirmed start, a state observation timeout exits 1 with OBSERVATION_INCOMPLETE on stderr; verification.not_available retains TIMEOUT and state_observation. Run script verify again rather than redeploying.");
     }
     result["requested_topic"] = json!(topic);
     let help_topic = if topic == "settings display" {
