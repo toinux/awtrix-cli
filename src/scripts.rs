@@ -49,14 +49,17 @@ pub enum Command {
         source: Option<String>,
         #[arg(long)]
         file: Option<PathBuf>,
-        /// The original remote source used for an atomic update; null only via --create.
-        #[arg(long, conflicts_with_all = ["create", "force"])]
+        /// Literal original remote source text for an atomic update (not a file path).
+        #[arg(long, conflicts_with_all = ["expected_source_file", "create", "force"])]
         expected_source: Option<String>,
+        /// Read the exact original remote source from a UTF-8 file for an atomic update.
+        #[arg(long, conflicts_with_all = ["expected_source", "create", "force"])]
+        expected_source_file: Option<PathBuf>,
         /// Create only if the script name is absent.
-        #[arg(long, conflicts_with_all = ["expected_source", "force"])]
+        #[arg(long, conflicts_with_all = ["expected_source", "expected_source_file", "force"])]
         create: bool,
         /// Replace unconditionally using raw PUT; no concurrency guarantee.
-        #[arg(long, conflicts_with_all = ["create", "expected_source"])]
+        #[arg(long, conflicts_with_all = ["create", "expected_source", "expected_source_file"])]
         force: bool,
         /// After saving, run verification for this many seconds (1..3600).
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..=3600))]
@@ -176,6 +179,7 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             source,
             file,
             expected_source,
+            expected_source_file,
             create,
             force,
             verify_secs,
@@ -199,6 +203,17 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
             if source.is_empty() {
                 return Err(("ARGUMENT", "Berry source must not be empty".into()));
             }
+            let expected = if *create || *force {
+                Value::Null
+            } else {
+                let reference = match (expected_source, expected_source_file) {
+                    (Some(source), None) => source.clone(),
+                    (None, Some(path)) => fs::read_to_string(path)
+                        .map_err(|_| ("ARGUMENT", "--expected-source-file must be a readable UTF-8 file".into()))?,
+                    _ => return Err(("ARGUMENT", "conditional update requires --expected-source, --expected-source-file, or --create".into())),
+                };
+                Value::String(reference)
+            };
             let payload = if *minify {
                 crate::minify::minify_source(&source)?
             } else {
@@ -258,11 +273,6 @@ pub fn run(command: &Command, api: &crate::ApiClient) -> crate::CliResult<Value>
                 if capabilities.get("scriptUpdates").and_then(Value::as_bool) != Some(true) {
                     return Err(("PROTECTION_UNAVAILABLE", "scriptUpdates capability is absent; no write performed. Use --force for an unprotected overwrite".into()));
                 }
-                let expected = if *create {
-                    Value::Null
-                } else {
-                    Value::String(expected_source.clone().ok_or(("ARGUMENT", "conditional update requires --expected-source or --create; source was not reread".into()))?)
-                };
                 match api.conditional_put(name, &expected, &payload) {
                     Err(("CONFLICT", message)) => Err(("CONFLICT", message)),
                     Err(e) => Err(e),

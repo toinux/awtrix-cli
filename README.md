@@ -60,7 +60,13 @@ awtrix-cli project init ./demo
 awtrix-cli script deploy main --file ./demo/src/main.ax --create --minify --verify-secs 10
 ```
 
-For an existing script, use `--expected-source` with the original remote source to protect against overwriting a concurrent change. The source file remains unchanged when minification is enabled.
+For an existing script, save the exact remote source before editing and use it as the protected-update reference. File-based references preserve trailing newlines; `--expected-source` remains a literal string option.
+
+```sh
+awtrix-cli script get main > before.ax
+# Edit ./demo/src/main.ax
+awtrix-cli script deploy main --file ./demo/src/main.ax --expected-source-file before.ax --minify
+```
 
 You can also minify a local file without deploying it. This writes a `.min.ax` sibling and leaves the original untouched:
 

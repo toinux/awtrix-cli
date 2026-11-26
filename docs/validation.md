@@ -51,8 +51,10 @@ read-only ownership preflight and stop if any item is not clearly safe:
    --dir /ICONS` (plus `resources files list --dir DIR` for every other
    destination directory). For each colliding script/module, run
    `resources modules get NAME` or `script get NAME`, save its exact response,
-   and record its hash. For each colliding resource path, download/read it using
-   an independently verified, documented device procedure before proceeding.
+   and record its hash. Save script stdout directly (`script get NAME > before.ax`)
+   for later use with `--expected-source-file before.ax`. For each colliding
+   resource path, download/read it using an independently verified, documented
+   device procedure before proceeding.
    The CLI has no generic resource download route; if exact backup and restore
    cannot be established, abort rather than overwrite that resource.
 3. Compare the inventory with the manifest. If any name/path exists and is not

@@ -18,13 +18,16 @@ awtrix-cli --target http://awtrix.local --json script deploy main \
 AWTRIX scripts use the `.ax` filename extension. Berry modules remain `.be`
 files and are declared separately under `[[modules]]`.
 
-`--create` fails if the script already exists. For an update, read the remote
-source **before editing** with `script get NAME`, retain its exact bytes, and
-pass that original text as `--expected-source` when deploying the modified file.
-Human-mode `script get` writes exact source to stdout; JSON mode returns a
-`source` string. Shell command substitution strips trailing newlines and is not
-a reliable exact-byte reference. Prefer project `expected_source_file` for file-based
-updates instead of manufacturing a shell-string reference.
+`--create` fails if the script already exists. For an update, save the remote
+source **before editing** with `script get NAME > before.ax`, then deploy using
+`--expected-source-file before.ax`. The file is read as UTF-8 without trimming,
+so trailing newlines are preserved. `--expected-source` remains a literal source
+string; shell command substitution strips trailing newlines and is not an exact
+reference. Project manifests can use `expected_source_file` for the same reason.
+
+If deploy emits `OBSERVATION_INCOMPLETE`, the source was saved and start
+confirmed, but the runtime check timed out while reading state. Run
+`script verify NAME` again rather than redeploying.
 
 Protected deploy requires live `scriptUpdates: true`. `CONFLICT` means the
 reference is stale; inspect and resolve the concurrent edit. `--force` is an
