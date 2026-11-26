@@ -6696,6 +6696,84 @@ fn script_deploy_verify_success_keeps_atomic_deploy_and_adds_observation() {
 }
 
 #[test]
+fn script_deploy_verify_distinguishes_state_timeout_from_start_failure() {
+    for timeout in [true, false] {
+        let server = Server::http("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", server.server_addr());
+        let worker = thread::spawn(move || {
+            let running = r#"[{"name":"demo","origin":"script","enabled":true,"error":null}]"#;
+            let next = || {
+                server
+                    .recv_timeout(Duration::from_secs(3))
+                    .unwrap()
+                    .unwrap()
+            };
+            for (route, body) in [
+                ("/api/v1/capabilities", r#"{"scriptUpdates":true}"#),
+                (
+                    "/api/v1/apps/script-update/demo",
+                    r#"{"ok":true,"error":null}"#,
+                ),
+                ("/api/v1/system", r#"{"scriptingEnabled":true}"#),
+                ("/api/v1/apps", if timeout { running } else { "[]" }),
+                ("/api/v1/system", r#"{"scriptingEnabled":true}"#),
+                ("/api/v1/apps", if timeout { running } else { "[]" }),
+            ] {
+                let request = next();
+                assert_eq!(request.url(), route);
+                request.respond(Response::from_string(body)).unwrap();
+            }
+            if timeout {
+                let request = next();
+                assert_eq!(request.url(), "/api/v1/logs?after=0");
+                request
+                    .respond(Response::from_string(r#"{"next":0,"lines":[]}"#))
+                    .unwrap();
+                let request = next();
+                assert_eq!(request.url(), "/api/v1/apps");
+                thread::sleep(Duration::from_millis(1200));
+                let _ = request.respond(Response::from_string(running));
+            }
+        });
+        let output = run(&[
+            "--target",
+            &url,
+            "--json",
+            "script",
+            "deploy",
+            "demo",
+            "--source",
+            "new",
+            "--create",
+            "--verify-secs",
+            "1",
+        ]);
+        worker.join().unwrap();
+        assert_eq!(output.status.code(), Some(1));
+        let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(result["source_saved"], true);
+        assert_eq!(result["start_verified"], timeout);
+        assert_eq!(result["verification"]["start_verified"], timeout);
+        if timeout {
+            assert_eq!(result["device_result"]["ok"], true);
+            assert_eq!(result["verification"]["not_available"]["code"], "TIMEOUT");
+            assert_eq!(
+                result["verification"]["not_available"]["phase"],
+                "state_observation"
+            );
+            assert_eq!(result["verification"]["observed_window"]["complete"], false);
+            assert!(stderr.contains("OBSERVATION_INCOMPLETE"), "{stderr}");
+            assert!(stderr.contains("run script verify again"), "{stderr}");
+            assert!(!stderr.contains("SCRIPT_NOT_RUNNING"), "{stderr}");
+        } else {
+            assert_eq!(result["verification"]["not_available"], "script_absent");
+            assert!(stderr.contains("SCRIPT_NOT_RUNNING"), "{stderr}");
+        }
+    }
+}
+
+#[test]
 fn script_verify_captures_png_inside_reserved_deadline_window() {
     let path = std::env::temp_dir().join(format!("awtrix-verify-{}.png", std::process::id()));
     let _ = std::fs::remove_file(&path);

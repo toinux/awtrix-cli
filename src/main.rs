@@ -267,17 +267,29 @@ fn main() -> ExitCode {
                     .get("not_available")
                     .is_some_and(|reason| !reason.is_null())
             {
-                let diagnostic_code = if report
+                let (diagnostic_code, message) = if report
                     .get("runtime_error")
                     .is_some_and(|error| !error.is_null())
                 {
-                    "BERRY_ERROR"
+                    (
+                        "BERRY_ERROR",
+                        "verification did not establish a healthy running script",
+                    )
+                } else if value["source_saved"] == true
+                    && report["start_verified"] == true
+                    && report["not_available"]["code"] == "TIMEOUT"
+                    && report["not_available"]["phase"] == "state_observation"
+                {
+                    ("OBSERVATION_INCOMPLETE", "source saved and script started; runtime observation incomplete (state timeout); run script verify again")
                 } else {
-                    "SCRIPT_NOT_RUNNING"
+                    (
+                        "SCRIPT_NOT_RUNNING",
+                        "verification did not establish a healthy running script",
+                    )
                 };
                 let rendered = render(value, &cli.fields, cli.json).unwrap_or_else(|_| "{}".into());
                 println!("{rendered}");
-                eprintln!("awtrix: {diagnostic_code}: verification did not establish a healthy running script");
+                eprintln!("awtrix: {diagnostic_code}: {message}");
                 return ExitCode::from(1);
             }
             let diagnostic_code = if value
@@ -795,6 +807,9 @@ fn describe(cli: &Cli, topic: &str, offline: bool) -> CliResult<Value> {
             "bytes: UTF-8 byte count of the written minified output"
         ]);
         result["output_fields"] = json!(["output", "bytes"]);
+    }
+    if matches!(topic, "script" | "scripts" | "script deploy") {
+        result["verification_failure"] = json!("After source save and confirmed start, a state observation timeout exits 1 with OBSERVATION_INCOMPLETE on stderr; verification.not_available retains TIMEOUT and state_observation. Run script verify again rather than redeploying.");
     }
     result["requested_topic"] = json!(topic);
     let help_topic = if topic == "settings display" {

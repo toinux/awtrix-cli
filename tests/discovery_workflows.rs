@@ -133,6 +133,18 @@ fn verify_requires_explicit_null_error_for_start_proof() {
 }
 
 #[test]
+fn deploy_discovery_describes_incomplete_observation() {
+    let output = run(&["--json", "describe", "script", "deploy", "--offline"]);
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let description = result["verification_failure"].as_str().unwrap();
+    assert!(description.contains("OBSERVATION_INCOMPLETE"));
+    assert!(description.contains("TIMEOUT"));
+    assert!(description.contains("script verify"));
+    let help = run(&["script", "deploy", "--help"]);
+    assert!(String::from_utf8_lossy(&help.stdout).contains("run script verify again"));
+}
+
+#[test]
 fn capture_failure_identifies_capture_phase() {
     let mock = Mock::new(
         json!({"name":"main","origin":"script","enabled":true,"error":null}),
